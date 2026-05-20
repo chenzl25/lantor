@@ -8,6 +8,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
     "bench:composer": "node bench/composer-input-latency.mjs",
+    "bench:composer:e2e": "node bench/composer-input-latency-e2e.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
@@ -37,6 +38,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.5.0",
     "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3"
+    "@types/react-dom": "^19.2.3",
+    "playwright": "^1.60.0"
   }
 }

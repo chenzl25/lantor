@@ -1,7 +1,9 @@
 import {
   Component,
+  Profiler,
   type CSSProperties,
   type ErrorInfo,
+  type ProfilerOnRenderCallback,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useCallback,
@@ -55,6 +57,53 @@ import {
 } from "./types";
 import { agentRequestSourceLabel, buildPresetCommand, firstLines, formatTime, visibleChannelDescription } from "./ui-utils";
 import "./styles.css";
+
+type BenchmarkCommit = {
+  id: string;
+  phase: string;
+  actualDuration: number;
+  baseDuration: number;
+  startTime: number;
+  commitTime: number;
+};
+
+declare global {
+  interface Window {
+    __LANTOR_BENCH_PROFILER__?: {
+      commits: BenchmarkCommit[];
+      reset: () => void;
+    };
+  }
+}
+
+function shouldEnableBenchProfiler() {
+  if (typeof window === "undefined") return false;
+  const params = new URLSearchParams(window.location.search);
+  return params.has("lantorBenchProfiler") || window.localStorage.getItem("lantor:bench-profiler") === "1";
+}
+
+function ensureBenchProfilerStore() {
+  if (!window.__LANTOR_BENCH_PROFILER__) {
+    window.__LANTOR_BENCH_PROFILER__ = {
+      commits: [],
+      reset() {
+        this.commits = [];
+      },
+    };
+  }
+  return window.__LANTOR_BENCH_PROFILER__;
+}
+
+const recordBenchCommit: ProfilerOnRenderCallback = (id, phase, actualDuration, baseDuration, startTime, commitTime) => {
+  ensureBenchProfilerStore().commits.push({
+    id,
+    phase,
+    actualDuration,
+    baseDuration,
+    startTime,
+    commitTime,
+  });
+};
 
 const ACTIVITY_PHASE_LABELS: Record<string, string> = {
   thinking: "Thinking",
@@ -3279,8 +3328,14 @@ function App() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(
+const app = (
   <AppErrorBoundary>
     <App />
-  </AppErrorBoundary>,
+  </AppErrorBoundary>
+);
+
+createRoot(document.getElementById("root")!).render(
+  shouldEnableBenchProfiler()
+    ? <Profiler id="LantorApp" onRender={recordBenchCommit}>{app}</Profiler>
+    : app,
 );

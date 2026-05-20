@@ -195,6 +195,34 @@ cargo test  --manifest-path src-tauri/Cargo.toml --no-run  # compile tests
 npm run tauri:dev                                          # desktop app
 ```
 
+### Composer Benchmarks
+
+Layer 1 is the fast SSR mechanism guard:
+
+```bash
+npm run bench:composer
+```
+
+Layer 2 is the browser input-latency benchmark:
+
+```bash
+npm run build
+npx playwright install chromium
+npm run bench:composer:e2e
+```
+
+Layer 2 runs a production preview in headed Chromium, injects synthetic stress
+data, and measures input/composition event time to the next animation-frame
+paint boundary. It also records long tasks, long animation frames when Chromium
+exposes them, React Profiler commits when the active React build reports them,
+DOM mutations as a fallback diagnostic, and a Playwright trace under
+`artifacts/`. Use `--profile <name>` to run one profile, `--headless` only for
+smoke checks, and `--no-trace` when trace output is not needed.
+
+The Layer 2 numbers are for user-perceived typing latency investigation. Keep
+them separate from the Layer 1 SSR render-cost numbers, and do not publish
+before/after claims from Layer 2 until the relevant baseline is stable.
+
 ## License
 
 Apache-2.0
