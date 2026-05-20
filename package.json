@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
+    "build:bench": "tsc && vite build --mode bench",
     "bench:composer": "node bench/composer-input-latency.mjs",
     "bench:composer:e2e": "node bench/composer-input-latency-e2e.mjs",
     "tauri": "tauri",

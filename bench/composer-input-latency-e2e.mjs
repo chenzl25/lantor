@@ -5,14 +5,18 @@
  * This is the user-perceived latency benchmark, not the Layer 1 SSR mechanism
  * guard in composer-input-latency.mjs. It runs the production web bundle in a
  * headed Chromium browser, drives real textareas through Playwright keyboard
- * input or simulated composition events, and measures input/composition event
- * time to the next animation-frame paint boundary.
+ * input or simulated composition events, and reports Chrome Event Timing
+ * duration as the primary INP-aligned metric. The double-requestAnimationFrame
+ * input-to-frame probe is kept as an auxiliary fallback when Event Timing is
+ * unavailable.
  *
  * Reported numbers are intended to explain "typing still feels laggy" by
- * correlating p95/p99 input-to-frame latency with long tasks, long animation
+ * correlating p95/p99 Event Timing duration with long tasks, long animation
  * frames when the browser exposes them, dropped-frame budget misses, and React
- * Profiler commits. Do not publish before/after claims from this benchmark
- * until paired runs are stable enough for the profile being discussed.
+ * Profiler commits. The IME profile exercises the simulated composition event
+ * path, not real macOS input-method pressure. Do not publish before/after
+ * claims from this benchmark until paired runs are stable enough for the
+ * profile being discussed.
  */
 
 import { spawn } from "node:child_process";
@@ -29,6 +33,7 @@ const DEFAULTS = {
   profile: "all",
   headed: true,
   trace: true,
+  streamingInterval: 250,
 };
 
 const PROFILES = [
@@ -101,6 +106,7 @@ const config = {
   port: optionNumber("port", DEFAULTS.port),
   profile: optionString("profile", DEFAULTS.profile),
   url: optionString("url", ""),
+  streamingInterval: optionNumber("streaming-interval", DEFAULTS.streamingInterval),
   headed: hasFlag("headless") ? false : DEFAULTS.headed,
   trace: hasFlag("no-trace") ? false : DEFAULTS.trace,
   json: hasFlag("json"),
@@ -122,6 +128,14 @@ function percentile(values, fraction) {
 }
 
 function summarize(values) {
+  if (values.length === 0) {
+    return {
+      p50: 0,
+      p95: 0,
+      p99: 0,
+      max: 0,
+    };
+  }
   return {
     p50: percentile(values, 0.5),
     p95: percentile(values, 0.95),
@@ -135,6 +149,10 @@ function relativeStdDev(values) {
   if (mean === 0) return 0;
   const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
   return Math.sqrt(variance) / mean;
+}
+
+function formatOptionalMs(summary, sampleCount, key) {
+  return sampleCount > 0 ? summary[key].toFixed(2) : "n/a";
 }
 
 function id(index) {
@@ -319,55 +337,123 @@ function spawnPreviewServer() {
 
 async function installPageHarness(page) {
   await page.addInitScript(() => {
+    const eventTimingNames = new Set([
+      "keydown",
+      "keypress",
+      "keyup",
+      "beforeinput",
+      "input",
+      "compositionstart",
+      "compositionupdate",
+      "compositionend",
+    ]);
+    const serializeEventTiming = (entry) => ({
+      name: entry.name,
+      startTime: entry.startTime,
+      processingStart: entry.processingStart,
+      processingEnd: entry.processingEnd,
+      duration: entry.duration,
+      interactionId: entry.interactionId ?? 0,
+    });
+    const bestEventTiming = (entries, record) => {
+      const end = record.frame ?? performance.now();
+      return entries
+        .filter((entry) =>
+          eventTimingNames.has(entry.name) &&
+          entry.startTime >= record.start - 1 &&
+          entry.startTime <= end + 1 &&
+          Number.isFinite(entry.duration))
+        .sort((left, right) => right.duration - left.duration)[0] ?? null;
+    };
+
     window.__LANTOR_E2E__ = {
       longTasks: [],
       longAnimationFrames: [],
+      eventTimings: [],
+      firstInputs: [],
       mutationCount: 0,
+      inputProbeQueue: [],
+      probeTimeoutCount: 0,
       reset() {
         this.longTasks = [];
         this.longAnimationFrames = [];
+        this.eventTimings = [];
+        this.firstInputs = [];
         this.mutationCount = 0;
+        this.probeTimeoutCount = 0;
         window.__LANTOR_BENCH_PROFILER__?.reset();
       },
+      ensureInputProbeListeners() {
+        if (this.inputProbeListenersInstalled) return;
+        this.inputProbeListenersInstalled = true;
+        const update = (field) => {
+          const record = this.inputProbeQueue[0];
+          if (record) record[field] ??= performance.now();
+        };
+        window.addEventListener("keydown", () => update("keydown"), true);
+        window.addEventListener("beforeinput", () => update("beforeinput"), true);
+        window.addEventListener("input", () => {
+          const record = this.inputProbeQueue.shift();
+          if (!record) return;
+          record.input ??= performance.now();
+          record.finish();
+        }, true);
+      },
       armInputProbe() {
-        const record = { start: performance.now(), keydown: null, beforeinput: null, input: null, frame: null };
+        this.ensureInputProbeListeners();
+        const record = {
+          start: performance.now(),
+          eventTimingStartIndex: this.eventTimings.length,
+          firstInputStartIndex: this.firstInputs.length,
+          keydown: null,
+          beforeinput: null,
+          input: null,
+          frame: null,
+          eventTiming: null,
+          firstInput: null,
+          finish: null,
+        };
         return new Promise((resolve) => {
           let resolved = false;
-          const cleanup = () => {
-            window.removeEventListener("keydown", onKeydown, true);
-            window.removeEventListener("beforeinput", onBeforeInput, true);
-            window.removeEventListener("input", onInput, true);
-          };
-          const finish = () => {
+          const timeout = window.setTimeout(() => {
+            const index = this.inputProbeQueue.indexOf(record);
+            if (index !== -1) this.inputProbeQueue.splice(index, 1);
+            this.probeTimeoutCount += 1;
+            record.timedOut = true;
+            record.finish();
+          }, 2000);
+          record.finish = () => {
             if (resolved) return;
             resolved = true;
+            window.clearTimeout(timeout);
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {
-                record.frame = performance.now();
-                cleanup();
-                resolve(record);
+                window.setTimeout(() => {
+                  record.frame = performance.now();
+                  record.eventTiming = bestEventTiming(
+                    this.eventTimings.slice(record.eventTimingStartIndex),
+                    record,
+                  );
+                  record.firstInput = bestEventTiming(
+                    this.firstInputs.slice(record.firstInputStartIndex),
+                    record,
+                  );
+                  delete record.finish;
+                  resolve(record);
+                }, 0);
               });
             });
           };
-          const onKeydown = () => {
-            record.keydown ??= performance.now();
-          };
-          const onBeforeInput = () => {
-            record.beforeinput ??= performance.now();
-          };
-          const onInput = () => {
-            record.input ??= performance.now();
-            finish();
-          };
-          window.addEventListener("keydown", onKeydown, true);
-          window.addEventListener("beforeinput", onBeforeInput, true);
-          window.addEventListener("input", onInput, true);
+          this.inputProbeQueue.push(record);
         });
       },
       measureComposition(selector, value) {
         const textarea = document.querySelector(selector);
         if (!(textarea instanceof HTMLTextAreaElement)) throw new Error(`Missing textarea ${selector}`);
         const started = performance.now();
+        const eventTimingStartIndex = this.eventTimings.length;
+        const firstInputStartIndex = this.firstInputs.length;
+        const record = { start: started, input: started, frame: null, eventTiming: null, firstInput: null };
         textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "" }));
         textarea.dispatchEvent(new CompositionEvent("compositionupdate", { bubbles: true, data: value }));
         textarea.value += value;
@@ -380,11 +466,14 @@ async function installPageHarness(page) {
         textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: value }));
         return new Promise((resolve) => {
           requestAnimationFrame(() => {
-            requestAnimationFrame(() => resolve({
-              start: started,
-              input: started,
-              frame: performance.now(),
-            }));
+            requestAnimationFrame(() => {
+              window.setTimeout(() => {
+                record.frame = performance.now();
+                record.eventTiming = bestEventTiming(this.eventTimings.slice(eventTimingStartIndex), record);
+                record.firstInput = bestEventTiming(this.firstInputs.slice(firstInputStartIndex), record);
+                resolve(record);
+              }, 0);
+            });
           });
         });
       },
@@ -407,14 +496,40 @@ async function installPageHarness(page) {
         })));
       }).observe({ type: "long-animation-frame", buffered: true });
     }
-    new MutationObserver((mutations) => {
-      window.__LANTOR_E2E__.mutationCount += mutations.length;
-    }).observe(document.documentElement, {
-      attributes: true,
-      childList: true,
-      characterData: true,
-      subtree: true,
-    });
+    if (PerformanceObserver.supportedEntryTypes?.includes("event")) {
+      try {
+        new PerformanceObserver((list) => {
+          window.__LANTOR_E2E__.eventTimings.push(...list.getEntries().map(serializeEventTiming));
+        }).observe({ type: "event", buffered: true, durationThreshold: 0 });
+      } catch {
+        // Older Chromium builds can expose the type but reject durationThreshold.
+      }
+    }
+    if (PerformanceObserver.supportedEntryTypes?.includes("first-input")) {
+      try {
+        new PerformanceObserver((list) => {
+          window.__LANTOR_E2E__.firstInputs.push(...list.getEntries().map(serializeEventTiming));
+        }).observe({ type: "first-input", buffered: true });
+      } catch {
+        // Fallback metrics still run without first-input support.
+      }
+    }
+    const startMutationObserver = () => {
+      if (!document.documentElement) return;
+      new MutationObserver((mutations) => {
+        window.__LANTOR_E2E__.mutationCount += mutations.length;
+      }).observe(document.documentElement, {
+        attributes: true,
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+    };
+    if (document.documentElement) {
+      startMutationObserver();
+    } else {
+      window.addEventListener("DOMContentLoaded", startMutationObserver, { once: true });
+    }
   });
 }
 
@@ -448,7 +563,7 @@ async function installSyntheticBackend(page, profile) {
 }
 
 async function installStreamingEventSource(page) {
-  await page.addInitScript(() => {
+  await page.addInitScript((streamingInterval) => {
     const NativeEventSource = window.EventSource;
     window.EventSource = class BenchEventSource extends EventTarget {
       constructor(url) {
@@ -457,14 +572,14 @@ async function installStreamingEventSource(page) {
         this.readyState = NativeEventSource.OPEN;
         this.timer = window.setInterval(() => {
           this.dispatchEvent(new MessageEvent("lantor", { data: "bench-streaming-refresh" }));
-        }, 250);
+        }, streamingInterval);
       }
       close() {
         window.clearInterval(this.timer);
         this.readyState = NativeEventSource.CLOSED;
       }
     };
-  });
+  }, config.streamingInterval);
 }
 
 async function prepareSurface(page, profile) {
@@ -489,14 +604,18 @@ async function measureRun(page, profile) {
   const textarea = page.locator(selector);
   await textarea.click();
   await page.evaluate(() => window.__LANTOR_E2E__.reset());
-  const samples = [];
+  const eventDurationSamples = [];
+  const frameLatencySamples = [];
+  const firstInputSamples = [];
   const text = textForRun(profile);
 
   if (profile.mode === "ime-composition") {
     for (const char of [...text]) {
       const sample = await page.evaluate(({ selector, char }) =>
         window.__LANTOR_E2E__.measureComposition(selector, char), { selector, char });
-      samples.push(sample.frame - sample.input);
+      frameLatencySamples.push(sample.frame - sample.input);
+      if (sample.eventTiming) eventDurationSamples.push(sample.eventTiming.duration);
+      if (sample.firstInput) firstInputSamples.push(sample.firstInput.duration);
     }
   } else {
     for (const char of [...text]) {
@@ -504,7 +623,9 @@ async function measureRun(page, profile) {
       await page.keyboard.type(char);
       const sample = await samplePromise;
       const start = sample.keydown ?? sample.beforeinput ?? sample.start;
-      samples.push(sample.frame - start);
+      frameLatencySamples.push(sample.frame - start);
+      if (sample.eventTiming) eventDurationSamples.push(sample.eventTiming.duration);
+      if (sample.firstInput) firstInputSamples.push(sample.firstInput.duration);
     }
   }
 
@@ -516,13 +637,14 @@ async function measureRun(page, profile) {
       commitCount: commits.length,
       commitMs: commits.reduce((sum, commit) => sum + commit.actualDuration, 0),
       domMutationCount: window.__LANTOR_E2E__.mutationCount,
+      probeTimeoutCount: window.__LANTOR_E2E__.probeTimeoutCount,
       longTaskCount: longTasks.length,
       longTaskMs: longTasks.reduce((sum, task) => sum + task.duration, 0),
       longAnimationFrameCount: longAnimationFrames.length,
       longAnimationFrameMs: longAnimationFrames.reduce((sum, frame) => sum + frame.duration, 0),
     };
   });
-  return { samples, diagnostics };
+  return { eventDurationSamples, frameLatencySamples, firstInputSamples, diagnostics };
 }
 
 async function measureProfile(browser, profile) {
@@ -537,6 +659,12 @@ async function measureProfile(browser, profile) {
   }
 
   const page = await context.newPage();
+  page.on("pageerror", (error) => {
+    if (!config.json) console.error(`Page error: ${error.stack || error.message}`);
+  });
+  page.on("console", (message) => {
+    if (!config.json && message.type() === "error") console.error(`Browser console error: ${message.text()}`);
+  });
   await installPageHarness(page);
   if (profile.streaming) await installStreamingEventSource(page);
   await installSyntheticBackend(page, profile);
@@ -552,12 +680,17 @@ async function measureProfile(browser, profile) {
   if (config.trace) await context.tracing.stop({ path: tracePath });
   await context.close();
 
-  const allSamples = runs.flatMap((run) => run.samples);
-  const p95s = runs.map((run) => summarize(run.samples).p95);
+  const eventDurationSamples = runs.flatMap((run) => run.eventDurationSamples);
+  const frameLatencySamples = runs.flatMap((run) => run.frameLatencySamples);
+  const primarySamples = eventDurationSamples.length > 0 ? eventDurationSamples : frameLatencySamples;
+  const p95s = runs.map((run) =>
+    summarize(run.eventDurationSamples.length > 0 ? run.eventDurationSamples : run.frameLatencySamples).p95);
+  const sampleCount = frameLatencySamples.length;
   const diagnostics = runs.reduce((total, run) => ({
     commitCount: total.commitCount + run.diagnostics.commitCount,
     commitMs: total.commitMs + run.diagnostics.commitMs,
     domMutationCount: total.domMutationCount + run.diagnostics.domMutationCount,
+    probeTimeoutCount: total.probeTimeoutCount + run.diagnostics.probeTimeoutCount,
     longTaskCount: total.longTaskCount + run.diagnostics.longTaskCount,
     longTaskMs: total.longTaskMs + run.diagnostics.longTaskMs,
     longAnimationFrameCount: total.longAnimationFrameCount + run.diagnostics.longAnimationFrameCount,
@@ -566,6 +699,7 @@ async function measureProfile(browser, profile) {
     commitCount: 0,
     commitMs: 0,
     domMutationCount: 0,
+    probeTimeoutCount: 0,
     longTaskCount: 0,
     longTaskMs: 0,
     longAnimationFrameCount: 0,
@@ -575,17 +709,24 @@ async function measureProfile(browser, profile) {
   return {
     profile,
     tracePath: config.trace ? tracePath : null,
-    samples: allSamples.length,
+    samples: sampleCount,
     summary: {
-      ...summarize(allSamples),
+      ...summarize(primarySamples),
+      metricSource: eventDurationSamples.length > 0 ? "event.duration" : "double-raf",
+      eventTimingSamples: eventDurationSamples.length,
+      frameFallbackSamples: frameLatencySamples.length - eventDurationSamples.length,
+      event: summarize(eventDurationSamples),
+      frame: summarize(frameLatencySamples),
+      firstInput: summarize(runs.flatMap((run) => run.firstInputSamples)),
       relativeStdDev: relativeStdDev(p95s),
-      commitsPerKey: diagnostics.commitCount / allSamples.length,
-      commitMsPerKey: diagnostics.commitMs / allSamples.length,
-      domMutationsPerKey: diagnostics.domMutationCount / allSamples.length,
-      longTasksPer100Keys: diagnostics.longTaskCount / allSamples.length * 100,
-      longTaskMsPerKey: diagnostics.longTaskMs / allSamples.length,
-      longAnimationFramesPer100Keys: diagnostics.longAnimationFrameCount / allSamples.length * 100,
-      longAnimationFrameMsPerKey: diagnostics.longAnimationFrameMs / allSamples.length,
+      probeTimeouts: diagnostics.probeTimeoutCount,
+      commitsPerKey: diagnostics.commitCount / sampleCount,
+      commitMsPerKey: diagnostics.commitMs / sampleCount,
+      domMutationsPerKey: diagnostics.domMutationCount / sampleCount,
+      longTasksPer100Keys: diagnostics.longTaskCount / sampleCount * 100,
+      longTaskMsPerKey: diagnostics.longTaskMs / sampleCount,
+      longAnimationFramesPer100Keys: diagnostics.longAnimationFrameCount / sampleCount * 100,
+      longAnimationFrameMsPerKey: diagnostics.longAnimationFrameMs / sampleCount,
     },
   };
 }
@@ -613,16 +754,23 @@ async function main() {
       console.log(JSON.stringify(output, null, 2));
     } else {
       console.log("Composer Layer 2 input latency benchmark");
-      console.log(`runs=${config.runs} warmup=${config.warmup} keystrokes=${config.keystrokes} profile=${config.profile} headed=${config.headed}`);
-      console.log("Metric is input/composition event to next animation-frame paint boundary. Lower is better.");
+      console.log(`runs=${config.runs} warmup=${config.warmup} keystrokes=${config.keystrokes} profile=${config.profile} headed=${config.headed} streamingInterval=${config.streamingInterval}ms`);
+      console.log("Primary metric is Chrome Event Timing duration. Double-rAF input-to-frame latency is reported as an auxiliary fallback. Lower is better.");
       console.log("");
       console.table(Object.fromEntries(results.map((result) => [result.profile.name, {
         surface: result.profile.surface,
         mode: result.profile.mode,
-        "p50 ms/key": result.summary.p50.toFixed(2),
-        "p95 ms/key": result.summary.p95.toFixed(2),
-        "p99 ms/key": result.summary.p99.toFixed(2),
-        "max ms/key": result.summary.max.toFixed(2),
+        metric: result.summary.metricSource,
+        "event samples": result.summary.eventTimingSamples,
+        "fallback samples": result.summary.frameFallbackSamples,
+        "event p95 ms/key": formatOptionalMs(result.summary.event, result.summary.eventTimingSamples, "p95"),
+        "event p99 ms/key": formatOptionalMs(result.summary.event, result.summary.eventTimingSamples, "p99"),
+        "primary p50 ms/key": result.summary.p50.toFixed(2),
+        "primary p95 ms/key": result.summary.p95.toFixed(2),
+        "primary p99 ms/key": result.summary.p99.toFixed(2),
+        "primary max ms/key": result.summary.max.toFixed(2),
+        "rAF p95 ms/key": result.summary.frame.p95.toFixed(2),
+        "probe timeouts": result.summary.probeTimeouts,
         "commits/key": result.summary.commitsPerKey.toFixed(2),
         "commit ms/key": result.summary.commitMsPerKey.toFixed(2),
         "DOM mutations/key": result.summary.domMutationsPerKey.toFixed(2),
