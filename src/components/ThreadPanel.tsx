@@ -71,7 +71,7 @@ type ThreadPanelProps = {
   setReplyDraft: (value: string) => void;
   addReplyAttachments: (files: FileList | File[]) => void;
   removeReplyAttachment: (id: string) => void;
-  sendReply: () => void;
+  sendReply: (bodyOverride?: string, attachmentsOverride?: DraftAttachment[]) => void;
   openAgentDetail: (agent: Agent) => void;
   openArtifact: (artifact: Artifact) => void;
   shareBaseUrl: string | null;
@@ -119,15 +119,11 @@ export function ThreadPanel({
   onToggleMessageSaved,
   onResizeStart,
 }: ThreadPanelProps) {
-  const [isReplyDragOver, setIsReplyDragOver] = useState(false);
   const [showBackToBottom, setShowBackToBottom] = useState(false);
   const [messageMenu, setMessageMenu] = useState<MessageMenuState>(null);
   const [tapFocusedMessageId, setTapFocusedMessageId] = useState<string | null>(null);
-  const replyDragDepthRef = useRef(0);
   const threadScrollRef = useRef<HTMLDivElement | null>(null);
   const shouldFollowThreadRef = useRef(true);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   function openLinkedAgentDetail(handle: string) {
     const agent = agents.find((candidate) => candidate.handle.toLowerCase() === handle.toLowerCase());
     if (agent) openAgentDetail(agent);
@@ -142,17 +138,6 @@ export function ThreadPanel({
       ? `Thread in DM with @${dmAgent?.handle || "agent"}`
       : `Thread in #${channel.name}`
     : `${APP_DISPLAY_NAME} thread`;
-  const {
-    mentionState,
-    mentionIndex,
-    mentionCandidates,
-    refreshMentionState,
-    chooseMention,
-    handleMentionKeyDown,
-    closeMentionPicker,
-    focusComposer,
-  } = useMentionPicker({ agents, channels, value: replyDraft, setValue: setReplyDraft, textareaRef });
-  useAutoGrowTextarea(textareaRef, replyDraft);
   const lastReply = replies[replies.length - 1] ?? null;
 
   function isThreadScrollAtBottom(element: HTMLDivElement) {
@@ -190,74 +175,7 @@ export function ThreadPanel({
     });
   }
 
-  function handleReplyKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (isImeComposing(event)) return;
-    if (handleMentionKeyDown(event)) return;
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      submitReply();
-    }
-  }
-
-  function submitReply() {
-    if (!activeRoot || (!replyDraft.trim() && replyAttachments.length === 0)) return;
-    sendReply();
-    closeMentionPicker();
-    focusComposer();
-  }
-
-  function hasDraggedFiles(event: DragEvent<HTMLElement>) {
-    return Array.from(event.dataTransfer.types).includes("Files");
-  }
-
-  function handleReplyDragEnter(event: DragEvent<HTMLElement>) {
-    if (!hasDraggedFiles(event)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    replyDragDepthRef.current += 1;
-    event.dataTransfer.dropEffect = activeRoot ? "copy" : "none";
-    if (activeRoot) setIsReplyDragOver(true);
-  }
-
-  function handleReplyDragOver(event: DragEvent<HTMLElement>) {
-    if (!hasDraggedFiles(event)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    event.dataTransfer.dropEffect = activeRoot ? "copy" : "none";
-    if (activeRoot) setIsReplyDragOver(true);
-  }
-
-  function handleReplyDragLeave(event: DragEvent<HTMLElement>) {
-    if (!hasDraggedFiles(event)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    replyDragDepthRef.current = Math.max(0, replyDragDepthRef.current - 1);
-    if (replyDragDepthRef.current === 0) setIsReplyDragOver(false);
-  }
-
-  function handleReplyDrop(event: DragEvent<HTMLElement>) {
-    if (!hasDraggedFiles(event)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    replyDragDepthRef.current = 0;
-    setIsReplyDragOver(false);
-    if (!activeRoot || event.dataTransfer.files.length === 0) return;
-    addReplyAttachments(event.dataTransfer.files);
-    focusComposer();
-  }
-
-  function handleReplyPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const imageFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
-    if (imageFiles.length === 0) return;
-    event.preventDefault();
-    if (!activeRoot) return;
-    addReplyAttachments(imageFiles);
-    focusComposer();
-  }
-
   useEffect(() => {
-    replyDragDepthRef.current = 0;
-    setIsReplyDragOver(false);
     setMessageMenu(null);
     setTapFocusedMessageId(null);
   }, [activeRoot?.id]);
@@ -729,96 +647,275 @@ export function ThreadPanel({
           )}
         </div>
 
-        <section
-          className={`reply-composer ${isReplyDragOver ? "drag-over" : ""}`}
-          onDragEnter={handleReplyDragEnter}
-          onDragOver={handleReplyDragOver}
-          onDragLeave={handleReplyDragLeave}
-          onDrop={handleReplyDrop}
-        >
-          {mentionState && mentionCandidates.length > 0 && (
-            <div className="mention-picker">
-              {mentionCandidates.map((candidate, index) => (
-                <button
-                  key={`${candidate.kind}:${candidate.id}`}
-                  className={index === mentionIndex ? "active" : ""}
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    chooseMention(candidate);
-                  }}
-                >
-                  {candidate.kind === "agent" ? (
-                    <>
-                      <AgentAvatar agent={candidate.agent} size="sm" title={`@${candidate.agent.handle}`} />
-                      <span className="mention-picker-copy">
-                        <strong>{candidate.agent.display_name}</strong>
-                        <small>@{candidate.agent.handle}</small>
-                        {visibleAgentDescription(candidate.agent.description) && <em>{visibleAgentDescription(candidate.agent.description)}</em>}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="mention-picker-channel-icon" aria-hidden="true">
-                        <Hash size={16} />
-                      </span>
-                      <span className="mention-picker-copy">
-                        <strong>#{candidate.channel.name}</strong>
-                        <small>Channel</small>
-                        {visibleChannelDescription(candidate.channel.description) && <em>{visibleChannelDescription(candidate.channel.description)}</em>}
-                      </span>
-                    </>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="file-input-hidden"
-            onChange={(event) => {
-              if (event.target.files) addReplyAttachments(event.target.files);
-              event.target.value = "";
-            }}
-          />
-          <DraftAttachmentsPreview attachments={replyAttachments} onRemove={removeReplyAttachment} />
-          <textarea
-            ref={textareaRef}
-            value={replyDraft}
-            onChange={(event) => {
-              setReplyDraft(event.target.value);
-              refreshMentionState(event.target.value, event.target.selectionStart);
-            }}
-            onSelect={(event) => refreshMentionState(replyDraft, event.currentTarget.selectionStart)}
-            onKeyDown={handleReplyKeyDown}
-            onPaste={handleReplyPaste}
-            disabled={!activeRoot}
-            placeholder={activeRoot ? isDm ? `Reply to @${dmAgent?.handle || "agent"}` : "Reply in thread" : "Select a thread to reply"}
-          />
-          <div className="reply-composer-actions">
-            <button
-              type="button"
-              className="attach-button"
-              disabled={!activeRoot}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <Paperclip size={15} />
-            </button>
-            <button
-              type="button"
-              className="reply-send"
-              title="Send reply"
-              aria-label="Send reply"
-              disabled={!activeRoot || (!replyDraft.trim() && replyAttachments.length === 0)}
-              onClick={submitReply}
-            >
-              <Send size={17} />
-            </button>
-          </div>
-        </section>
+        <ThreadReplyComposer
+          activeRoot={activeRoot}
+          isDm={isDm}
+          dmAgent={dmAgent}
+          agents={agents}
+          channels={channels}
+          replyDraft={replyDraft}
+          replyAttachments={replyAttachments}
+          setReplyDraft={setReplyDraft}
+          addReplyAttachments={addReplyAttachments}
+          removeReplyAttachment={removeReplyAttachment}
+          sendReply={sendReply}
+        />
       </section>
 
     </aside>
+  );
+}
+
+type ThreadReplyComposerProps = {
+  activeRoot: Message | null;
+  isDm: boolean;
+  dmAgent: Agent | null;
+  agents: Agent[];
+  channels: Channel[];
+  replyDraft: string;
+  replyAttachments: DraftAttachment[];
+  setReplyDraft: (value: string) => void;
+  addReplyAttachments: (files: FileList | File[]) => void;
+  removeReplyAttachment: (id: string) => void;
+  sendReply: (bodyOverride?: string, attachmentsOverride?: DraftAttachment[]) => void;
+};
+
+function hasDraggedFiles(event: DragEvent<HTMLElement>) {
+  return Array.from(event.dataTransfer.types).includes("Files");
+}
+
+function useBufferedComposerText(draft: string, resetKey: string | null | undefined, setDraft: (value: string) => void) {
+  const [text, setText] = useState(draft);
+  const textRef = useRef(draft);
+  const committedRef = useRef(draft);
+  const setDraftRef = useRef(setDraft);
+
+  useEffect(() => {
+    setDraftRef.current = setDraft;
+  }, [setDraft]);
+
+  useEffect(() => {
+    textRef.current = draft;
+    committedRef.current = draft;
+    setText(draft);
+  }, [draft, resetKey]);
+
+  useEffect(() => {
+    return () => {
+      if (textRef.current === committedRef.current) return;
+      committedRef.current = textRef.current;
+      setDraftRef.current(textRef.current);
+    };
+  }, [resetKey]);
+
+  function updateText(value: string) {
+    textRef.current = value;
+    setText(value);
+  }
+
+  function commitText(value = textRef.current) {
+    if (value === committedRef.current) return;
+    committedRef.current = value;
+    setDraftRef.current(value);
+  }
+
+  function markCommitted(value: string) {
+    textRef.current = value;
+    committedRef.current = value;
+    setText(value);
+  }
+
+  return { text, updateText, commitText, markCommitted };
+}
+
+function ThreadReplyComposer({
+  activeRoot,
+  isDm,
+  dmAgent,
+  agents,
+  channels,
+  replyDraft,
+  replyAttachments,
+  setReplyDraft,
+  addReplyAttachments,
+  removeReplyAttachment,
+  sendReply,
+}: ThreadReplyComposerProps) {
+  const [isReplyDragOver, setIsReplyDragOver] = useState(false);
+  const replyDragDepthRef = useRef(0);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const { text, updateText, commitText, markCommitted } = useBufferedComposerText(replyDraft, activeRoot?.id, setReplyDraft);
+  const {
+    mentionState,
+    mentionIndex,
+    mentionCandidates,
+    refreshMentionState,
+    chooseMention,
+    handleMentionKeyDown,
+    closeMentionPicker,
+    focusComposer,
+  } = useMentionPicker({ agents, channels, value: text, setValue: updateText, textareaRef });
+  useAutoGrowTextarea(textareaRef, text);
+
+  useEffect(() => {
+    replyDragDepthRef.current = 0;
+    setIsReplyDragOver(false);
+    closeMentionPicker();
+  }, [activeRoot?.id]);
+
+  function submitReply() {
+    if (!activeRoot || (!text.trim() && replyAttachments.length === 0)) return;
+    const body = text;
+    markCommitted("");
+    sendReply(body, replyAttachments);
+    closeMentionPicker();
+    focusComposer();
+  }
+
+  function handleReplyKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (isImeComposing(event)) return;
+    if (handleMentionKeyDown(event)) return;
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      submitReply();
+    }
+  }
+
+  function handleReplyDragEnter(event: DragEvent<HTMLElement>) {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    replyDragDepthRef.current += 1;
+    event.dataTransfer.dropEffect = activeRoot ? "copy" : "none";
+    if (activeRoot) setIsReplyDragOver(true);
+  }
+
+  function handleReplyDragOver(event: DragEvent<HTMLElement>) {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = activeRoot ? "copy" : "none";
+    if (activeRoot) setIsReplyDragOver(true);
+  }
+
+  function handleReplyDragLeave(event: DragEvent<HTMLElement>) {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    replyDragDepthRef.current = Math.max(0, replyDragDepthRef.current - 1);
+    if (replyDragDepthRef.current === 0) setIsReplyDragOver(false);
+  }
+
+  function handleReplyDrop(event: DragEvent<HTMLElement>) {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    replyDragDepthRef.current = 0;
+    setIsReplyDragOver(false);
+    if (!activeRoot || event.dataTransfer.files.length === 0) return;
+    addReplyAttachments(event.dataTransfer.files);
+    focusComposer();
+  }
+
+  function handleReplyPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const imageFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
+    if (imageFiles.length === 0) return;
+    event.preventDefault();
+    if (!activeRoot) return;
+    addReplyAttachments(imageFiles);
+    focusComposer();
+  }
+
+  return (
+    <section
+      className={`reply-composer ${isReplyDragOver ? "drag-over" : ""}`}
+      onDragEnter={handleReplyDragEnter}
+      onDragOver={handleReplyDragOver}
+      onDragLeave={handleReplyDragLeave}
+      onDrop={handleReplyDrop}
+    >
+      {mentionState && mentionCandidates.length > 0 && (
+        <div className="mention-picker">
+          {mentionCandidates.map((candidate, index) => (
+            <button
+              key={`${candidate.kind}:${candidate.id}`}
+              className={index === mentionIndex ? "active" : ""}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                chooseMention(candidate);
+              }}
+            >
+              {candidate.kind === "agent" ? (
+                <>
+                  <AgentAvatar agent={candidate.agent} size="sm" title={`@${candidate.agent.handle}`} />
+                  <span className="mention-picker-copy">
+                    <strong>{candidate.agent.display_name}</strong>
+                    <small>@{candidate.agent.handle}</small>
+                    {visibleAgentDescription(candidate.agent.description) && <em>{visibleAgentDescription(candidate.agent.description)}</em>}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="mention-picker-channel-icon" aria-hidden="true">
+                    <Hash size={16} />
+                  </span>
+                  <span className="mention-picker-copy">
+                    <strong>#{candidate.channel.name}</strong>
+                    <small>Channel</small>
+                    {visibleChannelDescription(candidate.channel.description) && <em>{visibleChannelDescription(candidate.channel.description)}</em>}
+                  </span>
+                </>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="file-input-hidden"
+        onChange={(event) => {
+          if (event.target.files) addReplyAttachments(event.target.files);
+          event.target.value = "";
+        }}
+      />
+      <DraftAttachmentsPreview attachments={replyAttachments} onRemove={removeReplyAttachment} />
+      <textarea
+        ref={textareaRef}
+        value={text}
+        onChange={(event) => {
+          updateText(event.target.value);
+          refreshMentionState(event.target.value, event.target.selectionStart);
+        }}
+        onBlur={() => commitText()}
+        onSelect={(event) => refreshMentionState(text, event.currentTarget.selectionStart)}
+        onKeyDown={handleReplyKeyDown}
+        onPaste={handleReplyPaste}
+        disabled={!activeRoot}
+        placeholder={activeRoot ? isDm ? `Reply to @${dmAgent?.handle || "agent"}` : "Reply in thread" : "Select a thread to reply"}
+      />
+      <div className="reply-composer-actions">
+        <button
+          type="button"
+          className="attach-button"
+          disabled={!activeRoot}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <Paperclip size={15} />
+        </button>
+        <button
+          type="button"
+          className="reply-send"
+          title="Send reply"
+          aria-label="Send reply"
+          disabled={!activeRoot || (!text.trim() && replyAttachments.length === 0)}
+          onClick={submitReply}
+        >
+          <Send size={17} />
+        </button>
+      </div>
+    </section>
   );
 }

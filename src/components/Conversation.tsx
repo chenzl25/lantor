@@ -70,7 +70,7 @@ type ConversationProps = {
   setDraft: (value: string) => void;
   addDraftAttachments: (files: FileList | File[]) => void;
   removeDraftAttachment: (id: string) => void;
-  sendRootMessage: (asTask?: boolean) => void;
+  sendRootMessage: (asTask?: boolean, bodyOverride?: string, attachmentsOverride?: DraftAttachment[]) => void;
   openAgentDetail: (agent: Agent) => void;
   openArtifact: (artifact: Artifact) => void;
   shareBaseUrl: string | null;
@@ -165,17 +165,11 @@ export function Conversation({
   focusedMessageId,
   onToggleMessageSaved,
 }: ConversationProps) {
-  const [sendAsTask, setSendAsTask] = useState(false);
-  const [isComposerDragOver, setIsComposerDragOver] = useState(false);
   const [showChannelActions, setShowChannelActions] = useState(false);
   const [messageMenu, setMessageMenu] = useState<MessageMenuState>(null);
   const [expandedChannelMessageIds, setExpandedChannelMessageIds] = useState<Set<string>>(() => new Set());
-  const composerDragDepthRef = useRef(0);
-  const taskToggleHandledAtRef = useRef(0);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const shouldFollowMessagesRef = useRef(true);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const channelActionsRef = useRef<HTMLDivElement | null>(null);
   const isDm = channel?.kind === "dm";
   const dmAgent = isDm ? agents.find((agent) => agent.id === channel?.dm_agent_id) ?? null : null;
@@ -183,17 +177,6 @@ export function Conversation({
     const agent = agents.find((candidate) => candidate.handle.toLowerCase() === handle.toLowerCase());
     if (agent) openAgentDetail(agent);
   }
-  const {
-    mentionState,
-    mentionIndex,
-    mentionCandidates,
-    refreshMentionState,
-    chooseMention,
-    handleMentionKeyDown,
-    closeMentionPicker,
-    focusComposer,
-  } = useMentionPicker({ agents, channels, value: draft, setValue: setDraft, textareaRef });
-  useAutoGrowTextarea(textareaRef, draft);
   const activeReplyProgressByRoot = useMemo<Record<string, ReturnType<typeof activeProgressByAgent>>>(() => {
     if (!channel) return {};
     return Object.fromEntries(
@@ -250,110 +233,8 @@ export function Conversation({
     return Boolean(window.getSelection()?.toString().trim());
   }
 
-  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (isImeComposing(event)) return;
-    if (handleMentionKeyDown(event)) return;
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      submitComposer();
-    }
-  }
-
-  // Mobile WebViews (iOS WKWebView, Android WebView) dismiss the soft keyboard
-  // when a tap blurs the focused textarea, and the first tap is consumed by the
-  // dismissal so the button doesn't fire. Calling preventDefault on mousedown
-  // (which is non-passive in React) keeps focus on the textarea so the click
-  // fires reliably on the first tap.
-  function preserveComposerFocus(event: ReactMouseEvent<HTMLElement>) {
-    if (textareaRef.current && document.activeElement === textareaRef.current) {
-      event.preventDefault();
-    }
-  }
-
-  // Toggle eagerly on pointer/mouse down so the active highlight flips before
-  // the synthesized click. We dedupe via a timestamp ref and let click handle
-  // keyboard activation (Enter/Space), where down events do not fire.
-  function handleTaskToggleMouseDown(event: ReactMouseEvent<HTMLElement>) {
-    if (Date.now() - taskToggleHandledAtRef.current < 600) return;
-    preserveComposerFocus(event);
-    if (!channel) return;
-    taskToggleHandledAtRef.current = Date.now();
-    setSendAsTask((current) => !current);
-  }
-
-  function handleTaskTogglePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
-    if (event.pointerType === "mouse") return;
-    if (!channel) return;
-    event.preventDefault();
-    event.stopPropagation();
-    taskToggleHandledAtRef.current = Date.now();
-    setSendAsTask((current) => !current);
-  }
-
-  function handleTaskToggleClick() {
-    if (!channel) return;
-    if (Date.now() - taskToggleHandledAtRef.current < 600) return;
-    setSendAsTask((current) => !current);
-  }
-
-  function submitComposer() {
-    if (!channel || (!draft.trim() && draftAttachments.length === 0)) return;
-    sendRootMessage(isDm ? false : sendAsTask);
-    closeMentionPicker();
-    focusComposer();
-  }
-
   function shouldOpenThreadFromMessageClick() {
     return window.matchMedia("(max-width: 760px)").matches;
-  }
-
-  function hasDraggedFiles(event: DragEvent<HTMLElement>) {
-    return Array.from(event.dataTransfer.types).includes("Files");
-  }
-
-  function handleComposerDragEnter(event: DragEvent<HTMLElement>) {
-    if (!hasDraggedFiles(event)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    composerDragDepthRef.current += 1;
-    event.dataTransfer.dropEffect = channel ? "copy" : "none";
-    if (channel) setIsComposerDragOver(true);
-  }
-
-  function handleComposerDragOver(event: DragEvent<HTMLElement>) {
-    if (!hasDraggedFiles(event)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    event.dataTransfer.dropEffect = channel ? "copy" : "none";
-    if (channel) setIsComposerDragOver(true);
-  }
-
-  function handleComposerDragLeave(event: DragEvent<HTMLElement>) {
-    if (!hasDraggedFiles(event)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    composerDragDepthRef.current = Math.max(0, composerDragDepthRef.current - 1);
-    if (composerDragDepthRef.current === 0) setIsComposerDragOver(false);
-  }
-
-  function handleComposerDrop(event: DragEvent<HTMLElement>) {
-    if (!hasDraggedFiles(event)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    composerDragDepthRef.current = 0;
-    setIsComposerDragOver(false);
-    if (!channel || event.dataTransfer.files.length === 0) return;
-    addDraftAttachments(event.dataTransfer.files);
-    focusComposer();
-  }
-
-  function handleComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const imageFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
-    if (imageFiles.length === 0) return;
-    event.preventDefault();
-    if (!channel) return;
-    addDraftAttachments(imageFiles);
-    focusComposer();
   }
 
   function renderReplyParticipantAvatar(message: Message) {
@@ -369,13 +250,10 @@ export function Conversation({
 
   useEffect(() => {
     if (!isDm) return;
-    setSendAsTask(false);
     if (activeTab === "tasks") setActiveTab("chat");
   }, [activeTab, isDm, setActiveTab]);
 
   useEffect(() => {
-    composerDragDepthRef.current = 0;
-    setIsComposerDragOver(false);
     setShowChannelActions(false);
     setMessageMenu(null);
   }, [channel?.id]);
@@ -925,117 +803,19 @@ export function Conversation({
       )}
 
       {activeTab === "chat" && (
-        <footer
-          className={`composer ${isComposerDragOver ? "drag-over" : ""}`}
-          onDragEnter={handleComposerDragEnter}
-          onDragOver={handleComposerDragOver}
-          onDragLeave={handleComposerDragLeave}
-          onDrop={handleComposerDrop}
-        >
-          {mentionState && mentionCandidates.length > 0 && (
-            <div className="mention-picker">
-              {mentionCandidates.map((candidate, index) => (
-                <button
-                  key={`${candidate.kind}:${candidate.id}`}
-                  className={index === mentionIndex ? "active" : ""}
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    chooseMention(candidate);
-                  }}
-                >
-                  {candidate.kind === "agent" ? (
-                    <>
-                      <AgentAvatar agent={candidate.agent} size="sm" title={`@${candidate.agent.handle}`} />
-                      <span className="mention-picker-copy">
-                        <strong>{candidate.agent.display_name}</strong>
-                        <small>@{candidate.agent.handle}</small>
-                        {visibleAgentDescription(candidate.agent.description) && <em>{visibleAgentDescription(candidate.agent.description)}</em>}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="mention-picker-channel-icon" aria-hidden="true">
-                        <Hash size={16} />
-                      </span>
-                      <span className="mention-picker-copy">
-                        <strong>#{candidate.channel.name}</strong>
-                        <small>Channel</small>
-                        {visibleChannelDescription(candidate.channel.description) && <em>{visibleChannelDescription(candidate.channel.description)}</em>}
-                      </span>
-                    </>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="file-input-hidden"
-            onChange={(event) => {
-              if (event.target.files) addDraftAttachments(event.target.files);
-              event.target.value = "";
-            }}
-          />
-          <DraftAttachmentsPreview attachments={draftAttachments} onRemove={removeDraftAttachment} />
-          <textarea
-            ref={textareaRef}
-            value={draft}
-            onChange={(event) => {
-              setDraft(event.target.value);
-              refreshMentionState(event.target.value, event.target.selectionStart);
-            }}
-            onSelect={(event) => refreshMentionState(draft, event.currentTarget.selectionStart)}
-            onKeyDown={handleComposerKeyDown}
-            onPaste={handleComposerPaste}
-            disabled={!channel}
-            placeholder={
-              channel
-                ? isDm
-                  ? `Message @${dmAgent?.handle || "agent"}`
-                  : `Message #${channel.name} - type @ or # to mention`
-                : "Create a channel before messaging"
-            }
-          />
-          <div className="composer-actions">
-            <button
-              type="button"
-              className="attach-button"
-              disabled={!channel}
-              onMouseDown={preserveComposerFocus}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <Paperclip size={16} />
-            </button>
-            {!isDm && (
-              <button
-                type="button"
-                className={`task-toggle ${sendAsTask ? "active" : ""}`}
-                title={sendAsTask ? "Send next message as a normal message" : "Send next message as a task"}
-                aria-label={sendAsTask ? "Send next message as a normal message" : "Send next message as a task"}
-                aria-pressed={sendAsTask}
-                disabled={!channel}
-                onPointerDown={handleTaskTogglePointerDown}
-                onMouseDown={handleTaskToggleMouseDown}
-                onClick={handleTaskToggleClick}
-              >
-                <Flag size={15} />
-                <span>Task</span>
-              </button>
-            )}
-            <button
-              className="send"
-              title={sendAsTask && !isDm ? "Create task" : "Send message"}
-              aria-label={sendAsTask && !isDm ? "Create task" : "Send message"}
-              disabled={!channel || (!draft.trim() && draftAttachments.length === 0)}
-              onMouseDown={preserveComposerFocus}
-              onClick={submitComposer}
-            >
-              <Send size={17} />
-            </button>
-          </div>
-        </footer>
+        <ConversationComposer
+          channel={channel}
+          isDm={isDm}
+          dmAgent={dmAgent}
+          agents={agents}
+          channels={channels}
+          draft={draft}
+          draftAttachments={draftAttachments}
+          setDraft={setDraft}
+          addDraftAttachments={addDraftAttachments}
+          removeDraftAttachment={removeDraftAttachment}
+          sendRootMessage={sendRootMessage}
+        />
       )}
     </section>
   );
@@ -1088,4 +868,318 @@ export function Conversation({
       </article>
     );
   }
+}
+
+type ConversationComposerProps = {
+  channel: Channel | null;
+  isDm: boolean;
+  dmAgent: Agent | null;
+  agents: Agent[];
+  channels: Channel[];
+  draft: string;
+  draftAttachments: DraftAttachment[];
+  setDraft: (value: string) => void;
+  addDraftAttachments: (files: FileList | File[]) => void;
+  removeDraftAttachment: (id: string) => void;
+  sendRootMessage: (asTask?: boolean, bodyOverride?: string, attachmentsOverride?: DraftAttachment[]) => void;
+};
+
+function hasDraggedFiles(event: DragEvent<HTMLElement>) {
+  return Array.from(event.dataTransfer.types).includes("Files");
+}
+
+function useBufferedComposerText(draft: string, resetKey: string | null | undefined, setDraft: (value: string) => void) {
+  const [text, setText] = useState(draft);
+  const textRef = useRef(draft);
+  const committedRef = useRef(draft);
+  const setDraftRef = useRef(setDraft);
+
+  useEffect(() => {
+    setDraftRef.current = setDraft;
+  }, [setDraft]);
+
+  useEffect(() => {
+    textRef.current = draft;
+    committedRef.current = draft;
+    setText(draft);
+  }, [draft, resetKey]);
+
+  useEffect(() => {
+    return () => {
+      if (textRef.current === committedRef.current) return;
+      committedRef.current = textRef.current;
+      setDraftRef.current(textRef.current);
+    };
+  }, [resetKey]);
+
+  function updateText(value: string) {
+    textRef.current = value;
+    setText(value);
+  }
+
+  function commitText(value = textRef.current) {
+    if (value === committedRef.current) return;
+    committedRef.current = value;
+    setDraftRef.current(value);
+  }
+
+  function markCommitted(value: string) {
+    textRef.current = value;
+    committedRef.current = value;
+    setText(value);
+  }
+
+  return { text, updateText, commitText, markCommitted };
+}
+
+function ConversationComposer({
+  channel,
+  isDm,
+  dmAgent,
+  agents,
+  channels,
+  draft,
+  draftAttachments,
+  setDraft,
+  addDraftAttachments,
+  removeDraftAttachment,
+  sendRootMessage,
+}: ConversationComposerProps) {
+  const [sendAsTask, setSendAsTask] = useState(false);
+  const [isComposerDragOver, setIsComposerDragOver] = useState(false);
+  const composerDragDepthRef = useRef(0);
+  const taskToggleHandledAtRef = useRef(0);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const { text, updateText, commitText, markCommitted } = useBufferedComposerText(draft, channel?.id, setDraft);
+  const {
+    mentionState,
+    mentionIndex,
+    mentionCandidates,
+    refreshMentionState,
+    chooseMention,
+    handleMentionKeyDown,
+    closeMentionPicker,
+    focusComposer,
+  } = useMentionPicker({ agents, channels, value: text, setValue: updateText, textareaRef });
+  useAutoGrowTextarea(textareaRef, text);
+
+  useEffect(() => {
+    if (isDm) setSendAsTask(false);
+  }, [isDm]);
+
+  useEffect(() => {
+    composerDragDepthRef.current = 0;
+    setIsComposerDragOver(false);
+    closeMentionPicker();
+  }, [channel?.id]);
+
+  // Mobile WebViews dismiss the soft keyboard when a tap blurs the focused
+  // textarea, and the first tap is consumed by the dismissal.
+  function preserveComposerFocus(event: ReactMouseEvent<HTMLElement>) {
+    if (textareaRef.current && document.activeElement === textareaRef.current) {
+      event.preventDefault();
+    }
+  }
+
+  function handleTaskToggleMouseDown(event: ReactMouseEvent<HTMLElement>) {
+    if (Date.now() - taskToggleHandledAtRef.current < 600) return;
+    preserveComposerFocus(event);
+    if (!channel) return;
+    taskToggleHandledAtRef.current = Date.now();
+    setSendAsTask((current) => !current);
+  }
+
+  function handleTaskTogglePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (event.pointerType === "mouse") return;
+    if (!channel) return;
+    event.preventDefault();
+    event.stopPropagation();
+    taskToggleHandledAtRef.current = Date.now();
+    setSendAsTask((current) => !current);
+  }
+
+  function handleTaskToggleClick() {
+    if (!channel) return;
+    if (Date.now() - taskToggleHandledAtRef.current < 600) return;
+    setSendAsTask((current) => !current);
+  }
+
+  function submitComposer() {
+    if (!channel || (!text.trim() && draftAttachments.length === 0)) return;
+    const body = text;
+    markCommitted("");
+    sendRootMessage(isDm ? false : sendAsTask, body, draftAttachments);
+    closeMentionPicker();
+    focusComposer();
+  }
+
+  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (isImeComposing(event)) return;
+    if (handleMentionKeyDown(event)) return;
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      submitComposer();
+    }
+  }
+
+  function handleComposerDragEnter(event: DragEvent<HTMLElement>) {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    composerDragDepthRef.current += 1;
+    event.dataTransfer.dropEffect = channel ? "copy" : "none";
+    if (channel) setIsComposerDragOver(true);
+  }
+
+  function handleComposerDragOver(event: DragEvent<HTMLElement>) {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = channel ? "copy" : "none";
+    if (channel) setIsComposerDragOver(true);
+  }
+
+  function handleComposerDragLeave(event: DragEvent<HTMLElement>) {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    composerDragDepthRef.current = Math.max(0, composerDragDepthRef.current - 1);
+    if (composerDragDepthRef.current === 0) setIsComposerDragOver(false);
+  }
+
+  function handleComposerDrop(event: DragEvent<HTMLElement>) {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    composerDragDepthRef.current = 0;
+    setIsComposerDragOver(false);
+    if (!channel || event.dataTransfer.files.length === 0) return;
+    addDraftAttachments(event.dataTransfer.files);
+    focusComposer();
+  }
+
+  function handleComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const imageFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
+    if (imageFiles.length === 0) return;
+    event.preventDefault();
+    if (!channel) return;
+    addDraftAttachments(imageFiles);
+    focusComposer();
+  }
+
+  return (
+    <footer
+      className={`composer ${isComposerDragOver ? "drag-over" : ""}`}
+      onDragEnter={handleComposerDragEnter}
+      onDragOver={handleComposerDragOver}
+      onDragLeave={handleComposerDragLeave}
+      onDrop={handleComposerDrop}
+    >
+      {mentionState && mentionCandidates.length > 0 && (
+        <div className="mention-picker">
+          {mentionCandidates.map((candidate, index) => (
+            <button
+              key={`${candidate.kind}:${candidate.id}`}
+              className={index === mentionIndex ? "active" : ""}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                chooseMention(candidate);
+              }}
+            >
+              {candidate.kind === "agent" ? (
+                <>
+                  <AgentAvatar agent={candidate.agent} size="sm" title={`@${candidate.agent.handle}`} />
+                  <span className="mention-picker-copy">
+                    <strong>{candidate.agent.display_name}</strong>
+                    <small>@{candidate.agent.handle}</small>
+                    {visibleAgentDescription(candidate.agent.description) && <em>{visibleAgentDescription(candidate.agent.description)}</em>}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="mention-picker-channel-icon" aria-hidden="true">
+                    <Hash size={16} />
+                  </span>
+                  <span className="mention-picker-copy">
+                    <strong>#{candidate.channel.name}</strong>
+                    <small>Channel</small>
+                    {visibleChannelDescription(candidate.channel.description) && <em>{visibleChannelDescription(candidate.channel.description)}</em>}
+                  </span>
+                </>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="file-input-hidden"
+        onChange={(event) => {
+          if (event.target.files) addDraftAttachments(event.target.files);
+          event.target.value = "";
+        }}
+      />
+      <DraftAttachmentsPreview attachments={draftAttachments} onRemove={removeDraftAttachment} />
+      <textarea
+        ref={textareaRef}
+        value={text}
+        onChange={(event) => {
+          updateText(event.target.value);
+          refreshMentionState(event.target.value, event.target.selectionStart);
+        }}
+        onBlur={() => commitText()}
+        onSelect={(event) => refreshMentionState(text, event.currentTarget.selectionStart)}
+        onKeyDown={handleComposerKeyDown}
+        onPaste={handleComposerPaste}
+        disabled={!channel}
+        placeholder={
+          channel
+            ? isDm
+              ? `Message @${dmAgent?.handle || "agent"}`
+              : `Message #${channel.name} - type @ or # to mention`
+            : "Create a channel before messaging"
+        }
+      />
+      <div className="composer-actions">
+        <button
+          type="button"
+          className="attach-button"
+          disabled={!channel}
+          onMouseDown={preserveComposerFocus}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <Paperclip size={16} />
+        </button>
+        {!isDm && (
+          <button
+            type="button"
+            className={`task-toggle ${sendAsTask ? "active" : ""}`}
+            title={sendAsTask ? "Send next message as a normal message" : "Send next message as a task"}
+            aria-label={sendAsTask ? "Send next message as a normal message" : "Send next message as a task"}
+            aria-pressed={sendAsTask}
+            disabled={!channel}
+            onPointerDown={handleTaskTogglePointerDown}
+            onMouseDown={handleTaskToggleMouseDown}
+            onClick={handleTaskToggleClick}
+          >
+            <Flag size={15} />
+            <span>Task</span>
+          </button>
+        )}
+        <button
+          className="send"
+          title={sendAsTask && !isDm ? "Create task" : "Send message"}
+          aria-label={sendAsTask && !isDm ? "Create task" : "Send message"}
+          disabled={!channel || (!text.trim() && draftAttachments.length === 0)}
+          onMouseDown={preserveComposerFocus}
+          onClick={submitComposer}
+        >
+          <Send size={17} />
+        </button>
+      </div>
+    </footer>
+  );
 }

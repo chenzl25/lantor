@@ -2538,10 +2538,11 @@ function App() {
     });
   }
 
-  async function sendRootMessage(asTask = false) {
-    if (!channel || (!draft.trim() && draftAttachments.length === 0)) return;
-    const body = draft.trim();
-    const attachments = draftAttachments;
+  async function sendRootMessage(asTask = false, bodyOverride?: string, attachmentsOverride?: DraftAttachment[]) {
+    const rawBody = bodyOverride ?? draft;
+    const attachments = attachmentsOverride ?? draftAttachments;
+    if (!channel || (!rawBody.trim() && attachments.length === 0)) return;
+    const body = rawBody.trim();
     const sendAsTask = channel.kind === "dm" ? false : asTask;
     const optimisticId = addOptimisticOwnerMessage(channel.id, null, body, sendAsTask, attachments);
     updateRootComposerDraft(channel.id, () => EMPTY_COMPOSER_DRAFT);
@@ -2579,10 +2580,11 @@ function App() {
     }
   }
 
-  async function sendReply() {
-    if (!channel || !activeRoot || (!replyDraft.trim() && replyAttachments.length === 0)) return;
-    const body = replyDraft.trim();
-    const attachments = replyAttachments;
+  async function sendReply(bodyOverride?: string, attachmentsOverride?: DraftAttachment[]) {
+    const rawBody = bodyOverride ?? replyDraft;
+    const attachments = attachmentsOverride ?? replyAttachments;
+    if (!channel || !activeRoot || (!rawBody.trim() && attachments.length === 0)) return;
+    const body = rawBody.trim();
     const optimisticId = addOptimisticOwnerMessage(channel.id, activeRoot.id, body, false, attachments);
     updateReplyComposerDraft(activeRoot.id, () => EMPTY_COMPOSER_DRAFT);
     try {
