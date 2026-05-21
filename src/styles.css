@@ -713,7 +713,7 @@ button,
 }
 
 .sidebar-nav-trigger.active {
-  border-color: var(--accent-soft-border);
+  border-color: transparent;
   background: var(--accent-soft);
   color: var(--accent);
 }
