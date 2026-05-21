@@ -33,6 +33,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Style token gate (no new raw color literals)
+        run: npm run lint:css-tokens
+
       - name: Build frontend
         run: npm run build
 
