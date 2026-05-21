@@ -191,6 +191,12 @@ button,
   --state-danger: var(--status-danger-soft);
   --state-warning: var(--status-warning-soft);
   --state-success: var(--status-success-soft);
+  --accent-soft: rgba(10, 132, 255, 0.1);
+  --accent-soft-border: rgba(10, 132, 255, 0.22);
+  --accent-soft-ink: #1262b3;
+  --accent-soft-hover: rgba(10, 132, 255, 0.15);
+  --accent-soft-hover-border: rgba(10, 132, 255, 0.34);
+  --accent-soft-hover-ink: #075aa5;
   --badge-bg: var(--badge);
   --badge-ink: var(--accent);
   --sidebar: rgba(246, 247, 249, 0.8);
@@ -371,6 +377,12 @@ button,
   --state-danger: var(--status-danger-soft);
   --state-warning: var(--status-warning-soft);
   --state-success: var(--status-success-soft);
+  --accent-soft: rgba(105, 170, 252, 0.14);
+  --accent-soft-border: rgba(105, 170, 252, 0.28);
+  --accent-soft-ink: var(--accent);
+  --accent-soft-hover: rgba(105, 170, 252, 0.22);
+  --accent-soft-hover-border: rgba(105, 170, 252, 0.4);
+  --accent-soft-hover-ink: var(--accent);
   --sidebar: var(--bg-sidebar);
   --panel: rgba(23, 27, 34, 0.94);
   --panel-strong: var(--bg-panel-strong);
@@ -624,8 +636,8 @@ button,
 }
 
 .sidebar-nav-trigger.active {
-  border-color: rgba(10, 132, 255, 0.24);
-  background: rgba(10, 132, 255, 0.12);
+  border-color: var(--accent-soft-border);
+  background: var(--accent-soft);
   color: var(--accent);
 }
 
@@ -826,19 +838,19 @@ button,
   justify-content: center;
   gap: 8px;
   padding: 9px 10px;
-  border: 1px solid rgba(10, 132, 255, 0.22);
+  border: 1px solid var(--accent-soft-border);
   border-radius: 13px;
-  background: rgba(10, 132, 255, 0.1);
-  color: #1262b3;
+  background: var(--accent-soft);
+  color: var(--accent-soft-ink);
   font-size: 13px;
   font-weight: 760;
 }
 
 .sidebar-empty-cta button:hover,
 .sidebar-empty-cta button:focus-visible {
-  border-color: rgba(10, 132, 255, 0.34);
-  background: rgba(10, 132, 255, 0.15);
-  color: #075aa5;
+  border-color: var(--accent-soft-hover-border);
+  background: var(--accent-soft-hover);
+  color: var(--accent-soft-hover-ink);
 }
 
 .channel {
@@ -1690,8 +1702,8 @@ button,
 .channel-agent-count-trigger:hover,
 .channel-action-trigger:hover,
 .channel-action-trigger.active {
-  border-color: rgba(10, 132, 255, 0.28);
-  background: rgba(10, 132, 255, 0.1);
+  border-color: var(--accent-soft-border);
+  background: var(--accent-soft);
 }
 
 .channel-actions-menu {
@@ -1724,7 +1736,7 @@ button,
 }
 
 .channel-actions-menu button:hover {
-  background: rgba(10, 132, 255, 0.08);
+  background: var(--bg-selected-soft);
 }
 
 .channel-actions-menu button.danger {
@@ -5809,9 +5821,9 @@ body.resizing-row * {
   align-items: center;
   gap: 10px;
   padding: 10px 11px;
-  border: 1px solid rgba(118, 118, 128, 0.1);
+  border: 1px solid var(--border-subtle);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.74);
+  background: var(--bg-panel);
 }
 
 .workspace-path-card > div,
@@ -5846,9 +5858,9 @@ body.resizing-row * {
   grid-auto-rows: max-content;
   max-height: none;
   overflow: auto;
-  border: 1px solid rgba(118, 118, 128, 0.1);
+  border: 1px solid var(--border-subtle);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.58);
+  background: var(--bg-panel);
 }
 
 .workspace-hint {
@@ -5872,7 +5884,7 @@ body.resizing-row * {
   min-width: 0;
   padding: 8px 10px;
   border: 0;
-  border-bottom: 1px solid rgba(118, 118, 128, 0.08);
+  border-bottom: 1px solid var(--border-subtle);
   border-radius: 0;
   background: transparent;
   text-align: left;
@@ -5891,13 +5903,13 @@ body.resizing-row * {
 }
 
 .workspace-tree-row.is-dir:hover .workspace-disclosure {
-  background: rgba(10, 132, 255, 0.12);
+  background: var(--accent-soft);
   color: var(--accent);
 }
 
 .workspace-tree-row:hover,
 .workspace-tree-row.selected {
-  background: rgba(10, 132, 255, 0.07);
+  background: var(--bg-selected-soft);
 }
 
 .workspace-tree-node:last-child > .workspace-tree-row {
@@ -5906,7 +5918,7 @@ body.resizing-row * {
 
 .workspace-tree-children {
   display: grid;
-  border-bottom: 1px solid rgba(118, 118, 128, 0.08);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .workspace-entry-kind {
@@ -5920,7 +5932,7 @@ body.resizing-row * {
 }
 
 .workspace-entry-kind.kind-dir {
-  background: rgba(10, 132, 255, 0.1);
+  background: var(--accent-soft);
   color: var(--accent);
 }
 
@@ -6864,9 +6876,9 @@ body.resizing-row * {
   align-items: flex-start;
   gap: 12px;
   padding: 13px;
-  border: 1px solid rgba(20, 23, 31, 0.07);
+  border: 1px solid var(--border-subtle);
   border-radius: 14px;
-  background: linear-gradient(180deg, #fff, #f7f8fa);
+  background: var(--bg-control-selected);
 }
 
 .channel-agent-modal-icon {
@@ -6875,10 +6887,10 @@ body.resizing-row * {
   height: 34px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid rgba(10, 132, 255, 0.16);
+  border: 1px solid var(--state-focus-ring);
   border-radius: 12px;
-  background: rgba(10, 132, 255, 0.08);
-  color: #1262b3;
+  background: var(--bg-selected-soft);
+  color: var(--accent-soft-ink);
 }
 
 .channel-agent-modal-intro strong {
@@ -6899,9 +6911,9 @@ body.resizing-row * {
   display: grid;
   gap: 10px;
   padding: 12px;
-  border: 1px solid rgba(20, 23, 31, 0.07);
+  border: 1px solid var(--border-subtle);
   border-radius: 14px;
-  background: #fff;
+  background: var(--bg-panel-strong);
 }
 
 .channel-agent-empty-cta p {
@@ -6918,19 +6930,19 @@ body.resizing-row * {
   justify-content: center;
   gap: 8px;
   padding: 9px 12px;
-  border: 1px solid rgba(10, 132, 255, 0.22);
+  border: 1px solid var(--accent-soft-border);
   border-radius: 12px;
-  background: rgba(10, 132, 255, 0.1);
-  color: #1262b3;
+  background: var(--accent-soft);
+  color: var(--accent-soft-ink);
   font-size: 13px;
   font-weight: 760;
 }
 
 .channel-agent-empty-cta button:hover,
 .channel-agent-empty-cta button:focus-visible {
-  border-color: rgba(10, 132, 255, 0.34);
-  background: rgba(10, 132, 255, 0.15);
-  color: #075aa5;
+  border-color: var(--accent-soft-hover-border);
+  background: var(--accent-soft-hover);
+  color: var(--accent-soft-hover-ink);
 }
 
 .channel-agent-picker .channel-agent-option {
@@ -6944,8 +6956,8 @@ body.resizing-row * {
 }
 
 .channel-agent-picker .channel-agent-option.selected {
-  background: rgba(10, 132, 255, 0.08);
-  border-color: rgba(10, 132, 255, 0.18);
+  background: var(--bg-selected-soft);
+  border-color: var(--state-focus-ring);
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
@@ -6986,18 +6998,18 @@ body.resizing-row * {
   gap: 5px;
   justify-self: end;
   padding: 0 9px;
-  border: 1px solid rgba(20, 23, 31, 0.08);
+  border: 1px solid var(--border-subtle);
   border-radius: 10px;
-  background: #fff;
+  background: var(--bg-panel-strong);
   color: #535967;
   font-size: 12px;
   font-weight: 760;
 }
 
 .channel-agent-option-state.selected {
-  border-color: rgba(10, 132, 255, 0.22);
-  background: rgba(10, 132, 255, 0.08);
-  color: #1262b3;
+  border-color: var(--accent-soft-border);
+  background: var(--bg-selected-soft);
+  color: var(--accent-soft-ink);
 }
 
 .agent-pick-row {

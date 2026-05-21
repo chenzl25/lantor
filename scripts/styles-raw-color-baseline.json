@@ -1473,12 +1473,6 @@
       "n": 0
     },
     {
-      "selector": ".channel-actions-menu button:hover",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.08)",
-      "n": 0
-    },
-    {
       "selector": ".channel-actions-menu button.danger",
       "prop": "color",
       "literal": "#d92d20",
@@ -1491,147 +1485,9 @@
       "n": 0
     },
     {
-      "selector": ".channel-agent-count-trigger:hover, .channel-action-trigger:hover, .channel-action-trigger.active",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.1)",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-count-trigger:hover, .channel-action-trigger:hover, .channel-action-trigger.active",
-      "prop": "border-color",
-      "literal": "rgba(10, 132, 255, 0.28)",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-empty-cta",
-      "prop": "background",
-      "literal": "#fff",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-empty-cta",
-      "prop": "border",
-      "literal": "rgba(20, 23, 31, 0.07)",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-empty-cta button",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.1)",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-empty-cta button",
-      "prop": "border",
-      "literal": "rgba(10, 132, 255, 0.22)",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-empty-cta button",
-      "prop": "color",
-      "literal": "#1262b3",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-empty-cta button:hover, .channel-agent-empty-cta button:focus-visible",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.15)",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-empty-cta button:hover, .channel-agent-empty-cta button:focus-visible",
-      "prop": "border-color",
-      "literal": "rgba(10, 132, 255, 0.34)",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-empty-cta button:hover, .channel-agent-empty-cta button:focus-visible",
-      "prop": "color",
-      "literal": "#075aa5",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-modal-icon",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.08)",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-modal-icon",
-      "prop": "border",
-      "literal": "rgba(10, 132, 255, 0.16)",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-modal-icon",
-      "prop": "color",
-      "literal": "#1262b3",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-modal-intro",
-      "prop": "background",
-      "literal": "#f7f8fa",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-modal-intro",
-      "prop": "background",
-      "literal": "#fff",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-modal-intro",
-      "prop": "border",
-      "literal": "rgba(20, 23, 31, 0.07)",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-option-state",
-      "prop": "background",
-      "literal": "#fff",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-option-state",
-      "prop": "border",
-      "literal": "rgba(20, 23, 31, 0.08)",
-      "n": 0
-    },
-    {
       "selector": ".channel-agent-option-state",
       "prop": "color",
       "literal": "#535967",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-option-state.selected",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.08)",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-option-state.selected",
-      "prop": "border-color",
-      "literal": "rgba(10, 132, 255, 0.22)",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-option-state.selected",
-      "prop": "color",
-      "literal": "#1262b3",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-picker .channel-agent-option.selected",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.08)",
-      "n": 0
-    },
-    {
-      "selector": ".channel-agent-picker .channel-agent-option.selected",
-      "prop": "border-color",
-      "literal": "rgba(10, 132, 255, 0.18)",
       "n": 0
     },
     {
@@ -2961,54 +2817,6 @@
       "n": 0
     },
     {
-      "selector": ".sidebar-empty-cta button",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.1)",
-      "n": 0
-    },
-    {
-      "selector": ".sidebar-empty-cta button",
-      "prop": "border",
-      "literal": "rgba(10, 132, 255, 0.22)",
-      "n": 0
-    },
-    {
-      "selector": ".sidebar-empty-cta button",
-      "prop": "color",
-      "literal": "#1262b3",
-      "n": 0
-    },
-    {
-      "selector": ".sidebar-empty-cta button:hover, .sidebar-empty-cta button:focus-visible",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.15)",
-      "n": 0
-    },
-    {
-      "selector": ".sidebar-empty-cta button:hover, .sidebar-empty-cta button:focus-visible",
-      "prop": "border-color",
-      "literal": "rgba(10, 132, 255, 0.34)",
-      "n": 0
-    },
-    {
-      "selector": ".sidebar-empty-cta button:hover, .sidebar-empty-cta button:focus-visible",
-      "prop": "color",
-      "literal": "#075aa5",
-      "n": 0
-    },
-    {
-      "selector": ".sidebar-nav-trigger.active",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.12)",
-      "n": 0
-    },
-    {
-      "selector": ".sidebar-nav-trigger.active",
-      "prop": "border-color",
-      "literal": "rgba(10, 132, 255, 0.24)",
-      "n": 0
-    },
-    {
       "selector": ".sidebar-resize-handle::after",
       "prop": "background",
       "literal": "rgba(10, 132, 255, 0)",
@@ -3633,12 +3441,6 @@
       "n": 0
     },
     {
-      "selector": ".workspace-entry-kind.kind-dir",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.1)",
-      "n": 0
-    },
-    {
       "selector": ".workspace-error",
       "prop": "background",
       "literal": "rgba(255, 69, 58, 0.1)",
@@ -3648,18 +3450,6 @@
       "selector": ".workspace-error",
       "prop": "color",
       "literal": "#c91810",
-      "n": 0
-    },
-    {
-      "selector": ".workspace-path-card, .workspace-memory-card",
-      "prop": "background",
-      "literal": "rgba(255, 255, 255, 0.74)",
-      "n": 0
-    },
-    {
-      "selector": ".workspace-path-card, .workspace-memory-card",
-      "prop": "border",
-      "literal": "rgba(118, 118, 128, 0.1)",
       "n": 0
     },
     {
@@ -3735,45 +3525,9 @@
       "n": 0
     },
     {
-      "selector": ".workspace-tree",
-      "prop": "background",
-      "literal": "rgba(255, 255, 255, 0.58)",
-      "n": 0
-    },
-    {
-      "selector": ".workspace-tree",
-      "prop": "border",
-      "literal": "rgba(118, 118, 128, 0.1)",
-      "n": 0
-    },
-    {
-      "selector": ".workspace-tree-children",
-      "prop": "border-bottom",
-      "literal": "rgba(118, 118, 128, 0.08)",
-      "n": 0
-    },
-    {
-      "selector": ".workspace-tree-row",
-      "prop": "border-bottom",
-      "literal": "rgba(118, 118, 128, 0.08)",
-      "n": 0
-    },
-    {
-      "selector": ".workspace-tree-row:hover, .workspace-tree-row.selected",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.07)",
-      "n": 0
-    },
-    {
       "selector": ".workspace-tree-row.is-dir .workspace-row-action",
       "prop": "background",
       "literal": "rgba(10, 132, 255, 0.1)",
-      "n": 0
-    },
-    {
-      "selector": ".workspace-tree-row.is-dir:hover .workspace-disclosure",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.12)",
       "n": 0
     },
     {
