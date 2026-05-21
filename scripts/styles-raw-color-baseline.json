@@ -15,36 +15,6 @@
       "n": 0
     },
     {
-      "selector": ":root[data-theme=\"dark\"] .activity-feed-filters button.active",
-      "prop": "background",
-      "literal": "rgba(105, 170, 252, 0.16)",
-      "n": 0
-    },
-    {
-      "selector": ":root[data-theme=\"dark\"] .activity-feed-filters button.active",
-      "prop": "border-color",
-      "literal": "rgba(105, 170, 252, 0.32)",
-      "n": 0
-    },
-    {
-      "selector": ":root[data-theme=\"dark\"] .activity-feed-row small b",
-      "prop": "background",
-      "literal": "rgba(52, 199, 89, 0.14)",
-      "n": 0
-    },
-    {
-      "selector": ":root[data-theme=\"dark\"] .activity-feed-row small b",
-      "prop": "color",
-      "literal": "#67d084",
-      "n": 0
-    },
-    {
-      "selector": ":root[data-theme=\"dark\"] .activity-feed-row-meta em",
-      "prop": "background",
-      "literal": "rgba(226, 232, 240, 0.1)",
-      "n": 0
-    },
-    {
       "selector": ":root[data-theme=\"dark\"] .agent-inbox-row-title span, :root[data-theme=\"dark\"] .search-result-fallback-avatar, :root[data-theme=\"dark\"] .reminder-row-icon",
       "prop": "background",
       "literal": "rgba(226, 232, 240, 0.1)",
@@ -165,15 +135,15 @@
       "n": 0
     },
     {
-      "selector": ":root[data-theme=\"dark\"] .message-long-preview.collapsed::after",
+      "selector": ":root[data-theme=\"dark\"] .message-hover-actions, :root[data-theme=\"dark\"] .message-hover-actions button, :root[data-theme=\"dark\"] .message-hover-actions button.saved:last-child, :root[data-theme=\"dark\"] .message-action-menu, :root[data-theme=\"dark\"] .message-action-menu button, :root[data-theme=\"dark\"] .channel-actions-menu, :root[data-theme=\"dark\"] .channel-actions-menu button, :root[data-theme=\"dark\"] .task-assignee-menu, :root[data-theme=\"dark\"] .task-assignee-option:hover, :root[data-theme=\"dark\"] .task-assignee-option[aria-selected=\"true\"], :root[data-theme=\"dark\"] .search-panel, :root[data-theme=\"dark\"] .search-input-icon, :root[data-theme=\"dark\"] .search-clear, :root[data-theme=\"dark\"] .search-filter-group button, :root[data-theme=\"dark\"] .search-time-filter, :root[data-theme=\"dark\"] .search-backdrop",
       "prop": "background",
-      "literal": "rgba(23, 27, 34, 0)",
+      "literal": "rgba(8, 11, 16, 0.72)",
       "n": 0
     },
     {
-      "selector": ":root[data-theme=\"dark\"] .search-backdrop",
+      "selector": ":root[data-theme=\"dark\"] .message-long-preview.collapsed::after",
       "prop": "background",
-      "literal": "rgba(8, 11, 16, 0.72)",
+      "literal": "rgba(23, 27, 34, 0)",
       "n": 0
     },
     {
@@ -372,264 +342,6 @@
       "selector": ".activity-dot[data-status=\"warning\"]",
       "prop": "box-shadow",
       "literal": "rgba(255, 159, 10, 0.16)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-back, .activity-feed-mark-all, .activity-feed-dismiss-all",
-      "prop": "background",
-      "literal": "#f6f7f9",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-back, .activity-feed-mark-all, .activity-feed-dismiss-all",
-      "prop": "background",
-      "literal": "#ffffff",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-back, .activity-feed-mark-all, .activity-feed-dismiss-all",
-      "prop": "border",
-      "literal": "rgba(20, 23, 31, 0.1)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-back, .activity-feed-mark-all, .activity-feed-dismiss-all",
-      "prop": "box-shadow",
-      "literal": "rgba(20, 23, 31, 0.04)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-back, .activity-feed-mark-all, .activity-feed-dismiss-all",
-      "prop": "box-shadow",
-      "literal": "rgba(255, 255, 255, 0.8)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-back, .activity-feed-mark-all, .activity-feed-dismiss-all",
-      "prop": "color",
-      "literal": "#656c78",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-back:hover, .activity-feed-mark-all:hover:not(:disabled), .activity-feed-dismiss-all:hover:not(:disabled)",
-      "prop": "background",
-      "literal": "#fff",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-back:hover, .activity-feed-mark-all:hover:not(:disabled), .activity-feed-dismiss-all:hover:not(:disabled)",
-      "prop": "color",
-      "literal": "#20242b",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-check, .activity-feed-dismiss",
-      "prop": "background",
-      "literal": "#fff",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-check, .activity-feed-dismiss",
-      "prop": "box-shadow",
-      "literal": "rgba(20, 23, 31, 0.16)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-check:hover",
-      "prop": "background",
-      "literal": "rgba(52, 199, 89, 0.12)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-check:hover",
-      "prop": "color",
-      "literal": "#168a36",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-dismiss-all:hover:not(:disabled)",
-      "prop": "border-color",
-      "literal": "rgba(196, 35, 29, 0.24)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-dismiss-all:hover:not(:disabled)",
-      "prop": "color",
-      "literal": "#c4231d",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-dismiss:hover",
-      "prop": "background",
-      "literal": "rgba(255, 59, 48, 0.1)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-dismiss:hover",
-      "prop": "color",
-      "literal": "#c4231d",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-filters",
-      "prop": "background",
-      "literal": "rgba(248, 249, 251, 0.86)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-filters button",
-      "prop": "background",
-      "literal": "#fff",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-filters button",
-      "prop": "border",
-      "literal": "rgba(142, 142, 147, 0.16)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-filters button.active",
-      "prop": "background",
-      "literal": "#eef0f4",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-filters button.active",
-      "prop": "border-color",
-      "literal": "rgba(20, 23, 31, 0.16)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-filters button.active",
-      "prop": "color",
-      "literal": "#20242b",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-load-more button",
-      "prop": "background",
-      "literal": "#f6f7f9",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-load-more button",
-      "prop": "background",
-      "literal": "#ffffff",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-load-more button",
-      "prop": "border",
-      "literal": "rgba(20, 23, 31, 0.1)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-load-more button",
-      "prop": "box-shadow",
-      "literal": "rgba(20, 23, 31, 0.04)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-load-more button",
-      "prop": "box-shadow",
-      "literal": "rgba(255, 255, 255, 0.8)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-load-more button",
-      "prop": "color",
-      "literal": "#20242b",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-load-more button:hover",
-      "prop": "background",
-      "literal": "#fff",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-panel",
-      "prop": "background",
-      "literal": "rgba(255, 255, 255, 0.97)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-panel",
-      "prop": "border",
-      "literal": "rgba(20, 23, 31, 0.14)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-panel",
-      "prop": "box-shadow",
-      "literal": "rgba(15, 23, 42, 0.24)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-row h3",
-      "prop": "color",
-      "literal": "#1d1c1d",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-row p",
-      "prop": "color",
-      "literal": "#1d1c1d",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-row small b",
-      "prop": "background",
-      "literal": "#f0f9f3",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-row small b",
-      "prop": "color",
-      "literal": "#167a36",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-row-meta em",
-      "prop": "background",
-      "literal": "#eef0f4",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-row-meta em",
-      "prop": "color",
-      "literal": "#4f5560",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-row-meta strong",
-      "prop": "color",
-      "literal": "#1d1c1d",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-row-shell + .activity-feed-row-shell",
-      "prop": "border-top",
-      "literal": "rgba(20, 23, 31, 0.06)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-row:hover",
-      "prop": "background",
-      "literal": "rgba(248, 248, 248, 0.72)",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-unread-dot",
-      "prop": "background",
-      "literal": "#ff3b30",
-      "n": 0
-    },
-    {
-      "selector": ".activity-feed-unread-dot",
-      "prop": "box-shadow",
-      "literal": "rgba(255, 59, 48, 0.12)",
       "n": 0
     },
     {
@@ -4098,42 +3810,6 @@
       "selector": "@container thread (max-width: 420px) >> .thread .message-hover-actions",
       "prop": "border-color",
       "literal": "rgba(20, 23, 31, 0.1)",
-      "n": 0
-    },
-    {
-      "selector": "@media (max-width: 760px) >> .activity-feed-body",
-      "prop": "background",
-      "literal": "#fff",
-      "n": 0
-    },
-    {
-      "selector": "@media (max-width: 760px) >> .activity-feed-row",
-      "prop": "background",
-      "literal": "#fff",
-      "n": 0
-    },
-    {
-      "selector": "@media (max-width: 760px) >> .activity-feed-row-shell",
-      "prop": "background",
-      "literal": "#fff",
-      "n": 0
-    },
-    {
-      "selector": "@media (max-width: 760px) >> .activity-feed-row-shell.swiping",
-      "prop": "background",
-      "literal": "#fff",
-      "n": 0
-    },
-    {
-      "selector": "@media (max-width: 760px) >> .activity-feed-swipe-action",
-      "prop": "background",
-      "literal": "#ff3b30",
-      "n": 0
-    },
-    {
-      "selector": "@media (max-width: 760px) >> .activity-feed-swipe-action",
-      "prop": "color",
-      "literal": "#fff",
       "n": 0
     },
     {

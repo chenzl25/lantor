@@ -232,6 +232,43 @@ button,
   --surface-profile-tab-hover: rgba(255, 255, 255, 0.78);
   --surface-profile-tab-active: #fff;
   --surface-profile-tab-shadow: 0 8px 20px rgba(32, 36, 44, 0.08);
+  --activity-feed-panel-bg: rgba(255, 255, 255, 0.97);
+  --activity-feed-panel-border: rgba(20, 23, 31, 0.14);
+  --activity-feed-panel-shadow: 0 32px 86px rgba(15, 23, 42, 0.24);
+  --activity-feed-control-bg: linear-gradient(180deg, #ffffff 0%, #f6f7f9 100%);
+  --activity-feed-control-hover-bg: #fff;
+  --activity-feed-control-border: rgba(20, 23, 31, 0.1);
+  --activity-feed-control-ink: #656c78;
+  --activity-feed-control-hover-ink: #20242b;
+  --activity-feed-control-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 1px 2px rgba(20, 23, 31, 0.04);
+  --activity-feed-filters-bg: rgba(248, 249, 251, 0.86);
+  --activity-feed-filter-bg: #fff;
+  --activity-feed-filter-border: rgba(142, 142, 147, 0.16);
+  --activity-feed-filter-active-bg: #eef0f4;
+  --activity-feed-filter-active-border: rgba(20, 23, 31, 0.16);
+  --activity-feed-filter-active-ink: #20242b;
+  --activity-feed-row-border: rgba(20, 23, 31, 0.06);
+  --activity-feed-row-hover-bg: rgba(248, 248, 248, 0.72);
+  --activity-feed-row-title-ink: #1d1c1d;
+  --activity-feed-row-body-ink: #1d1c1d;
+  --activity-feed-meta-chip-bg: #eef0f4;
+  --activity-feed-meta-chip-ink: #4f5560;
+  --activity-feed-status-bg: #f0f9f3;
+  --activity-feed-status-ink: #167a36;
+  --activity-feed-unread-bg: #ff3b30;
+  --activity-feed-unread-shadow: 0 0 0 3px rgba(255, 59, 48, 0.12);
+  --activity-feed-action-bg: #fff;
+  --activity-feed-action-shadow: inset 0 0 0 1px rgba(20, 23, 31, 0.16);
+  --activity-feed-action-success-bg: rgba(52, 199, 89, 0.12);
+  --activity-feed-action-success-ink: #168a36;
+  --activity-feed-action-danger-bg: rgba(255, 59, 48, 0.1);
+  --activity-feed-action-danger-ink: #c4231d;
+  --activity-feed-action-danger-border: rgba(196, 35, 29, 0.24);
+  --activity-feed-mobile-bg: #fff;
+  --activity-feed-swipe-bg: #ff3b30;
+  --activity-feed-swipe-ink: #fff;
   --sidebar-width: 292px;
   --thread-width: 560px;
   display: grid;
@@ -372,6 +409,41 @@ button,
   --surface-profile-tab-hover: var(--bg-control-hover);
   --surface-profile-tab-active: var(--bg-control-selected);
   --surface-profile-tab-shadow: 0 8px 20px rgba(0, 0, 0, 0.24);
+  --activity-feed-panel-bg: var(--bg-panel);
+  --activity-feed-panel-border: var(--border-strong);
+  --activity-feed-panel-shadow: var(--surface-shadow);
+  --activity-feed-control-bg: var(--bg-panel-strong);
+  --activity-feed-control-hover-bg: var(--bg-control-hover);
+  --activity-feed-control-border: var(--border-subtle);
+  --activity-feed-control-ink: var(--ink-primary);
+  --activity-feed-control-hover-ink: var(--ink-primary);
+  --activity-feed-control-shadow: none;
+  --activity-feed-filters-bg: var(--bg-elevated);
+  --activity-feed-filter-bg: var(--bg-panel-strong);
+  --activity-feed-filter-border: var(--border-subtle);
+  --activity-feed-filter-active-bg: rgba(105, 170, 252, 0.16);
+  --activity-feed-filter-active-border: rgba(105, 170, 252, 0.32);
+  --activity-feed-filter-active-ink: var(--accent);
+  --activity-feed-row-border: var(--border-subtle);
+  --activity-feed-row-hover-bg: var(--bg-hover);
+  --activity-feed-row-title-ink: var(--ink-primary);
+  --activity-feed-row-body-ink: var(--ink-secondary);
+  --activity-feed-meta-chip-bg: rgba(226, 232, 240, 0.1);
+  --activity-feed-meta-chip-ink: var(--ink-secondary);
+  --activity-feed-status-bg: rgba(52, 199, 89, 0.14);
+  --activity-feed-status-ink: #67d084;
+  --activity-feed-unread-bg: #ff3b30;
+  --activity-feed-unread-shadow: 0 0 0 3px rgba(255, 59, 48, 0.12);
+  --activity-feed-action-bg: var(--bg-panel-strong);
+  --activity-feed-action-shadow: inset 0 0 0 1px var(--border-subtle);
+  --activity-feed-action-success-bg: rgba(52, 199, 89, 0.14);
+  --activity-feed-action-success-ink: #67d084;
+  --activity-feed-action-danger-bg: rgba(255, 69, 58, 0.12);
+  --activity-feed-action-danger-ink: var(--status-danger);
+  --activity-feed-action-danger-border: var(--status-danger-border);
+  --activity-feed-mobile-bg: var(--bg-panel);
+  --activity-feed-swipe-bg: #ff3b30;
+  --activity-feed-swipe-ink: #fff;
   background:
     linear-gradient(135deg, #0e1117 0%, #151922 52%, #101722 100%);
   color: var(--ink-primary);
@@ -3227,18 +3299,6 @@ mark {
 :root[data-theme="dark"] .search-clear,
 :root[data-theme="dark"] .search-filter-group button,
 :root[data-theme="dark"] .search-time-filter,
-:root[data-theme="dark"] .activity-feed-back,
-:root[data-theme="dark"] .activity-feed-mark-all,
-:root[data-theme="dark"] .activity-feed-dismiss-all,
-:root[data-theme="dark"] .activity-feed-check,
-:root[data-theme="dark"] .activity-feed-dismiss,
-:root[data-theme="dark"] .activity-feed-load-more button {
-  border-color: var(--border-subtle);
-  background: var(--bg-panel-strong);
-  color: var(--ink-primary);
-  box-shadow: none;
-}
-
 :root[data-theme="dark"] .search-backdrop {
   background: rgba(8, 11, 16, 0.72);
 }
@@ -3246,51 +3306,6 @@ mark {
 :root[data-theme="dark"] .search-filters {
   border-color: var(--border-subtle);
   background: var(--bg-panel);
-}
-
-:root[data-theme="dark"] .activity-feed-panel {
-  border-color: var(--border-strong);
-  background: var(--bg-panel);
-  box-shadow: var(--surface-shadow);
-}
-
-:root[data-theme="dark"] .activity-feed-filters {
-  border-color: var(--border-subtle);
-  background: var(--bg-elevated);
-}
-
-:root[data-theme="dark"] .activity-feed-filters button {
-  border-color: var(--border-subtle);
-  background: var(--bg-panel-strong);
-  color: var(--ink-muted);
-}
-
-:root[data-theme="dark"] .activity-feed-filters button.active {
-  border-color: rgba(105, 170, 252, 0.32);
-  background: rgba(105, 170, 252, 0.16);
-  color: var(--accent);
-}
-
-:root[data-theme="dark"] .activity-feed-row-shell + .activity-feed-row-shell {
-  border-color: var(--border-subtle);
-}
-
-:root[data-theme="dark"] .activity-feed-row:hover {
-  background: var(--bg-hover);
-}
-
-:root[data-theme="dark"] .activity-feed-row-meta em {
-  background: rgba(226, 232, 240, 0.1);
-  color: var(--ink-secondary);
-}
-
-:root[data-theme="dark"] .activity-feed-row p {
-  color: var(--ink-secondary);
-}
-
-:root[data-theme="dark"] .activity-feed-row small b {
-  background: rgba(52, 199, 89, 0.14);
-  color: #67d084;
 }
 
 :root[data-theme="dark"] .search-panel-head input {
@@ -3305,19 +3320,13 @@ mark {
 
 :root[data-theme="dark"] .message-hover-actions button:hover,
 :root[data-theme="dark"] .message-hover-actions button.saved:last-child:hover,
-:root[data-theme="dark"] .search-clear:hover,
-:root[data-theme="dark"] .activity-feed-back:hover,
-:root[data-theme="dark"] .activity-feed-mark-all:hover:not(:disabled),
-:root[data-theme="dark"] .activity-feed-dismiss-all:hover:not(:disabled),
-:root[data-theme="dark"] .activity-feed-load-more button:hover {
+:root[data-theme="dark"] .search-clear:hover {
   background: var(--bg-control-hover);
   color: var(--ink-primary);
 }
 
 :root[data-theme="dark"] .task-execution-head strong,
 :root[data-theme="dark"] .task-execution-row strong,
-:root[data-theme="dark"] .activity-feed-row-meta strong,
-:root[data-theme="dark"] .activity-feed-row h3,
 :root[data-theme="dark"] .search-result-title,
 :root[data-theme="dark"] .search-result-body {
   color: var(--ink-primary);
@@ -7716,10 +7725,10 @@ body.resizing-row * {
   width: min(1180px, calc(100vw - 56px));
   max-height: calc(100vh - 56px);
   overflow: hidden;
-  border: 1px solid rgba(20, 23, 31, 0.14);
+  border: 1px solid var(--activity-feed-panel-border);
   border-radius: 22px;
-  background: rgba(255, 255, 255, 0.97);
-  box-shadow: 0 32px 86px rgba(15, 23, 42, 0.24);
+  background: var(--activity-feed-panel-bg);
+  box-shadow: var(--activity-feed-panel-shadow);
 }
 
 .activity-panel {
@@ -7750,21 +7759,19 @@ body.resizing-row * {
 .activity-feed-back,
 .activity-feed-mark-all,
 .activity-feed-dismiss-all {
-  border: 1px solid rgba(20, 23, 31, 0.1);
+  border: 1px solid var(--activity-feed-control-border);
   border-radius: 12px;
-  background: linear-gradient(180deg, #ffffff 0%, #f6f7f9 100%);
-  color: #656c78;
+  background: var(--activity-feed-control-bg);
+  color: var(--activity-feed-control-ink);
   font-weight: var(--type-weight-bold);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.8),
-    0 1px 2px rgba(20, 23, 31, 0.04);
+  box-shadow: var(--activity-feed-control-shadow);
 }
 
 .activity-feed-back:hover,
 .activity-feed-mark-all:hover:not(:disabled),
 .activity-feed-dismiss-all:hover:not(:disabled) {
-  background: #fff;
-  color: #20242b;
+  background: var(--activity-feed-control-hover-bg);
+  color: var(--activity-feed-control-hover-ink);
 }
 
 .activity-feed-back {
@@ -7789,8 +7796,8 @@ body.resizing-row * {
 }
 
 .activity-feed-dismiss-all:hover:not(:disabled) {
-  border-color: rgba(196, 35, 29, 0.24);
-  color: #c4231d;
+  border-color: var(--activity-feed-action-danger-border);
+  color: var(--activity-feed-action-danger-ink);
 }
 
 .activity-feed-mark-all:disabled,
@@ -7804,15 +7811,15 @@ body.resizing-row * {
   overflow-x: auto;
   padding: 14px 20px;
   border-bottom: 1px solid var(--line);
-  background: rgba(248, 249, 251, 0.86);
+  background: var(--activity-feed-filters-bg);
 }
 
 .activity-feed-filters button {
   height: 34px;
   padding: 0 13px;
-  border: 1px solid rgba(142, 142, 147, 0.16);
+  border: 1px solid var(--activity-feed-filter-border);
   border-radius: 999px;
-  background: #fff;
+  background: var(--activity-feed-filter-bg);
   color: var(--muted);
   font-size: var(--type-size-body);
   font-weight: var(--type-weight-semibold);
@@ -7820,9 +7827,9 @@ body.resizing-row * {
 }
 
 .activity-feed-filters button.active {
-  border-color: rgba(20, 23, 31, 0.16);
-  background: #eef0f4;
-  color: #20242b;
+  border-color: var(--activity-feed-filter-active-border);
+  background: var(--activity-feed-filter-active-bg);
+  color: var(--activity-feed-filter-active-ink);
 }
 
 .activity-feed-body {
@@ -7845,7 +7852,7 @@ body.resizing-row * {
 }
 
 .activity-feed-row-shell + .activity-feed-row-shell {
-  border-top: 1px solid rgba(20, 23, 31, 0.06);
+  border-top: 1px solid var(--activity-feed-row-border);
 }
 
 .activity-feed-swipe-action {
@@ -7875,7 +7882,7 @@ body.resizing-row * {
 }
 
 .activity-feed-row:hover {
-  background: rgba(248, 248, 248, 0.72);
+  background: var(--activity-feed-row-hover-bg);
   box-shadow: none;
 }
 
@@ -7904,7 +7911,7 @@ body.resizing-row * {
   max-width: 100%;
   margin: 0;
   overflow: hidden;
-  color: #1d1c1d;
+  color: var(--activity-feed-row-title-ink);
   font-size: var(--type-size-body);
   font-weight: var(--type-weight-semibold);
   line-height: var(--activity-feed-meta-line-height);
@@ -7927,8 +7934,8 @@ body.resizing-row * {
   min-height: var(--activity-feed-meta-line-height);
   padding: 2px 7px;
   border-radius: 999px;
-  background: #eef0f4;
-  color: #4f5560;
+  background: var(--activity-feed-meta-chip-bg);
+  color: var(--activity-feed-meta-chip-ink);
   font-style: normal;
   text-transform: capitalize;
 }
@@ -7939,7 +7946,7 @@ body.resizing-row * {
   align-items: flex-start;
   margin: 3px 0 0;
   min-width: 0;
-  color: #1d1c1d;
+  color: var(--activity-feed-row-title-ink);
   font-size: var(--type-size-message);
   font-weight: var(--type-weight-semibold);
   line-height: var(--activity-feed-title-line-height);
@@ -7970,7 +7977,7 @@ body.resizing-row * {
   word-break: break-word;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
-  color: #1d1c1d;
+  color: var(--activity-feed-row-body-ink);
   font-size: var(--type-size-body);
   line-height: var(--activity-feed-excerpt-line-height);
   max-height: var(--activity-feed-excerpt-max-height);
@@ -7994,8 +8001,8 @@ body.resizing-row * {
 .activity-feed-row small b {
   padding: 2px 8px;
   border-radius: 999px;
-  background: #f0f9f3;
-  color: #167a36;
+  background: var(--activity-feed-status-bg);
+  color: var(--activity-feed-status-ink);
   font-size: var(--type-size-caption);
 }
 
@@ -8011,8 +8018,8 @@ body.resizing-row * {
   width: 9px;
   height: 9px;
   border-radius: 999px;
-  background: #ff3b30;
-  box-shadow: 0 0 0 3px rgba(255, 59, 48, 0.12);
+  background: var(--activity-feed-unread-bg);
+  box-shadow: var(--activity-feed-unread-shadow);
 }
 
 .activity-feed-check,
@@ -8022,19 +8029,19 @@ body.resizing-row * {
   height: 38px;
   place-items: center;
   border-radius: 12px;
-  background: #fff;
+  background: var(--activity-feed-action-bg);
   color: var(--ink);
-  box-shadow: inset 0 0 0 1px rgba(20, 23, 31, 0.16);
+  box-shadow: var(--activity-feed-action-shadow);
 }
 
 .activity-feed-check:hover {
-  background: rgba(52, 199, 89, 0.12);
-  color: #168a36;
+  background: var(--activity-feed-action-success-bg);
+  color: var(--activity-feed-action-success-ink);
 }
 
 .activity-feed-dismiss:hover {
-  background: rgba(255, 59, 48, 0.1);
-  color: #c4231d;
+  background: var(--activity-feed-action-danger-bg);
+  color: var(--activity-feed-action-danger-ink);
 }
 
 .activity-feed-load-more {
@@ -8049,19 +8056,17 @@ body.resizing-row * {
   gap: 10px;
   min-height: 36px;
   padding: 8px 18px;
-  border: 1px solid rgba(20, 23, 31, 0.1);
+  border: 1px solid var(--activity-feed-control-border);
   border-radius: 999px;
-  background: linear-gradient(180deg, #ffffff 0%, #f6f7f9 100%);
-  color: #20242b;
+  background: var(--activity-feed-control-bg);
+  color: var(--activity-feed-control-hover-ink);
   font-size: var(--type-size-body);
   font-weight: var(--type-weight-semibold);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.8),
-    0 1px 2px rgba(20, 23, 31, 0.04);
+  box-shadow: var(--activity-feed-control-shadow);
 }
 
 .activity-feed-load-more button:hover {
-  background: #fff;
+  background: var(--activity-feed-control-hover-bg);
 }
 
 .activity-feed-load-more button span {
@@ -9071,7 +9076,7 @@ body.resizing-row * {
   .activity-feed-body {
     gap: 10px;
     padding: 12px 12px 118px;
-    background: #fff;
+    background: var(--activity-feed-mobile-bg);
   }
 
   .saved-panel {
@@ -9080,12 +9085,12 @@ body.resizing-row * {
 
   .activity-feed-row-shell {
     border-radius: 16px;
-    background: #fff;
+    background: var(--activity-feed-mobile-bg);
     touch-action: pan-y;
   }
 
   .activity-feed-row-shell.swiping {
-    background: #fff;
+    background: var(--activity-feed-mobile-bg);
   }
 
   .activity-feed-swipe-action {
@@ -9102,8 +9107,8 @@ body.resizing-row * {
     align-content: center;
     gap: 4px;
     border-radius: 0 16px 16px 0;
-    background: #ff3b30;
-    color: #fff;
+    background: var(--activity-feed-swipe-bg);
+    color: var(--activity-feed-swipe-ink);
     font-size: var(--type-size-caption);
     font-weight: var(--type-weight-semibold);
     opacity: clamp(0, calc(-1 * var(--activity-feed-swipe-x) / 72), 1);
@@ -9123,7 +9128,7 @@ body.resizing-row * {
     gap: 12px;
     padding: 14px;
     border-radius: 16px;
-    background: #fff;
+    background: var(--activity-feed-mobile-bg);
     transform: translateX(var(--activity-feed-swipe-x));
     transition: transform 160ms ease;
   }
@@ -9187,11 +9192,7 @@ body.resizing-row * {
   :root[data-theme="dark"] .search-panel,
   :root[data-theme="dark"] .search-panel-head,
   :root[data-theme="dark"] .search-filters,
-  :root[data-theme="dark"] .search-panel-body,
-  :root[data-theme="dark"] .activity-feed-body,
-  :root[data-theme="dark"] .activity-feed-row-shell,
-  :root[data-theme="dark"] .activity-feed-row-shell.swiping,
-  :root[data-theme="dark"] .activity-feed-row {
+  :root[data-theme="dark"] .search-panel-body {
     background: var(--bg-panel);
   }
 
