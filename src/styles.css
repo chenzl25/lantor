@@ -160,6 +160,18 @@ button,
   --accent: #0a84ff;
   --accent-ink: #ffffff;
   --badge: #eef6ff;
+  --badge-phase-default-bg: rgba(142, 142, 147, 0.12);
+  --badge-phase-default-ink: var(--muted);
+  --badge-phase-thinking-bg: rgba(90, 200, 250, 0.16);
+  --badge-phase-thinking-ink: #0071a8;
+  --badge-phase-command-bg: rgba(255, 159, 10, 0.18);
+  --badge-phase-command-ink: #9a5a00;
+  --badge-phase-file-bg: rgba(191, 90, 242, 0.14);
+  --badge-phase-file-ink: #7b2cbf;
+  --badge-phase-success-bg: rgba(52, 199, 89, 0.16);
+  --badge-phase-success-ink: #167d32;
+  --badge-phase-error-bg: rgba(255, 69, 58, 0.15);
+  --badge-phase-error-ink: #c91810;
   --unread-bg: transparent;
   --unread-border: transparent;
   --unread-ink: #111827;
@@ -168,6 +180,16 @@ button,
   --radius-lg: 16px;
   --surface-border: rgba(20, 23, 31, 0.12);
   --surface-shadow: 0 24px 64px rgba(15, 23, 42, 0.18);
+  --surface-profile-hero-bg:
+    radial-gradient(circle at 12% 0%, rgba(10, 132, 255, 0.17), transparent 34%),
+    radial-gradient(circle at 88% 8%, rgba(52, 199, 89, 0.13), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 249, 251, 0.82));
+  --surface-profile-hero-shadow: 0 18px 42px rgba(32, 36, 44, 0.08);
+  --surface-profile-tabs-bg: rgba(255, 255, 255, 0.68);
+  --surface-profile-tabs-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.68);
+  --surface-profile-tab-hover: rgba(255, 255, 255, 0.78);
+  --surface-profile-tab-active: #fff;
+  --surface-profile-tab-shadow: 0 8px 20px rgba(32, 36, 44, 0.08);
   --sidebar-width: 292px;
   --thread-width: 560px;
   display: grid;
@@ -239,11 +261,33 @@ button,
   --accent: #69aafc;
   --accent-ink: #07111f;
   --badge: rgba(105, 170, 252, 0.16);
+  --badge-phase-default-bg: rgba(226, 232, 240, 0.1);
+  --badge-phase-default-ink: var(--ink-muted);
+  --badge-phase-thinking-bg: rgba(90, 200, 250, 0.16);
+  --badge-phase-thinking-ink: #7dd3fc;
+  --badge-phase-command-bg: rgba(255, 177, 66, 0.16);
+  --badge-phase-command-ink: #ffc166;
+  --badge-phase-file-bg: rgba(216, 180, 254, 0.16);
+  --badge-phase-file-ink: #d8b4fe;
+  --badge-phase-success-bg: rgba(52, 199, 89, 0.14);
+  --badge-phase-success-ink: #67d084;
+  --badge-phase-error-bg: rgba(255, 69, 58, 0.12);
+  --badge-phase-error-ink: #ffb4ab;
   --unread-bg: transparent;
   --unread-border: transparent;
   --unread-ink: var(--ink-primary);
   --surface-border: var(--border-strong);
   --surface-shadow: 0 24px 64px rgba(0, 0, 0, 0.38);
+  --surface-profile-hero-bg:
+    radial-gradient(circle at 12% 0%, rgba(105, 170, 252, 0.18), transparent 34%),
+    radial-gradient(circle at 88% 8%, rgba(52, 199, 89, 0.12), transparent 30%),
+    linear-gradient(180deg, var(--bg-panel-strong), var(--bg-panel));
+  --surface-profile-hero-shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
+  --surface-profile-tabs-bg: var(--bg-control-flat);
+  --surface-profile-tabs-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --surface-profile-tab-hover: var(--bg-control-hover);
+  --surface-profile-tab-active: var(--bg-control-selected);
+  --surface-profile-tab-shadow: 0 8px 20px rgba(0, 0, 0, 0.24);
   background:
     linear-gradient(135deg, #0e1117 0%, #151922 52%, #101722 100%);
   color: var(--ink-primary);
@@ -5433,13 +5477,11 @@ body.resizing-row * {
   gap: 15px;
   overflow: hidden;
   padding: 16px;
-  border: 1px solid rgba(118, 118, 128, 0.14);
+  border: 1px solid var(--border-subtle);
   border-radius: 22px;
-  background:
-    radial-gradient(circle at 12% 0%, rgba(10, 132, 255, 0.17), transparent 34%),
-    radial-gradient(circle at 88% 8%, rgba(52, 199, 89, 0.13), transparent 30%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 249, 251, 0.82));
-  box-shadow: 0 18px 42px rgba(32, 36, 44, 0.08);
+  background: var(--surface-profile-hero-bg);
+  box-shadow: var(--surface-profile-hero-shadow);
+  color: var(--ink-primary);
 }
 
 .avatar.large {
@@ -5473,10 +5515,10 @@ body.resizing-row * {
   align-self: start;
   gap: 4px;
   padding: 4px;
-  border: 1px solid rgba(118, 118, 128, 0.12);
+  border: 1px solid var(--border-subtle);
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.68);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.68);
+  background: var(--surface-profile-tabs-bg);
+  box-shadow: var(--surface-profile-tabs-shadow);
 }
 
 .agent-detail-tab {
@@ -5495,13 +5537,13 @@ body.resizing-row * {
 }
 
 .agent-detail-tab:hover {
-  background: rgba(255, 255, 255, 0.78);
+  background: var(--surface-profile-tab-hover);
 }
 
 .agent-detail-tab.active {
-  background: #fff;
-  color: var(--ink);
-  box-shadow: 0 8px 20px rgba(32, 36, 44, 0.08);
+  background: var(--surface-profile-tab-active);
+  color: var(--ink-primary);
+  box-shadow: var(--surface-profile-tab-shadow);
 }
 
 .agent-detail-tab span {
@@ -5562,8 +5604,8 @@ body.resizing-row * {
   width: fit-content;
   padding: 4px 8px;
   border-radius: 999px;
-  background: rgba(142, 142, 147, 0.12);
-  color: var(--muted);
+  background: var(--badge-phase-default-bg);
+  color: var(--badge-phase-default-ink);
   font-size: var(--type-size-caption);
   font-weight: var(--type-weight-semibold);
   letter-spacing: 0;
@@ -5571,38 +5613,38 @@ body.resizing-row * {
 }
 
 .phase-badge.phase-thinking {
-  background: rgba(90, 200, 250, 0.16);
-  color: #0071a8;
+  background: var(--badge-phase-thinking-bg);
+  color: var(--badge-phase-thinking-ink);
 }
 
 .phase-badge.phase-command {
-  background: rgba(255, 159, 10, 0.18);
-  color: #9a5a00;
+  background: var(--badge-phase-command-bg);
+  color: var(--badge-phase-command-ink);
 }
 
 .phase-badge.phase-file_edit {
-  background: rgba(191, 90, 242, 0.14);
-  color: #7b2cbf;
+  background: var(--badge-phase-file-bg);
+  color: var(--badge-phase-file-ink);
 }
 
 .phase-badge.phase-acting,
 .phase-badge.phase-event,
 .phase-badge.phase-message,
 .phase-badge.phase-task {
-  background: rgba(52, 199, 89, 0.16);
-  color: #167d32;
+  background: var(--badge-phase-success-bg);
+  color: var(--badge-phase-success-ink);
 }
 
 .phase-badge.phase-tools {
-  background: rgba(255, 159, 10, 0.18);
-  color: #9a5a00;
+  background: var(--badge-phase-command-bg);
+  color: var(--badge-phase-command-ink);
 }
 
 .phase-badge.phase-error,
 .phase-badge.phase-event_error,
 .phase-badge.phase-run_error {
-  background: rgba(255, 69, 58, 0.15);
-  color: #c91810;
+  background: var(--badge-phase-error-bg);
+  color: var(--badge-phase-error-ink);
 }
 
 .detail-grid {
