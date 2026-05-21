@@ -29,7 +29,7 @@ import { ActivityFeedModal } from "./components/ActivityFeedModal";
 import { OwnerProfileModal, ownerProfileToForm, type OwnerProfileForm } from "./components/OwnerProfileModal";
 import { SavedMessagesModal } from "./components/SavedMessagesModal";
 import { SearchModal } from "./components/SearchModal";
-import { SettingsModal, type ThemePreference } from "./components/SettingsModal";
+import { SettingsModal, type ChatTextSize, type ThemePreference } from "./components/SettingsModal";
 import { Sidebar } from "./components/Sidebar";
 import { ThreadPanel } from "./components/ThreadPanel";
 import { isProgressOnlyMessage } from "./message-grouping";
@@ -151,6 +151,7 @@ const THREAD_PANEL_WIDTH_STORAGE_KEY = "lantor.threadPanelWidth";
 const AGENT_DRAWER_WIDTH_STORAGE_KEY = "lantor.agentDrawerWidth";
 const SIDEBAR_WIDTH_STORAGE_KEY = "lantor.sidebarWidth";
 const THEME_PREFERENCE_STORAGE_KEY = "lantor.themePreference";
+const CHAT_TEXT_SIZE_STORAGE_KEY = "lantor.chatTextSize";
 const MOBILE_EDGE_SWIPE_START_PX = 24;
 const MOBILE_EDGE_SWIPE_OPEN_PX = 72;
 const MOBILE_EDGE_SWIPE_MAX_VERTICAL_PX = 48;
@@ -164,6 +165,45 @@ const ACTIVITY_FEED_KIND_PRIORITY: Record<ActivityFeedItem["kind"], number> = {
   thread: 3,
   task: 4,
   channel: 5,
+};
+const CHAT_TEXT_SIZE_OPTIONS: ChatTextSize[] = ["compact", "default", "large", "xlarge"];
+const UI_TYPE_SCALE: Record<ChatTextSize, Record<string, string>> = {
+  compact: {
+    "--type-size-caption": "10px",
+    "--type-size-meta": "11px",
+    "--type-size-body": "13px",
+    "--type-size-message": "14px",
+    "--type-size-control": "16px",
+    "--type-size-title": "17px",
+    "--type-size-display": "20px",
+  },
+  default: {
+    "--type-size-caption": "11px",
+    "--type-size-meta": "12px",
+    "--type-size-body": "14px",
+    "--type-size-message": "15px",
+    "--type-size-control": "16px",
+    "--type-size-title": "18px",
+    "--type-size-display": "21px",
+  },
+  large: {
+    "--type-size-caption": "12px",
+    "--type-size-meta": "13px",
+    "--type-size-body": "15px",
+    "--type-size-message": "16px",
+    "--type-size-control": "17px",
+    "--type-size-title": "19px",
+    "--type-size-display": "22px",
+  },
+  xlarge: {
+    "--type-size-caption": "13px",
+    "--type-size-meta": "14px",
+    "--type-size-body": "16px",
+    "--type-size-message": "17px",
+    "--type-size-control": "18px",
+    "--type-size-title": "20px",
+    "--type-size-display": "23px",
+  },
 };
 
 type UiBackendEvent =
@@ -447,6 +487,11 @@ function getStoredThemePreference(): ThemePreference {
   return stored === "light" || stored === "dark" || stored === "auto" ? stored : "auto";
 }
 
+function getStoredChatTextSize(): ChatTextSize {
+  const stored = window.localStorage.getItem(CHAT_TEXT_SIZE_STORAGE_KEY);
+  return CHAT_TEXT_SIZE_OPTIONS.includes(stored as ChatTextSize) ? stored as ChatTextSize : "default";
+}
+
 async function attachmentUploads(attachments: DraftAttachment[]) {
   return Promise.all(attachments.map(async (attachment) => {
     const buffer = await attachment.file.arrayBuffer();
@@ -617,6 +662,7 @@ function App() {
   const [showOwnerProfileModal, setShowOwnerProfileModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => getStoredThemePreference());
+  const [chatTextSize, setChatTextSize] = useState<ChatTextSize>(() => getStoredChatTextSize());
   const [showMobileSidebar, setShowMobileSidebar] = useState(() => isMobileViewport());
   const [mobileSidebarFocus, setMobileSidebarFocus] = useState<"home" | "dms">("home");
   const [mobileSidebarDragPx, setMobileSidebarDragPx] = useState(0);
@@ -1208,6 +1254,10 @@ function App() {
   }, [themePreference]);
 
   useEffect(() => {
+    window.localStorage.setItem(CHAT_TEXT_SIZE_STORAGE_KEY, chatTextSize);
+  }, [chatTextSize]);
+
+  useEffect(() => {
     setDismissedActivityFeedItems(data?.dismissed_inbox_items ?? {});
   }, [data?.dismissed_inbox_items]);
 
@@ -1215,9 +1265,35 @@ function App() {
     setReadActivityFeedItems(data?.read_inbox_items ?? {});
   }, [data?.read_inbox_items]);
 
+  function adjustChatTextSize(delta: number) {
+    setChatTextSize((current) => {
+      const index = CHAT_TEXT_SIZE_OPTIONS.indexOf(current);
+      const nextIndex = Math.min(CHAT_TEXT_SIZE_OPTIONS.length - 1, Math.max(0, index + delta));
+      return CHAT_TEXT_SIZE_OPTIONS[nextIndex] ?? "default";
+    });
+  }
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       const modifier = event.metaKey || event.ctrlKey;
+
+      if (modifier && (event.key === "=" || event.key === "+" || event.code === "Equal" || event.code === "NumpadAdd")) {
+        event.preventDefault();
+        adjustChatTextSize(1);
+        return;
+      }
+
+      if (modifier && (event.key === "-" || event.key === "_" || event.code === "Minus" || event.code === "NumpadSubtract")) {
+        event.preventDefault();
+        adjustChatTextSize(-1);
+        return;
+      }
+
+      if (modifier && event.key === "0") {
+        event.preventDefault();
+        setChatTextSize("default");
+        return;
+      }
 
       if (modifier && event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -3107,6 +3183,7 @@ function App() {
         "--sidebar-width": `${sidebarWidth}px`,
         "--thread-width": `${selectedAgent ? agentDrawerWidth : threadPanelWidth}px`,
         "--mobile-sidebar-drag": `${mobileSidebarDragPx}px`,
+        ...UI_TYPE_SCALE[chatTextSize],
       } as CSSProperties}
     >
       <Sidebar
@@ -3209,7 +3286,9 @@ function App() {
       <SettingsModal
         open={showSettingsModal}
         themePreference={themePreference}
+        chatTextSize={chatTextSize}
         onThemePreferenceChange={setThemePreference}
+        onChatTextSizeChange={setChatTextSize}
         onClose={() => setShowSettingsModal(false)}
       />
 
