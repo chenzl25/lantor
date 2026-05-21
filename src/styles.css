@@ -675,9 +675,9 @@ button,
   align-items: center;
   justify-content: center;
   justify-self: end;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 7px;
+  min-width: 18px;
+  min-height: 18px;
+  padding: 2px 7px;
   border-radius: 999px;
   background: var(--badge-bg);
   color: var(--badge-ink);
@@ -8779,8 +8779,8 @@ body.resizing-row * {
 
   .mobile-bottom-nav strong {
     position: absolute;
-    top: -8px;
-    right: -14px;
+    top: -7px;
+    right: -12px;
   }
 
   .thread header,
