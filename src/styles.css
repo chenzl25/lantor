@@ -6170,7 +6170,7 @@ body.resizing-row * {
   padding: 14px;
   border: 1px solid var(--accent-soft-border);
   border-radius: 18px;
-  background: var(--bg-selected-accent);
+  background: var(--accent-soft);
 }
 
 .agent-autonomy-card p {
@@ -6348,12 +6348,17 @@ body.resizing-row * {
 
 .activity-run-head button {
   padding: 5px 9px;
-  border: 1px solid var(--control-border);
+  border: 1px solid var(--border-control);
   border-radius: 8px;
-  background: var(--bg-control-hover);
-  color: var(--ink);
+  background: var(--surface-control);
+  color: var(--ink-on-control);
   font-size: var(--type-size-caption);
   font-weight: var(--type-weight-semibold);
+}
+
+.activity-run-head button:hover,
+.activity-run-head button:focus-visible {
+  background: var(--surface-control-hover);
 }
 
 .activity-run-kicker {
