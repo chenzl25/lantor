@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod activity_store;
 mod agent_inbox_wake;
 mod agent_memory;
 mod agent_profile;
@@ -15,16 +16,17 @@ mod events;
 mod launch_agent;
 mod message_store;
 mod models;
+mod owner_inbox;
 mod prompts;
 mod runtime;
 mod task_messages;
+mod task_store;
 mod text;
 mod ui_notifications;
 mod usage;
 mod web;
 
 use std::{
-    collections::HashMap,
     env, fs,
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
@@ -35,7 +37,6 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
     Row, SqlitePool,
@@ -47,6 +48,7 @@ use tauri::{Manager, State};
 use tokio::{sync::Semaphore, time::sleep};
 use uuid::Uuid;
 
+use activity_store::{load_agent_activities, load_agent_runs, load_agent_work_items};
 use agent_inbox_wake::{
     agent_has_active_or_pending_start, agent_runtime, build_steer_followup_prompt,
     create_agent_inbox_item, enqueue_agent_work_if_available, ensure_agent_inbox_wake_work_item,
@@ -97,8 +99,13 @@ use message_store::{
     send_owner_message_in_pool, set_message_saved_in_pool, update_message_in_pool,
 };
 use models::{
-    AgentActivity, AgentRun, AgentWorkItem, Artifact, AttachmentUpload, Bootstrap,
-    LaunchAgentStatus, RuntimeCheck, SupervisorCommand, SupervisorStatus, Task,
+    Artifact, AttachmentUpload, Bootstrap, LaunchAgentStatus, RuntimeCheck, SupervisorCommand,
+    SupervisorStatus,
+};
+use owner_inbox::{
+    dismiss_inbox_items_in_pool, load_dismissed_inbox_items, load_read_inbox_items,
+    mark_all_owner_inbox_read_in_pool, mark_channel_read_in_pool, mark_inbox_items_read_in_pool,
+    update_thread_followed_in_pool,
 };
 use prompts::{
     build_streaming_work_item_prompt, build_work_item_prompt, load_agent_memory_context,
@@ -119,6 +126,7 @@ use runtime::supervisor::{
 use runtime::surface::{
     append_claude_thread_context, same_codex_surface, CodexActiveTurnScheduleState,
 };
+use task_store::{load_tasks, update_task_status_in_pool, update_task_title_in_pool};
 use ui_notifications::{
     notify_supervisor_wake, notify_ui_agent_run_changed, notify_ui_refresh,
     notify_ui_work_item_changed, spawn_ui_refresh_listener,
@@ -1160,46 +1168,6 @@ async fn update_task_status(
     update_task_status_in_pool(&state.pool, task_id, status).await
 }
 
-pub(crate) async fn update_task_status_in_pool(
-    pool: &SqlitePool,
-    task_id: Uuid,
-    status: String,
-) -> CommandResult<()> {
-    let status = status.trim();
-    if !matches!(status, "todo" | "in_progress" | "in_review" | "done") {
-        return Err(format!("unsupported task status: {status}"));
-    }
-
-    let affected = sqlx::query(
-        r#"
-        update tasks
-        set status = $2, version = version + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id = $1
-        "#,
-    )
-    .bind(task_id)
-    .bind(status)
-    .execute(pool)
-    .await
-    .map_err(to_string)?
-    .rows_affected();
-    if affected == 0 {
-        return Err("task does not exist".to_owned());
-    }
-    record_agent_activity(
-        pool,
-        None,
-        None,
-        "task",
-        "Task status updated",
-        json!({ "task_id": task_id, "status": status }).to_string(),
-    )
-    .await?;
-
-    let _ = notify_ui_refresh(pool, "task_status_updated").await;
-    Ok(())
-}
-
 #[tauri::command]
 async fn update_task_title(
     task_id: Uuid,
@@ -1207,55 +1175,6 @@ async fn update_task_title(
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
     update_task_title_in_pool(&state.pool, task_id, title).await
-}
-
-pub(crate) async fn update_task_title_in_pool(
-    pool: &SqlitePool,
-    task_id: Uuid,
-    title: String,
-) -> CommandResult<()> {
-    let title = title.trim();
-    if title.is_empty() {
-        return Err("task title is empty".to_owned());
-    }
-
-    let mut tx = pool
-        .begin_with("BEGIN IMMEDIATE")
-        .await
-        .map_err(to_string)?;
-    let message_id: Uuid = sqlx::query_scalar(
-        r#"
-        update tasks
-        set title = $2, version = version + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id = $1
-        returning message_id
-        "#,
-    )
-    .bind(task_id)
-    .bind(title)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(to_string)?;
-
-    sqlx::query("update messages set body = $2, updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where id = $1")
-        .bind(message_id)
-        .bind(title)
-        .execute(&mut *tx)
-        .await
-        .map_err(to_string)?;
-
-    tx.commit().await.map_err(to_string)?;
-    record_agent_activity(
-        pool,
-        None,
-        None,
-        "task",
-        "Task title updated",
-        json!({ "task_id": task_id, "title": title }).to_string(),
-    )
-    .await?;
-    let _ = notify_ui_refresh(pool, "task_title_updated").await;
-    Ok(())
 }
 
 #[tauri::command]
@@ -1291,164 +1210,9 @@ async fn mark_inbox_items_read(
     .await
 }
 
-pub(crate) async fn dismiss_inbox_items_in_pool<I>(pool: &SqlitePool, items: I) -> CommandResult<()>
-where
-    I: IntoIterator<Item = (String, DateTime<Utc>)>,
-{
-    let mut updated = false;
-    for item in items {
-        let item_id = item.0.trim();
-        if item_id.is_empty() {
-            continue;
-        }
-        sqlx::query(
-            r#"
-            insert into owner_inbox_hidden_items (item_id, hidden_until, hidden_at)
-            values ($1, $2, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
-            on conflict (item_id) do update set
-                hidden_until = max(
-                    owner_inbox_hidden_items.hidden_until,
-                    excluded.hidden_until
-                ),
-                hidden_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-            "#,
-        )
-        .bind(item_id)
-        .bind(item.1)
-        .execute(pool)
-        .await
-        .map_err(to_string)?;
-        updated = true;
-    }
-
-    if updated {
-        notify_ui_refresh(pool, "owner_inbox_dismissed").await?;
-    }
-    Ok(())
-}
-
-pub(crate) async fn mark_inbox_items_read_in_pool<I>(
-    pool: &SqlitePool,
-    items: I,
-) -> CommandResult<()>
-where
-    I: IntoIterator<Item = (String, DateTime<Utc>)>,
-{
-    let mut updated = false;
-    for item in items {
-        let item_id = item.0.trim();
-        if item_id.is_empty() {
-            continue;
-        }
-        sqlx::query(
-            r#"
-            insert into owner_inbox_read_state (item_id, read_until, read_at)
-            values ($1, $2, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
-            on conflict (item_id) do update set
-                read_until = max(
-                    owner_inbox_read_state.read_until,
-                    excluded.read_until
-                ),
-                read_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-            "#,
-        )
-        .bind(item_id)
-        .bind(item.1)
-        .execute(pool)
-        .await
-        .map_err(to_string)?;
-        updated = true;
-    }
-
-    if updated {
-        notify_ui_refresh(pool, "owner_inbox_read").await?;
-    }
-    Ok(())
-}
-
-pub(crate) async fn mark_all_owner_inbox_read_in_pool(pool: &SqlitePool) -> CommandResult<()> {
-    sqlx::query(
-        r#"
-        insert into owner_inbox_read_state (item_id, read_until, read_at)
-        select 'task:' || lower(
-            substr(hex(id), 1, 8) || '-' ||
-            substr(hex(id), 9, 4) || '-' ||
-            substr(hex(id), 13, 4) || '-' ||
-            substr(hex(id), 17, 4) || '-' ||
-            substr(hex(id), 21, 12)
-        ), strftime('%Y-%m-%dT%H:%M:%f+00:00','now'), strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        from tasks
-        where status = 'in_review'
-        on conflict (item_id) do update set
-            read_until = max(owner_inbox_read_state.read_until, excluded.read_until),
-            read_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        "#,
-    )
-    .execute(pool)
-    .await
-    .map_err(to_string)?;
-
-    sqlx::query(
-        r#"
-        insert into owner_inbox_read_state (item_id, read_until, read_at)
-        select 'reminder:' || lower(
-            substr(hex(id), 1, 8) || '-' ||
-            substr(hex(id), 9, 4) || '-' ||
-            substr(hex(id), 13, 4) || '-' ||
-            substr(hex(id), 17, 4) || '-' ||
-            substr(hex(id), 21, 12)
-        ), strftime('%Y-%m-%dT%H:%M:%f+00:00','now'), strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        from reminders
-        where status = 'fired'
-        on conflict (item_id) do update set
-            read_until = max(owner_inbox_read_state.read_until, excluded.read_until),
-            read_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        "#,
-    )
-    .execute(pool)
-    .await
-    .map_err(to_string)?;
-
-    sqlx::query(
-        r#"
-        insert into channel_read_state (channel_id, last_read_at)
-        select id, strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        from channels
-        where true
-        on conflict (channel_id) do update set last_read_at = excluded.last_read_at
-        "#,
-    )
-    .execute(pool)
-    .await
-    .map_err(to_string)?;
-
-    notify_ui_refresh(pool, "owner_inbox_mark_all_read").await?;
-    Ok(())
-}
-
 #[tauri::command]
 async fn mark_all_inbox_read(state: State<'_, AppState>) -> CommandResult<()> {
     mark_all_owner_inbox_read_in_pool(&state.pool).await
-}
-
-pub(crate) async fn mark_channel_read_in_pool(
-    pool: &SqlitePool,
-    channel_id: Uuid,
-) -> CommandResult<()> {
-    sqlx::query(
-        r#"
-        insert into channel_read_state (channel_id, last_read_at)
-        values ($1, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
-        on conflict (channel_id) do update set last_read_at = excluded.last_read_at
-        "#,
-    )
-    .bind(channel_id)
-    .execute(pool)
-    .await
-    .map_err(to_string)?;
-
-    let _ = notify_ui_refresh(pool, "channel_read").await;
-    Ok(())
 }
 
 #[tauri::command]
@@ -1457,311 +1221,7 @@ async fn update_thread_followed(
     followed: bool,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
-    sqlx::query(
-        r#"
-        update messages
-        set thread_followed = $2
-        where id = $1 and thread_root_id is null
-        "#,
-    )
-    .bind(thread_root_id)
-    .bind(followed)
-    .execute(&state.pool)
-    .await
-    .map_err(to_string)?;
-
-    Ok(())
-}
-
-async fn load_dismissed_inbox_items(
-    pool: &SqlitePool,
-) -> CommandResult<HashMap<String, DateTime<Utc>>> {
-    let rows = sqlx::query(
-        r#"
-        select item_id, hidden_until
-        from owner_inbox_hidden_items
-        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(to_string)?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| (row.get("item_id"), row.get("hidden_until")))
-        .collect())
-}
-
-async fn load_read_inbox_items(pool: &SqlitePool) -> CommandResult<HashMap<String, DateTime<Utc>>> {
-    let rows = sqlx::query(
-        r#"
-        select item_id, max(read_until) as read_until
-        from (
-            select item_id, read_until
-            from owner_inbox_read_state
-            union all
-            select item_id, dismissed_until as read_until
-            from owner_inbox_dismissals
-        ) reads
-        group by item_id
-        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(to_string)?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| (row.get("item_id"), row.get("read_until")))
-        .collect())
-}
-
-async fn load_tasks(pool: &SqlitePool) -> CommandResult<Vec<Task>> {
-    let rows = sqlx::query(
-        r#"
-        select
-            t.id,
-            t.number,
-            t.message_id,
-            t.channel_id,
-            t.title,
-            t.status,
-            t.version,
-            c.name as channel_name,
-            t.assignee_agent_id as assignee_id,
-            a.display_name as assignee_name,
-            t.created_at,
-            t.updated_at
-        from tasks t
-        join channels c on c.id = t.channel_id
-        left join agents a on a.id = t.assignee_agent_id
-        order by t.number desc
-        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(to_string)?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| Task {
-            id: row.get("id"),
-            number: row.get("number"),
-            message_id: row.get("message_id"),
-            channel_id: row.get("channel_id"),
-            title: row.get("title"),
-            status: row.get("status"),
-            version: row.get("version"),
-            channel_name: row.get("channel_name"),
-            assignee_id: row.get("assignee_id"),
-            assignee_name: row.get("assignee_name"),
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
-        })
-        .collect())
-}
-
-async fn load_agent_runs(pool: &SqlitePool) -> CommandResult<Vec<AgentRun>> {
-    let rows = sqlx::query(
-        r#"
-        select
-            r.id,
-            r.agent_id,
-            a.handle as agent_handle,
-            r.work_item_id,
-            r.command,
-            r.working_directory,
-            r.status,
-            r.pid,
-            r.exit_code,
-            r.log,
-            r.input_tokens,
-            r.output_tokens,
-            r.cost_micros,
-            r.started_at,
-            r.stopped_at
-        from agent_runs r
-        join agents a on a.id = r.agent_id
-        order by r.started_at desc
-        limit 30
-        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(to_string)?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| AgentRun {
-            id: row.get("id"),
-            agent_id: row.get("agent_id"),
-            agent_handle: row.get("agent_handle"),
-            work_item_id: row.get("work_item_id"),
-            command: row.get("command"),
-            working_directory: row.get("working_directory"),
-            status: row.get("status"),
-            pid: row.get("pid"),
-            exit_code: row.get("exit_code"),
-            log: row.get("log"),
-            input_tokens: row.get("input_tokens"),
-            output_tokens: row.get("output_tokens"),
-            cost_micros: row.get("cost_micros"),
-            started_at: row.get("started_at"),
-            stopped_at: row.get("stopped_at"),
-        })
-        .collect())
-}
-
-async fn load_agent_work_items(pool: &SqlitePool) -> CommandResult<Vec<AgentWorkItem>> {
-    let rows = sqlx::query(
-        r#"
-        select
-            w.id,
-            w.agent_id,
-            a.handle as agent_handle,
-            w.channel_id,
-            c.name as channel_name,
-            w.thread_root_id,
-            w.source_message_id,
-            w.inbox_item_id,
-            w.task_id,
-            t.number as task_number,
-            w.source_kind,
-            w.title,
-            w.context,
-            w.status,
-            w.run_id,
-            w.created_at,
-            w.updated_at,
-            w.completed_at
-        from agent_work_items w
-        join agents a on a.id = w.agent_id
-        left join channels c on c.id = w.channel_id
-        left join tasks t on t.id = w.task_id
-        order by w.created_at desc
-        limit 80
-        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(to_string)?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| AgentWorkItem {
-            id: row.get("id"),
-            agent_id: row.get("agent_id"),
-            agent_handle: row.get("agent_handle"),
-            channel_id: row.get("channel_id"),
-            channel_name: row.get("channel_name"),
-            thread_root_id: row.get("thread_root_id"),
-            source_message_id: row.get("source_message_id"),
-            inbox_item_id: row.get("inbox_item_id"),
-            task_id: row.get("task_id"),
-            task_number: row.get("task_number"),
-            source_kind: row.get("source_kind"),
-            title: row.get("title"),
-            context: row.get("context"),
-            status: row.get("status"),
-            run_id: row.get("run_id"),
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
-            completed_at: row.get("completed_at"),
-        })
-        .collect())
-}
-
-async fn load_agent_activities(pool: &SqlitePool) -> CommandResult<Vec<AgentActivity>> {
-    let rows = sqlx::query(
-        r#"
-        select
-            id,
-            agent_id,
-            agent_handle,
-            run_id,
-            kind,
-            phase,
-            status,
-            title,
-            summary,
-            detail,
-            metadata as metadata,
-            created_at
-        from (
-            select
-                agent_activities.*,
-                row_number() over (
-                    partition by coalesce(case when agent_id is null then null else lower(hex(agent_id)) end, nullif(agent_handle, ''), 'unknown')
-                    order by julianday(created_at) desc, created_at desc
-                ) as activity_rank
-            from agent_activities
-        ) ranked
-        where activity_rank <= 80
-        order by julianday(created_at) desc, created_at desc
-        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(to_string)?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| AgentActivity {
-            id: row.get("id"),
-            agent_id: row.get("agent_id"),
-            agent_handle: row.get("agent_handle"),
-            run_id: row.get("run_id"),
-            kind: row.get("kind"),
-            phase: row.get("phase"),
-            status: row.get("status"),
-            title: row.get("title"),
-            summary: row.get("summary"),
-            detail: row.get("detail"),
-            metadata: parse_json_value(row.get("metadata")),
-            created_at: row.get("created_at"),
-        })
-        .collect())
-}
-
-async fn load_agent_activity(pool: &SqlitePool, activity_id: Uuid) -> CommandResult<AgentActivity> {
-    let row = sqlx::query(
-        r#"
-        select
-            id,
-            agent_id,
-            agent_handle,
-            run_id,
-            kind,
-            phase,
-            status,
-            title,
-            summary,
-            detail,
-            metadata as metadata,
-            created_at
-        from agent_activities
-        where id = $1
-        "#,
-    )
-    .bind(activity_id)
-    .fetch_one(pool)
-    .await
-    .map_err(to_string)?;
-
-    Ok(AgentActivity {
-        id: row.get("id"),
-        agent_id: row.get("agent_id"),
-        agent_handle: row.get("agent_handle"),
-        run_id: row.get("run_id"),
-        kind: row.get("kind"),
-        phase: row.get("phase"),
-        status: row.get("status"),
-        title: row.get("title"),
-        summary: row.get("summary"),
-        detail: row.get("detail"),
-        metadata: parse_json_value(row.get("metadata")),
-        created_at: row.get("created_at"),
-    })
+    update_thread_followed_in_pool(&state.pool, thread_root_id, followed).await
 }
 
 async fn load_supervisor_status(pool: &SqlitePool) -> CommandResult<SupervisorStatus> {
@@ -1796,10 +1256,6 @@ async fn load_supervisor_status(pool: &SqlitePool) -> CommandResult<SupervisorSt
         status,
         updated_at: Some(updated_at),
     })
-}
-
-fn parse_json_value(raw: String) -> Value {
-    serde_json::from_str(&raw).unwrap_or_else(|_| json!({}))
 }
 
 async fn resolve_run_reminder_anchor(
@@ -2540,21 +1996,20 @@ mod tests {
             agent_context_message_search, agent_context_workspace_info,
             agent_context_workspace_list, short_id,
         },
-        create_agent_inbox_item, db_connect_with_url, dismiss_inbox_items_in_pool,
+        create_agent_inbox_item, db_connect_with_url,
         domain::reminders::load_reminders,
         ensure_agent_workspace, extract_agent_event_json, extract_agent_mentions,
-        handle_agent_event, inbox_wake_context, load_agent_activities, load_agent_memory_context,
-        load_channel_agent_roster, mark_all_owner_inbox_read_in_pool,
-        mark_inbox_items_read_in_pool, migrate, normalize_open_link_target,
-        open_dm_with_agent_in_pool, queue_mentions_as_work_items, record_agent_activity,
-        same_codex_surface, try_claim_unassigned_task, upsert_agent_thread_subscription,
-        AgentAttachmentFile, AgentEvent, AgentInboxItemInput, InboxWakeItem, InboxWakeSummary,
-        MentionDispatchOrigin, AGENT_MEMORY_CONTEXT_LIMIT, WORK_ITEM_FINISH_PROMPT,
+        handle_agent_event, inbox_wake_context, load_agent_memory_context,
+        load_channel_agent_roster, migrate, normalize_open_link_target, open_dm_with_agent_in_pool,
+        queue_mentions_as_work_items, record_agent_activity, same_codex_surface,
+        try_claim_unassigned_task, upsert_agent_thread_subscription, AgentAttachmentFile,
+        AgentEvent, AgentInboxItemInput, InboxWakeItem, InboxWakeSummary, MentionDispatchOrigin,
+        AGENT_MEMORY_CONTEXT_LIMIT, WORK_ITEM_FINISH_PROMPT,
     };
-    use chrono::{DateTime, Duration as ChronoDuration, Utc};
+    use chrono::{Duration as ChronoDuration, Utc};
     use serde_json::{json, Value};
     use sqlx::{Row, SqlitePool};
-    use std::{fs as std_fs, time::Duration};
+    use std::fs as std_fs;
     use uuid::Uuid;
 
     #[test]
@@ -4014,43 +3469,6 @@ mod tests {
     async fn drop_test_schema(pool: SqlitePool, database_path: String) {
         pool.close().await;
         drop_sqlite_test_files(&database_path);
-    }
-
-    async fn latest_ui_event_id(pool: &SqlitePool) -> Result<i64, String> {
-        sqlx::query_scalar("select coalesce(max(id), 0) from ui_events")
-            .fetch_one(pool)
-            .await
-            .map_err(|err| err.to_string())
-    }
-
-    async fn wait_for_ui_refresh_reason(
-        pool: &SqlitePool,
-        last_event_id: &mut i64,
-        reason: &str,
-    ) -> Result<(), String> {
-        tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                let rows = sqlx::query(
-                    "select id, event_json from ui_events where id > $1 order by id asc",
-                )
-                .bind(*last_event_id)
-                .fetch_all(pool)
-                .await
-                .map_err(|err| err.to_string())?;
-                for row in rows {
-                    *last_event_id = row.get::<i64, _>("id");
-                    let payload: String = row.get("event_json");
-                    let value: Value =
-                        serde_json::from_str(&payload).map_err(|err| err.to_string())?;
-                    if value.get("reason").and_then(Value::as_str) == Some(reason) {
-                        return Ok(());
-                    }
-                }
-                tokio::time::sleep(Duration::from_millis(25)).await;
-            }
-        })
-        .await
-        .map_err(|_| format!("timed out waiting for {reason} notification"))?
     }
 
     async fn insert_test_agent(pool: &SqlitePool, handle: &str) -> Result<Uuid, String> {
@@ -6818,138 +6236,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mark_all_inbox_read_uses_current_cutoff_without_dismissing_tasks() {
-        let Some((pool, schema)) = test_pool().await else {
-            return;
-        };
-        let result: Result<(), String> = async {
-            let channel_id = insert_test_channel(&pool, "mark-all-read").await?;
-            let message_id: Uuid = sqlx::query_scalar(
-                r#"
-                insert into messages (channel_id, sender_name, sender_role, body, is_task)
-                values ($1, 'Dylan', 'owner', 'Review this task', true)
-                returning id
-                "#,
-            )
-            .bind(channel_id)
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-            let task_id: Uuid = sqlx::query_scalar(
-                r#"
-                insert into tasks (message_id, channel_id, title, status, updated_at)
-                values ($1, $2, 'Review this task', 'in_review', strftime('%Y-%m-%dT%H:%M:%f+00:00','now','-1 hour'))
-                returning id
-                "#,
-            )
-            .bind(message_id)
-            .bind(channel_id)
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-            let task_updated_at: DateTime<Utc> =
-                sqlx::query_scalar("select updated_at from tasks where id = $1")
-                    .bind(task_id)
-                    .fetch_one(&pool)
-                    .await
-                    .map_err(|err| err.to_string())?;
-            let before_mark_all: DateTime<Utc> = sqlx::query_scalar("select strftime('%Y-%m-%dT%H:%M:%f+00:00','now')")
-                .fetch_one(&pool)
-                .await
-                .map_err(|err| err.to_string())?;
-
-            mark_all_owner_inbox_read_in_pool(&pool).await?;
-
-            let read_until: DateTime<Utc> = sqlx::query_scalar(
-                "select read_until from owner_inbox_read_state where item_id = $1",
-            )
-            .bind(format!("task:{task_id}"))
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-            let hidden: bool = sqlx::query_scalar(
-                "select exists(select 1 from owner_inbox_hidden_items where item_id = $1)",
-            )
-            .bind(format!("task:{task_id}"))
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-
-            assert!(read_until > task_updated_at);
-            assert!(read_until >= before_mark_all);
-            assert!(!hidden);
-            Ok(())
-        }
-        .await;
-        drop_test_schema(pool, schema).await;
-        assert!(result.is_ok(), "{:?}", result.err());
-    }
-
-    #[tokio::test]
-    async fn dismiss_inbox_item_hides_without_marking_read() {
-        let Some((pool, schema)) = test_pool().await else {
-            return;
-        };
-        let result: Result<(), String> = async {
-            let item_id = "thread:root:latest".to_owned();
-            let hidden_until: DateTime<Utc> =
-                sqlx::query_scalar("select strftime('%Y-%m-%dT%H:%M:%f+00:00','now','+5 seconds')")
-                    .fetch_one(&pool)
-                    .await
-                    .map_err(|err| err.to_string())?;
-
-            dismiss_inbox_items_in_pool(&pool, [(item_id.clone(), hidden_until)]).await?;
-
-            let stored_hidden_until: DateTime<Utc> = sqlx::query_scalar(
-                "select hidden_until from owner_inbox_hidden_items where item_id = $1",
-            )
-            .bind(&item_id)
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-            let read_exists: bool = sqlx::query_scalar(
-                "select exists(select 1 from owner_inbox_read_state where item_id = $1)",
-            )
-            .bind(&item_id)
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-
-            assert_eq!(stored_hidden_until, hidden_until);
-            assert!(!read_exists);
-            Ok(())
-        }
-        .await;
-        drop_test_schema(pool, schema).await;
-        assert!(result.is_ok(), "{:?}", result.err());
-    }
-
-    #[tokio::test]
-    async fn inbox_read_and_dismiss_emit_ui_refresh() {
-        let Some((pool, schema)) = test_pool().await else {
-            return;
-        };
-        let result: Result<(), String> = async {
-            let mut last_event_id = latest_ui_event_id(&pool).await?;
-            let cutoff: DateTime<Utc> =
-                sqlx::query_scalar("select strftime('%Y-%m-%dT%H:%M:%f+00:00','now')")
-                    .fetch_one(&pool)
-                    .await
-                    .map_err(|err| err.to_string())?;
-
-            dismiss_inbox_items_in_pool(&pool, [("thread:root".to_owned(), cutoff)]).await?;
-            wait_for_ui_refresh_reason(&pool, &mut last_event_id, "owner_inbox_dismissed").await?;
-
-            mark_inbox_items_read_in_pool(&pool, [("thread:root".to_owned(), cutoff)]).await?;
-            wait_for_ui_refresh_reason(&pool, &mut last_event_id, "owner_inbox_read").await?;
-            Ok(())
-        }
-        .await;
-        drop_test_schema(pool, schema).await;
-        assert!(result.is_ok(), "{:?}", result.err());
-    }
-
-    #[tokio::test]
     async fn conversational_work_item_finish_does_not_insert_system_message() {
         let Some((pool, schema)) = test_pool().await else {
             return;
@@ -7154,77 +6440,6 @@ mod tests {
                 .await
                 .map_err(|err| err.to_string())?;
             assert_eq!(messages, 0);
-            Ok(())
-        }
-        .await;
-        drop_test_schema(pool, schema).await;
-        assert!(result.is_ok(), "{:?}", result.err());
-    }
-
-    #[tokio::test]
-    async fn load_agent_activities_compares_mixed_timezone_timestamps_by_instant() {
-        let Some((pool, schema)) = test_pool().await else {
-            return;
-        };
-        let result: Result<(), String> = async {
-            let agent_id = insert_test_agent(&pool, "activity-clock").await?;
-            for index in 0..80 {
-                let created_at =
-                    format!("2026-05-19T{:02}:{:02}:00+08:00", 15 + index / 60, index % 60);
-                sqlx::query(
-                    r#"
-                    insert into agent_activities (
-                        agent_id,
-                        agent_handle,
-                        kind,
-                        phase,
-                        status,
-                        title,
-                        summary,
-                        detail,
-                        created_at
-                    )
-                    values ($1, 'activity-clock', 'thinking', 'thinking', 'active', $2, $2, '', $3)
-                    "#,
-                )
-                .bind(agent_id)
-                .bind(format!("older-local-{index:02}"))
-                .bind(created_at)
-                .execute(&pool)
-                .await
-                .map_err(|err| err.to_string())?;
-            }
-            sqlx::query(
-                r#"
-                insert into agent_activities (
-                    agent_id,
-                    agent_handle,
-                    kind,
-                    phase,
-                    status,
-                    title,
-                    summary,
-                    detail,
-                    created_at
-                )
-                values ($1, 'activity-clock', 'thinking', 'thinking', 'active', 'newer-utc', 'newer-utc', '', '2026-05-19T09:14:24+00:00')
-                "#,
-            )
-            .bind(agent_id)
-            .execute(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-
-            let activities = load_agent_activities(&pool).await?;
-            let agent_activities = activities
-                .into_iter()
-                .filter(|activity| activity.agent_id == Some(agent_id))
-                .collect::<Vec<_>>();
-            assert_eq!(agent_activities.len(), 80);
-            assert_eq!(agent_activities[0].title, "newer-utc");
-            assert!(agent_activities
-                .iter()
-                .any(|activity| activity.title == "newer-utc"));
             Ok(())
         }
         .await;
@@ -7464,178 +6679,6 @@ mod tests {
             .await
             .map_err(|err| err.to_string())?;
             assert_eq!(system_messages, 1);
-            Ok(())
-        }
-        .await;
-        drop_test_schema(pool, schema).await;
-        assert!(result.is_ok(), "{:?}", result.err());
-    }
-
-    #[tokio::test]
-    async fn mark_all_owner_inbox_read_writes_db_snapshot() {
-        let Some((pool, schema)) = test_pool().await else {
-            return;
-        };
-        let result: Result<(), String> = async {
-            let channel_id = insert_test_channel(&pool, "mark-all-inbox").await?;
-            let root_id: Uuid = sqlx::query_scalar(
-                r#"
-                insert into messages (channel_id, sender_name, sender_role, body, is_task)
-                values ($1, 'Dylan', 'owner', 'thread root', false)
-                returning id
-                "#,
-            )
-            .bind(channel_id)
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-            let reply_id: Uuid = sqlx::query_scalar(
-                r#"
-                insert into messages (channel_id, thread_root_id, sender_name, sender_role, body, is_task)
-                values ($1, $2, 'Agent', 'agent', '@Dylan latest reply', false)
-                returning id
-                "#,
-            )
-            .bind(channel_id)
-            .bind(root_id)
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-            let task_message_id: Uuid = sqlx::query_scalar(
-                r#"
-                insert into messages (channel_id, sender_name, sender_role, body, is_task)
-                values ($1, 'Dylan', 'owner', 'task root', true)
-                returning id
-                "#,
-            )
-            .bind(channel_id)
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-            let task_id: Uuid = sqlx::query_scalar(
-                r#"
-                insert into tasks (message_id, channel_id, title, status)
-                values ($1, $2, 'Review this', 'in_review')
-                returning id
-                "#,
-            )
-            .bind(task_message_id)
-            .bind(channel_id)
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-            let active_task_message_id: Uuid = sqlx::query_scalar(
-                r#"
-                insert into messages (channel_id, sender_name, sender_role, body, is_task)
-                values ($1, 'Dylan', 'owner', 'active task root', true)
-                returning id
-                "#,
-            )
-            .bind(channel_id)
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-            let active_task_id: Uuid = sqlx::query_scalar(
-                r#"
-                insert into tasks (message_id, channel_id, title, status)
-                values ($1, $2, 'In progress task', 'in_progress')
-                returning id
-                "#,
-            )
-            .bind(active_task_message_id)
-            .bind(channel_id)
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-            let reminder_id: Uuid = sqlx::query_scalar(
-                r#"
-                insert into reminders (channel_id, title, note, due_at, fired_at, recurrence, status)
-                values ($1, 'Due reminder', '', strftime('%Y-%m-%dT%H:%M:%f+00:00','now','-1 minute'), strftime('%Y-%m-%dT%H:%M:%f+00:00','now'), 'none', 'fired')
-                returning id
-                "#,
-            )
-            .bind(channel_id)
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-            let read_channel_id = insert_test_channel(&pool, "mark-all-read-thread").await?;
-            let read_root_id: Uuid = sqlx::query_scalar(
-                r#"
-                insert into messages (channel_id, sender_name, sender_role, body, is_task)
-                values ($1, 'Dylan', 'owner', 'already read thread root', false)
-                returning id
-                "#,
-            )
-            .bind(read_channel_id)
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-            let read_reply_id: Uuid = sqlx::query_scalar(
-                r#"
-                insert into messages (channel_id, thread_root_id, sender_name, sender_role, body, is_task)
-                values ($1, $2, 'Agent', 'agent', '@Dylan already read reply', false)
-                returning id
-                "#,
-            )
-            .bind(read_channel_id)
-            .bind(read_root_id)
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-            sqlx::query(
-                "insert into channel_read_state (channel_id, last_read_at) values ($1, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))",
-            )
-            .bind(read_channel_id)
-            .execute(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-
-            mark_all_owner_inbox_read_in_pool(&pool).await?;
-
-            let read_state_count: i64 = sqlx::query_scalar(
-                "select count(*) from channel_read_state where channel_id = $1",
-            )
-            .bind(channel_id)
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-            assert_eq!(read_state_count, 1);
-
-            for item_id in [format!("task:{task_id}"), format!("reminder:{reminder_id}")] {
-                let exists: bool = sqlx::query_scalar(
-                    "select exists(select 1 from owner_inbox_read_state where item_id = $1)",
-                )
-                .bind(item_id)
-                .fetch_one(&pool)
-                .await
-                .map_err(|err| err.to_string())?;
-                assert!(exists);
-            }
-            for item_id in [
-                format!("thread:{root_id}:{reply_id}"),
-                format!("mention:{reply_id}"),
-                format!("task:{active_task_id}"),
-                format!("reminder:{reminder_id}"),
-                format!("thread:{read_root_id}:{read_reply_id}"),
-                format!("mention:{read_reply_id}"),
-            ] {
-                let exists: bool = sqlx::query_scalar(
-                    "select exists(select 1 from owner_inbox_hidden_items where item_id = $1)",
-                )
-                .bind(item_id)
-                .fetch_one(&pool)
-                .await
-                .map_err(|err| err.to_string())?;
-                assert!(!exists);
-            }
-
-            let reminder_status: String =
-                sqlx::query_scalar("select status from reminders where id = $1")
-                    .bind(reminder_id)
-                    .fetch_one(&pool)
-                    .await
-                    .map_err(|err| err.to_string())?;
-            assert_eq!(reminder_status, "fired");
             Ok(())
         }
         .await;

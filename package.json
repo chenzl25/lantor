@@ -10,6 +10,7 @@
     "build:bench": "tsc && vite build --mode bench",
     "bench:composer": "node bench/composer-input-latency.mjs",
     "bench:composer:e2e": "node bench/composer-input-latency-e2e.mjs",
+    "lint:css-tokens": "node scripts/check-raw-colors.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
