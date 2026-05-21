@@ -5131,12 +5131,10 @@ body.resizing-row * {
 
 .chat-text-size-grid button.selected {
   border-color: var(--accent);
-  background:
-    linear-gradient(180deg, rgba(10, 132, 255, 0.18), rgba(10, 132, 255, 0.1)),
-    var(--bg-control-flat);
+  background: var(--bg-control-selected);
   box-shadow:
     inset 0 0 0 1px var(--accent),
-    0 0 0 3px rgba(10, 132, 255, 0.12);
+    0 0 0 3px var(--state-focus-ring);
   color: var(--accent);
 }
 
