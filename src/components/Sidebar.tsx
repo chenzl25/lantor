@@ -217,7 +217,7 @@ export function Sidebar({
           </div>
           <div className="sidebar-section-scroll">
             {!collapsedSections.channels && normalChannels.map((item) => {
-              const badge = item.unread_count > 0 ? String(item.unread_count) : channelAlertIds.has(item.id) ? "new" : "";
+              const badge = item.unread_count > 0 ? String(item.unread_count) : channelAlertIds.has(item.id) ? "1" : "";
               return (
                 <button
                   key={item.id}
@@ -283,7 +283,7 @@ export function Sidebar({
                 ? item.unread_count > 0
                   ? String(item.unread_count)
                   : channelAlertIds.has(item.id)
-                    ? "new"
+                    ? "1"
                     : ""
                 : "";
               return (
