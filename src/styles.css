@@ -139,6 +139,12 @@ button,
   --bg-control-selected: linear-gradient(180deg, #ffffff 0%, #f6f7f9 100%);
   --bg-hover: rgba(248, 248, 248, 0.72);
   --bg-selected-soft: rgba(10, 132, 255, 0.08);
+  --bg-selected-accent:
+    linear-gradient(180deg, rgba(10, 132, 255, 0.18), rgba(10, 132, 255, 0.1)),
+    var(--bg-control-flat);
+  --shadow-selected-accent:
+    inset 0 0 0 1px var(--accent),
+    0 0 0 3px rgba(10, 132, 255, 0.12);
   --bg-code: #101318;
   --ink-primary: #121316;
   --ink-secondary: #24262b;
@@ -282,6 +288,12 @@ button,
   --bg-control-selected: linear-gradient(180deg, #27303b 0%, #202732 100%);
   --bg-hover: rgba(105, 170, 252, 0.1);
   --bg-selected-soft: rgba(105, 170, 252, 0.14);
+  --bg-selected-accent:
+    linear-gradient(180deg, rgba(105, 170, 252, 0.24), rgba(105, 170, 252, 0.14)),
+    var(--bg-control-flat);
+  --shadow-selected-accent:
+    inset 0 0 0 1px rgba(105, 170, 252, 0.72),
+    0 0 0 3px rgba(105, 170, 252, 0.16);
   --bg-code: #080b10;
   --ink-primary: #e6e8ee;
   --ink-secondary: #cfd4de;
@@ -5120,36 +5132,20 @@ body.resizing-row * {
 
 .theme-choice-grid button.selected {
   border-color: var(--accent);
-  background:
-    linear-gradient(180deg, rgba(10, 132, 255, 0.18), rgba(10, 132, 255, 0.1)),
-    var(--bg-control-flat);
-  box-shadow:
-    inset 0 0 0 1px var(--accent),
-    0 0 0 3px rgba(10, 132, 255, 0.12);
+  background: var(--bg-selected-accent);
+  box-shadow: var(--shadow-selected-accent);
   color: var(--accent);
 }
 
 .chat-text-size-grid button.selected {
   border-color: var(--accent);
-  background: var(--bg-control-selected);
-  box-shadow:
-    inset 0 0 0 1px var(--accent),
-    0 0 0 3px var(--state-focus-ring);
+  background: var(--bg-selected-accent);
+  box-shadow: var(--shadow-selected-accent);
   color: var(--accent);
 }
 
 :root[data-theme="dark"] .theme-choice-grid button.selected {
   border-color: rgba(105, 170, 252, 0.72);
-  background:
-    linear-gradient(180deg, rgba(105, 170, 252, 0.24), rgba(105, 170, 252, 0.14)),
-    var(--bg-control-flat);
-  box-shadow:
-    inset 0 0 0 1px rgba(105, 170, 252, 0.72),
-    0 0 0 3px rgba(105, 170, 252, 0.16);
-  color: var(--accent);
-}
-
-.chat-text-size-grid button.selected {
   color: var(--accent);
 }
 

@@ -202,31 +202,7 @@
     },
     {
       "selector": ":root[data-theme=\"dark\"] .theme-choice-grid button.selected",
-      "prop": "background",
-      "literal": "rgba(105, 170, 252, 0.14)",
-      "n": 0
-    },
-    {
-      "selector": ":root[data-theme=\"dark\"] .theme-choice-grid button.selected",
-      "prop": "background",
-      "literal": "rgba(105, 170, 252, 0.24)",
-      "n": 0
-    },
-    {
-      "selector": ":root[data-theme=\"dark\"] .theme-choice-grid button.selected",
       "prop": "border-color",
-      "literal": "rgba(105, 170, 252, 0.72)",
-      "n": 0
-    },
-    {
-      "selector": ":root[data-theme=\"dark\"] .theme-choice-grid button.selected",
-      "prop": "box-shadow",
-      "literal": "rgba(105, 170, 252, 0.16)",
-      "n": 0
-    },
-    {
-      "selector": ":root[data-theme=\"dark\"] .theme-choice-grid button.selected",
-      "prop": "box-shadow",
       "literal": "rgba(105, 170, 252, 0.72)",
       "n": 0
     },
@@ -3660,24 +3636,6 @@
       "selector": ".task-unassigned-avatar",
       "prop": "border",
       "literal": "rgba(20, 23, 31, 0.2)",
-      "n": 0
-    },
-    {
-      "selector": ".theme-choice-grid button.selected",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.1)",
-      "n": 0
-    },
-    {
-      "selector": ".theme-choice-grid button.selected",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.18)",
-      "n": 0
-    },
-    {
-      "selector": ".theme-choice-grid button.selected",
-      "prop": "box-shadow",
-      "literal": "rgba(10, 132, 255, 0.12)",
       "n": 0
     },
     {
