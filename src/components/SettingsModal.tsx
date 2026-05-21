@@ -1,12 +1,15 @@
-import { Monitor, Moon, Sun } from "lucide-react";
+import { Monitor, Moon, Sun, Type } from "lucide-react";
 import { Modal } from "./Modal";
 
 export type ThemePreference = "auto" | "light" | "dark";
+export type ChatTextSize = "compact" | "default" | "large" | "xlarge";
 
 type SettingsModalProps = {
   open: boolean;
   themePreference: ThemePreference;
+  chatTextSize: ChatTextSize;
   onThemePreferenceChange: (value: ThemePreference) => void;
+  onChatTextSizeChange: (value: ChatTextSize) => void;
   onClose: () => void;
 };
 
@@ -21,10 +24,23 @@ const THEME_OPTIONS: Array<{
   { value: "dark", label: "Dark", detail: "Dim surfaces", icon: Moon },
 ];
 
+const CHAT_TEXT_SIZE_OPTIONS: Array<{
+  value: ChatTextSize;
+  label: string;
+  detail: string;
+}> = [
+  { value: "compact", label: "Small", detail: "Compact UI" },
+  { value: "default", label: "Default", detail: "Current scale" },
+  { value: "large", label: "Large", detail: "More readable" },
+  { value: "xlarge", label: "Extra", detail: "Largest" },
+];
+
 export function SettingsModal({
   open,
   themePreference,
+  chatTextSize,
   onThemePreferenceChange,
+  onChatTextSizeChange,
   onClose,
 }: SettingsModalProps) {
   return (
@@ -56,6 +72,27 @@ export function SettingsModal({
               );
             })}
           </div>
+        </fieldset>
+        <fieldset className="settings-fieldset">
+          <legend>Text size</legend>
+          <div className="chat-text-size-grid">
+            {CHAT_TEXT_SIZE_OPTIONS.map((option) => (
+              <button
+                type="button"
+                key={option.value}
+                className={chatTextSize === option.value ? "selected" : ""}
+                aria-pressed={chatTextSize === option.value}
+                onClick={() => onChatTextSizeChange(option.value)}
+              >
+                <Type size={17} />
+                <span>
+                  <strong>{option.label}</strong>
+                  <small>{option.detail}</small>
+                </span>
+              </button>
+            ))}
+          </div>
+          <p className="settings-hint">Applies across messages, inputs, panels, and modals. Use Command +/- or Ctrl +/- to adjust without opening Settings. Command/Ctrl+0 resets.</p>
         </fieldset>
       </section>
     </Modal>

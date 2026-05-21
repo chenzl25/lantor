@@ -139,6 +139,12 @@ button,
   --bg-control-selected: linear-gradient(180deg, #ffffff 0%, #f6f7f9 100%);
   --bg-hover: rgba(248, 248, 248, 0.72);
   --bg-selected-soft: rgba(10, 132, 255, 0.08);
+  --bg-selected-accent:
+    linear-gradient(180deg, rgba(10, 132, 255, 0.18), rgba(10, 132, 255, 0.1)),
+    var(--bg-control-flat);
+  --shadow-selected-accent:
+    inset 0 0 0 1px var(--accent),
+    0 0 0 3px rgba(10, 132, 255, 0.12);
   --bg-code: #101318;
   --ink-primary: #121316;
   --ink-secondary: #24262b;
@@ -325,6 +331,12 @@ button,
   --bg-control-selected: linear-gradient(180deg, #27303b 0%, #202732 100%);
   --bg-hover: rgba(105, 170, 252, 0.1);
   --bg-selected-soft: rgba(105, 170, 252, 0.14);
+  --bg-selected-accent:
+    linear-gradient(180deg, rgba(105, 170, 252, 0.24), rgba(105, 170, 252, 0.14)),
+    var(--bg-control-flat);
+  --shadow-selected-accent:
+    inset 0 0 0 1px rgba(105, 170, 252, 0.72),
+    0 0 0 3px rgba(105, 170, 252, 0.16);
   --bg-code: #080b10;
   --ink-primary: #e6e8ee;
   --ink-secondary: #cfd4de;
@@ -3182,7 +3194,8 @@ mark {
 :root[data-theme="dark"] .activity-run-card,
 :root[data-theme="dark"] .detail-work,
 :root[data-theme="dark"] .task-board-summary > div,
-:root[data-theme="dark"] .theme-choice-grid button {
+:root[data-theme="dark"] .theme-choice-grid button,
+:root[data-theme="dark"] .chat-text-size-grid button {
   border-color: var(--border-subtle);
   background: var(--bg-panel);
   color: var(--ink-primary);
@@ -3233,7 +3246,8 @@ mark {
 :root[data-theme="dark"] .activity-timeline-title strong,
 :root[data-theme="dark"] .activity-run-head h5,
 :root[data-theme="dark"] .settings-section-head h4,
-:root[data-theme="dark"] .theme-choice-grid strong {
+:root[data-theme="dark"] .theme-choice-grid strong,
+:root[data-theme="dark"] .chat-text-size-grid strong {
   color: var(--ink-primary);
 }
 
@@ -5100,6 +5114,12 @@ body.resizing-row * {
   gap: 8px;
 }
 
+.chat-text-size-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .theme-choice-grid button {
   position: relative;
   display: grid;
@@ -5116,25 +5136,37 @@ body.resizing-row * {
   text-align: left;
 }
 
+.chat-text-size-grid button {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 58px;
+  place-items: center;
+  gap: 4px;
+  padding: 9px 8px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--panel-strong);
+  color: var(--muted);
+  text-align: center;
+}
+
 .theme-choice-grid button.selected {
   border-color: var(--accent);
-  background:
-    linear-gradient(180deg, rgba(10, 132, 255, 0.18), rgba(10, 132, 255, 0.1)),
-    var(--bg-control-flat);
-  box-shadow:
-    inset 0 0 0 1px var(--accent),
-    0 0 0 3px rgba(10, 132, 255, 0.12);
+  background: var(--bg-selected-accent);
+  box-shadow: var(--shadow-selected-accent);
+  color: var(--accent);
+}
+
+.chat-text-size-grid button.selected {
+  border-color: var(--accent);
+  background: var(--bg-selected-accent);
+  box-shadow: var(--shadow-selected-accent);
   color: var(--accent);
 }
 
 :root[data-theme="dark"] .theme-choice-grid button.selected {
   border-color: rgba(105, 170, 252, 0.72);
-  background:
-    linear-gradient(180deg, rgba(105, 170, 252, 0.24), rgba(105, 170, 252, 0.14)),
-    var(--bg-control-flat);
-  box-shadow:
-    inset 0 0 0 1px rgba(105, 170, 252, 0.72),
-    0 0 0 3px rgba(105, 170, 252, 0.16);
   color: var(--accent);
 }
 
@@ -5156,28 +5188,40 @@ body.resizing-row * {
 }
 
 .theme-choice-grid button.selected strong,
-.theme-choice-grid button.selected small {
+.theme-choice-grid button.selected small,
+.chat-text-size-grid button.selected strong,
+.chat-text-size-grid button.selected small {
   color: var(--accent);
 }
 
-.theme-choice-grid span {
+.theme-choice-grid span,
+.chat-text-size-grid span {
   display: grid;
   min-width: 0;
   gap: 2px;
 }
 
-.theme-choice-grid strong {
+.theme-choice-grid strong,
+.chat-text-size-grid strong {
   color: var(--ink);
   font-size: var(--type-size-body);
   font-weight: var(--type-weight-semibold);
 }
 
-.theme-choice-grid small {
+.theme-choice-grid small,
+.chat-text-size-grid small {
   overflow: hidden;
   color: var(--muted);
   font-size: var(--type-size-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.settings-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--type-size-meta);
+  line-height: 1.4;
 }
 
 .modal-form {
