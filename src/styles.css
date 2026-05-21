@@ -657,16 +657,6 @@ button,
   color: var(--accent);
 }
 
-.sidebar-nav-trigger strong {
-  justify-self: end;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: var(--badge);
-  color: var(--accent);
-  font-size: var(--type-size-caption);
-  font-weight: var(--type-weight-semibold);
-}
-
 .quick-actions button:hover,
 .channel:hover {
   background: var(--bg-control-flat);
@@ -677,14 +667,25 @@ button,
   font-size: var(--type-size-body);
 }
 
+.sidebar-nav-trigger strong,
 .channel strong,
-.dm > strong {
+.dm-badge,
+.mobile-bottom-nav strong {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   justify-self: end;
-  padding: 3px 8px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 7px;
   border-radius: 999px;
-  background: var(--badge);
-  color: var(--accent);
-  font-size: var(--type-size-body);
+  background: var(--badge-bg);
+  color: var(--badge-ink);
+  font-size: var(--type-size-caption);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--type-weight-semibold);
+  line-height: 1;
+  text-align: center;
 }
 
 .channel-block,
@@ -905,8 +906,10 @@ button,
   color: var(--unread-ink);
 }
 
+.sidebar-nav-trigger.has-unread strong,
 .channel.has-unread strong,
-.dm-row.has-unread .dm-badge {
+.dm-row.has-unread .dm-badge,
+.mobile-bottom-nav button.has-unread strong {
   background: var(--accent);
   color: var(--accent-ink);
 }
@@ -984,21 +987,11 @@ button,
 }
 
 .dm-badge {
-  justify-self: end;
-  min-width: 20px;
   max-width: 34px;
-  padding: 2px 6px;
-  border-radius: 999px;
-  background: var(--badge);
-  color: var(--accent);
-  font-size: var(--type-size-caption);
-  font-weight: var(--type-weight-semibold);
-  line-height: 14px;
-  text-align: center;
 }
 
 .dm.selected .dm-badge,
-.dm-row.selected .dm .dm-badge {
+.dm-row.selected:not(.has-unread) .dm .dm-badge {
   background: var(--badge-bg);
   color: var(--badge-ink);
 }
@@ -8786,17 +8779,8 @@ body.resizing-row * {
 
   .mobile-bottom-nav strong {
     position: absolute;
-    top: -7px;
-    right: -12px;
-    min-width: 17px;
-    height: 17px;
-    padding: 0 5px;
-    border-radius: 999px;
-    background: #ff3b30;
-    color: #fff;
-    font-size: var(--type-size-caption);
-    line-height: 17px;
-    text-align: center;
+    top: -8px;
+    right: -14px;
   }
 
   .thread header,

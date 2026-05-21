@@ -3537,18 +3537,6 @@
       "n": 0
     },
     {
-      "selector": "@media (max-width: 760px) >> .mobile-bottom-nav strong",
-      "prop": "background",
-      "literal": "#ff3b30",
-      "n": 0
-    },
-    {
-      "selector": "@media (max-width: 760px) >> .mobile-bottom-nav strong",
-      "prop": "color",
-      "literal": "#fff",
-      "n": 0
-    },
-    {
       "selector": "@media (max-width: 760px) >> .mobile-message-save-tag",
       "prop": "border",
       "literal": "rgba(138, 91, 0, 0.12)",
