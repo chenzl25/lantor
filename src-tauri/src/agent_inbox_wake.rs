@@ -671,6 +671,9 @@ pub(crate) async fn ensure_agent_inbox_wake_work_item(
     pool: &SqlitePool,
     agent_id: Uuid,
 ) -> CommandResult<Option<(Uuid, bool)>> {
+    if !agent_accepts_new_work(pool, agent_id).await? {
+        return Ok(None);
+    }
     let Some(primary) = next_unread_inbox_wake_item(pool, agent_id).await? else {
         return Ok(None);
     };
@@ -782,6 +785,20 @@ pub(crate) async fn agent_runtime(
         .map_err(to_string)
 }
 
+pub(crate) async fn agent_accepts_new_work(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+) -> CommandResult<bool> {
+    let status: Option<String> = sqlx::query_scalar("select status from agents where id = $1")
+        .bind(agent_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(to_string)?;
+    Ok(status
+        .as_deref()
+        .is_some_and(|status| !status.eq_ignore_ascii_case("error")))
+}
+
 async fn agent_has_active_run(pool: &SqlitePool, agent_id: Uuid) -> CommandResult<bool> {
     let active_run: Option<Uuid> = sqlx::query_scalar(
         r#"
@@ -840,6 +857,9 @@ pub(crate) async fn enqueue_agent_work_if_available(
             .await
             .map_err(to_string)?;
     if status.as_deref() != Some("queued") {
+        return Ok(false);
+    }
+    if !agent_accepts_new_work(pool, agent_id).await? {
         return Ok(false);
     }
     let runtime = agent_runtime(pool, agent_id).await?;

@@ -4,7 +4,8 @@ use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 use crate::agent_inbox_wake::{
-    create_agent_inbox_item, ensure_agent_inbox_wake_work_item, AgentInboxItemInput,
+    agent_accepts_new_work, create_agent_inbox_item, ensure_agent_inbox_wake_work_item,
+    AgentInboxItemInput,
 };
 use crate::events::activity::record_agent_activity;
 use crate::message_store::insert_agent_handoff_message;
@@ -150,7 +151,7 @@ pub(crate) async fn queue_mentions_as_work_items(
         }
         if let Some(agent_id) = dm_agent_id {
             let agent_handle: Option<String> =
-                sqlx::query_scalar("select handle from agents where id = $1")
+                sqlx::query_scalar("select handle from agents where id = $1 and status <> 'error'")
                     .bind(agent_id)
                     .fetch_optional(pool)
                     .await
@@ -162,7 +163,7 @@ pub(crate) async fn queue_mentions_as_work_items(
     } else {
         for handle in &mentions {
             let agent_id: Option<Uuid> =
-                sqlx::query_scalar("select id from agents where handle = $1")
+                sqlx::query_scalar("select id from agents where handle = $1 and status <> 'error'")
                     .bind(handle)
                     .fetch_optional(pool)
                     .await
@@ -431,6 +432,7 @@ async fn load_thread_followup_targets(
         ) candidates
         join agents a on a.id = candidates.agent_id
         join channel_members cm on cm.channel_id = $1 and cm.agent_id = a.id
+        where a.status <> 'error'
         order by candidates.last_at desc, lower(a.handle)
         limit 8
         "#,
@@ -457,6 +459,7 @@ async fn load_channel_root_delivery_targets(
         from channel_members cm
         join agents a on a.id = cm.agent_id
         where cm.channel_id = $1
+          and a.status <> 'error'
         order by lower(a.handle)
         "#,
     )
@@ -701,6 +704,11 @@ pub(crate) async fn create_agent_handoff(
     let target_agent_id = resolve_agent_by_handle(pool, target_agent).await?;
     if target_agent_id == source_agent_id {
         return Err("handoff_create target_agent must be a different agent".to_owned());
+    }
+    if !agent_accepts_new_work(pool, target_agent_id).await? {
+        return Err(format!(
+            "handoff_create target_agent @{target_agent} is in error state"
+        ));
     }
     let target_handle = resolve_agent_handle(pool, target_agent_id).await?;
     let source_handle = resolve_agent_handle(pool, source_agent_id).await?;

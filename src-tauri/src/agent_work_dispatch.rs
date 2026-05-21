@@ -4,8 +4,9 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::agent_inbox_wake::{
-    attach_work_item_to_inbox, create_agent_inbox_item, enqueue_agent_work_if_available,
-    ensure_agent_inbox_wake_work_item, prepend_inbox_context, AgentInboxItemInput,
+    agent_accepts_new_work, attach_work_item_to_inbox, create_agent_inbox_item,
+    enqueue_agent_work_if_available, ensure_agent_inbox_wake_work_item, prepend_inbox_context,
+    AgentInboxItemInput,
 };
 use crate::agent_routing::{resolve_agent_handle, upsert_agent_thread_subscription};
 use crate::events::activity::record_agent_activity;
@@ -33,6 +34,11 @@ pub(crate) async fn dispatch_agent_work(
     let Some(agent_handle) = agent_handle else {
         return Err("agent does not exist".to_owned());
     };
+    if !agent_accepts_new_work(&state.pool, agent_id).await? {
+        return Err(format!(
+            "agent @{agent_handle} is in error state and cannot accept new work"
+        ));
+    }
 
     let mut resolved_channel_id = channel_id;
     let mut resolved_thread_root_id = thread_root_id;
@@ -206,6 +212,9 @@ pub(crate) async fn dispatch_task_assignment_to_agent(
     let message_id: Uuid = row.get("message_id");
     let title: String = row.get("title");
     let body: String = row.get("body");
+    if !agent_accepts_new_work(pool, agent_id).await? {
+        return Ok(());
+    }
 
     sqlx::query(
         r#"
@@ -310,6 +319,7 @@ pub(crate) async fn dispatch_unassigned_task_availability(
         from channel_members cm
         join agents a on a.id = cm.agent_id
         where cm.channel_id = $1
+          and a.status <> 'error'
         order by cm.created_at, a.handle
         "#,
     )
@@ -389,8 +399,10 @@ pub(crate) async fn try_claim_unassigned_task(
           and exists (
               select 1
               from channel_members cm
+              join agents a on a.id = cm.agent_id
               where cm.channel_id = t.channel_id
                 and cm.agent_id = $2
+                and a.status <> 'error'
           )
           and not exists (
               select 1
@@ -485,6 +497,17 @@ pub(crate) async fn claim_task_in_pool(
         .await?
         .map(|_| ())
         .ok_or_else(|| "task was already claimed or is no longer available".to_owned());
+    }
+
+    if let Some(agent_id) = agent_id {
+        let agent_handle = resolve_agent_handle(pool, agent_id)
+            .await
+            .unwrap_or_else(|_| "unknown".to_owned());
+        if !agent_accepts_new_work(pool, agent_id).await? {
+            return Err(format!(
+                "agent @{agent_handle} is in error state and cannot accept new work"
+            ));
+        }
     }
 
     sqlx::query_scalar::<_, Uuid>(

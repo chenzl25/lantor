@@ -5128,6 +5128,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn owner_channel_root_message_does_not_dispatch_error_agent() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let agent_id = insert_test_agent(&pool, "quota-paused").await?;
+            sqlx::query("update agents set status = 'error' where id = $1")
+                .bind(agent_id)
+                .execute(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+            let channel_id = insert_test_channel(&pool, "error-agent-channel").await?;
+            sqlx::query(
+                r#"
+                insert into channel_members (channel_id, agent_id)
+                values ($1, $2)
+                "#,
+            )
+            .bind(channel_id)
+            .bind(agent_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+
+            send_owner_message_in_pool(
+                &pool,
+                channel_id,
+                None,
+                "This should not wake a quota-limited agent",
+                false,
+                vec![],
+            )
+            .await?;
+
+            let inbox_count: i64 =
+                sqlx::query_scalar("select count(*) from agent_inbox_items where agent_id = $1")
+                    .bind(agent_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            let work_count: i64 =
+                sqlx::query_scalar("select count(*) from agent_work_items where agent_id = $1")
+                    .bind(agent_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            assert_eq!(inbox_count, 0);
+            assert_eq!(work_count, 0);
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn owner_mention_does_not_dispatch_error_agent() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let agent_id = insert_test_agent(&pool, "quota-mentioned").await?;
+            sqlx::query("update agents set status = 'error' where id = $1")
+                .bind(agent_id)
+                .execute(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+            let channel_id = insert_test_channel(&pool, "error-agent-mention").await?;
+
+            send_owner_message_in_pool(
+                &pool,
+                channel_id,
+                None,
+                "@quota-mentioned please check this",
+                false,
+                vec![],
+            )
+            .await?;
+
+            let inbox_count: i64 =
+                sqlx::query_scalar("select count(*) from agent_inbox_items where agent_id = $1")
+                    .bind(agent_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            let work_count: i64 =
+                sqlx::query_scalar("select count(*) from agent_work_items where agent_id = $1")
+                    .bind(agent_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            assert_eq!(inbox_count, 0);
+            assert_eq!(work_count, 0);
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[tokio::test]
     async fn owner_thread_followup_dispatches_to_thread_agents_without_mentions() {
         let Some((pool, schema)) = test_pool().await else {
             return;

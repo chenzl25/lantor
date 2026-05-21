@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+use crate::agent_inbox_wake::agent_accepts_new_work;
 use crate::agent_memory::{append_agent_memory, append_run_log, compact_agent_memory};
 use crate::agent_routing::{
     create_agent_handoff, ensure_agent_channel_member, queue_mentions_as_work_items,
@@ -756,6 +757,11 @@ pub(crate) async fn handle_agent_event(
                 return Err("task_handoff target_agent must be a different agent".to_owned());
             }
             let target_handle = resolve_agent_handle(pool, target_agent_id).await?;
+            if !agent_accepts_new_work(pool, target_agent_id).await? {
+                return Err(format!(
+                    "task_handoff target_agent @{target_handle} is in error state"
+                ));
+            }
             let source_handle = resolve_agent_handle(pool, agent_id).await?;
             let reason = reason.trim();
             if reason.is_empty() {
