@@ -7,7 +7,10 @@ use super::{CodexSteerRequest, WarmCodexRuntime};
 use crate::events::activity::{record_agent_activity, work_status_title};
 use crate::runtime::{
     process::upsert_runtime_thread_id,
-    streaming::{consume_streaming_agent_control_lines, finish_streaming_agent_message},
+    streaming::{
+        consume_streaming_agent_control_lines, dispatch_streaming_agent_message_mentions,
+        finish_streaming_agent_message,
+    },
 };
 use crate::ui_notifications::{
     notify_supervisor_wake, notify_ui_agent_run_changed, notify_ui_work_item_changed,
@@ -109,16 +112,24 @@ pub(super) async fn finish_warm_codex_active_turn(
             false
         };
         if !hidden {
-            finish_streaming_agent_message(
-                pool,
-                &stream_key,
-                if success && !was_cancelled {
-                    "complete"
-                } else {
-                    "error"
-                },
-            )
-            .await?;
+            if active
+                .completed_agent_message_stream_keys
+                .contains(&stream_key)
+            {
+                finish_streaming_agent_message(pool, &stream_key, "complete").await?;
+                dispatch_streaming_agent_message_mentions(pool, &stream_key).await?;
+            } else {
+                finish_streaming_agent_message(
+                    pool,
+                    &stream_key,
+                    if success && !was_cancelled {
+                        "complete"
+                    } else {
+                        "error"
+                    },
+                )
+                .await?;
+            }
         }
     }
 

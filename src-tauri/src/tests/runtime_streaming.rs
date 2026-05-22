@@ -1,8 +1,10 @@
 use super::{
     adopt_streaming_agent_message_key, append_streaming_agent_message,
-    consume_streaming_agent_control_lines, ensure_streaming_agent_message,
-    finish_streaming_agent_message, maybe_hide_silent_streaming_reply,
-    streaming_message_body_is_empty,
+    append_streaming_agent_message_deferred_completion, consume_streaming_agent_control_lines,
+    delete_intermediate_run_messages, dispatch_streaming_agent_message_mentions,
+    ensure_streaming_agent_message, finish_streaming_agent_message,
+    finish_streaming_agent_message_deferred_mentions, maybe_hide_silent_streaming_reply,
+    streaming_message_body_is_empty, STREAMING_MESSAGE_BODY_LIMIT,
 };
 use crate::domain::reminders::load_reminders;
 use crate::message_store::load_messages;
@@ -103,6 +105,232 @@ async fn streaming_placeholder_is_reused_for_visible_reply() {
         assert_eq!(message.body, "Done");
         assert_eq!(message.delivery_state, "complete");
         assert_eq!(message.stream_key, final_stream_key);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn streaming_intermediate_reply_is_deleted_when_run_continues() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "draft-agent").await?;
+        let channel_id = insert_test_channel(&pool, "draft-channel").await?;
+        let run_id = Uuid::new_v4();
+        let stream_key = format!("{run_id}:draft-message");
+
+        let message_id = append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "Need get migrations output.",
+        )
+        .await?;
+        delete_intermediate_run_messages(&pool, agent_id, channel_id, None, run_id).await?;
+
+        let remaining: i64 = sqlx::query_scalar("select count(*) from messages where id = $1")
+            .bind(message_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        assert_eq!(remaining, 0);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn deleted_streaming_intermediate_reply_does_not_dispatch_mentions() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "draft-agent").await?;
+        let target_agent_id = insert_test_agent(&pool, "target-agent").await?;
+        let channel_id = insert_test_channel(&pool, "mention-draft-channel").await?;
+        sqlx::query("insert into channel_members (channel_id, agent_id) values ($1, $2), ($1, $3)")
+            .bind(channel_id)
+            .bind(agent_id)
+            .bind(target_agent_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let run_id = Uuid::new_v4();
+        let stream_key = format!("{run_id}:draft-message");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "Need @target-agent migrations output.",
+        )
+        .await?;
+
+        delete_intermediate_run_messages(&pool, agent_id, channel_id, None, run_id).await?;
+
+        let work_items: i64 =
+            sqlx::query_scalar("select count(*) from agent_work_items where agent_id = $1")
+                .bind(target_agent_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        let inbox_items: i64 =
+            sqlx::query_scalar("select count(*) from agent_inbox_items where agent_id = $1")
+                .bind(target_agent_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(work_items, 0);
+        assert_eq!(inbox_items, 0);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn truncated_deferred_intermediate_reply_stays_streaming_until_deleted() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "long-draft-agent").await?;
+        let target_agent_id = insert_test_agent(&pool, "long-target-agent").await?;
+        let channel_id = insert_test_channel(&pool, "long-mention-draft-channel").await?;
+        sqlx::query("insert into channel_members (channel_id, agent_id) values ($1, $2), ($1, $3)")
+            .bind(channel_id)
+            .bind(agent_id)
+            .bind(target_agent_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let run_id = Uuid::new_v4();
+        let stream_key = format!("{run_id}:long-draft-message");
+        let body = format!(
+            "Need @long-target-agent migrations output. {}",
+            "x".repeat(STREAMING_MESSAGE_BODY_LIMIT)
+        );
+
+        let message_id = append_streaming_agent_message_deferred_completion(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            &body,
+        )
+        .await?;
+
+        let delivery_state: String =
+            sqlx::query_scalar("select delivery_state from messages where id = $1")
+                .bind(message_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(delivery_state, "streaming");
+
+        delete_intermediate_run_messages(&pool, agent_id, channel_id, None, run_id).await?;
+
+        let remaining: i64 = sqlx::query_scalar("select count(*) from messages where id = $1")
+            .bind(message_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let work_items: i64 =
+            sqlx::query_scalar("select count(*) from agent_work_items where agent_id = $1")
+                .bind(target_agent_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        let inbox_items: i64 =
+            sqlx::query_scalar("select count(*) from agent_inbox_items where agent_id = $1")
+                .bind(target_agent_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(remaining, 0);
+        assert_eq!(work_items, 0);
+        assert_eq!(inbox_items, 0);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn completed_deferred_final_reply_survives_later_turn_error() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "final-agent").await?;
+        let target_agent_id = insert_test_agent(&pool, "final-target-agent").await?;
+        let channel_id = insert_test_channel(&pool, "final-mention-channel").await?;
+        sqlx::query("insert into channel_members (channel_id, agent_id) values ($1, $2), ($1, $3)")
+            .bind(channel_id)
+            .bind(agent_id)
+            .bind(target_agent_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let run_id = Uuid::new_v4();
+        let stream_key = format!("{run_id}:final-message");
+
+        let message_id = append_streaming_agent_message_deferred_completion(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "Done, @final-target-agent should see this.",
+        )
+        .await?;
+        finish_streaming_agent_message_deferred_mentions(&pool, &stream_key, "complete").await?;
+
+        let work_items_before: i64 =
+            sqlx::query_scalar("select count(*) from agent_work_items where agent_id = $1")
+                .bind(target_agent_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(work_items_before, 0);
+
+        finish_streaming_agent_message(&pool, &stream_key, "error").await?;
+        dispatch_streaming_agent_message_mentions(&pool, &stream_key).await?;
+
+        let delivery_state: String =
+            sqlx::query_scalar("select delivery_state from messages where id = $1")
+                .bind(message_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        let work_items_after: i64 =
+            sqlx::query_scalar("select count(*) from agent_work_items where agent_id = $1")
+                .bind(target_agent_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        let inbox_items_after: i64 =
+            sqlx::query_scalar("select count(*) from agent_inbox_items where agent_id = $1")
+                .bind(target_agent_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(delivery_state, "complete");
+        assert_eq!(work_items_after, 1);
+        assert_eq!(inbox_items_after, 1);
         Ok(())
     }
     .await;

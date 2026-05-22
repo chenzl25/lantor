@@ -48,6 +48,47 @@ pub(crate) async fn append_streaming_agent_message(
     stream_key: &str,
     delta: &str,
 ) -> CommandResult<Uuid> {
+    append_streaming_agent_message_inner(
+        pool,
+        agent_id,
+        channel_id,
+        thread_root_id,
+        stream_key,
+        delta,
+        true,
+    )
+    .await
+}
+
+pub(crate) async fn append_streaming_agent_message_deferred_completion(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    channel_id: Uuid,
+    thread_root_id: Option<Uuid>,
+    stream_key: &str,
+    delta: &str,
+) -> CommandResult<Uuid> {
+    append_streaming_agent_message_inner(
+        pool,
+        agent_id,
+        channel_id,
+        thread_root_id,
+        stream_key,
+        delta,
+        false,
+    )
+    .await
+}
+
+async fn append_streaming_agent_message_inner(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    channel_id: Uuid,
+    thread_root_id: Option<Uuid>,
+    stream_key: &str,
+    delta: &str,
+    complete_on_truncation: bool,
+) -> CommandResult<Uuid> {
     if stream_key.trim().is_empty() {
         return Err("stream_key is empty".to_owned());
     }
@@ -78,17 +119,23 @@ pub(crate) async fn append_streaming_agent_message(
         let body_len: i32 = row.get("body_len");
         let (append_delta, truncated) = capped_stream_delta(delta, body_len.max(0) as usize);
         if append_delta.is_empty() && truncated {
-            finish_streaming_agent_message(pool, stream_key, "complete").await?;
+            if complete_on_truncation {
+                finish_streaming_agent_message(pool, stream_key, "complete").await?;
+            }
             return Ok(message_id);
         }
+        let delivery_state = if truncated && complete_on_truncation {
+            "complete"
+        } else {
+            "streaming"
+        };
         sqlx::query("update messages set body = body || $2, delivery_state = $3 where id = $1")
             .bind(message_id)
             .bind(&append_delta)
-            .bind(if truncated { "complete" } else { "streaming" })
+            .bind(delivery_state)
             .execute(pool)
             .await
             .map_err(to_string)?;
-        let delivery_state = if truncated { "complete" } else { "streaming" };
         let _ = notify_ui_message_delta(
             pool,
             message_id,
@@ -108,7 +155,7 @@ pub(crate) async fn append_streaming_agent_message(
             )
             .await;
         }
-        if truncated {
+        if truncated && complete_on_truncation {
             queue_agent_message_mentions(pool, message_id).await?;
         }
         return Ok(message_id);
@@ -131,6 +178,11 @@ pub(crate) async fn append_streaming_agent_message(
     let sender_name: String = sender.get("display_name");
     let sender_role: String = sender.get("role");
     let (initial_body, truncated) = capped_stream_delta(delta, 0);
+    let delivery_state = if truncated && complete_on_truncation {
+        "complete"
+    } else {
+        "streaming"
+    };
 
     let message_id: Uuid = sqlx::query_scalar(
         r#"
@@ -155,7 +207,7 @@ pub(crate) async fn append_streaming_agent_message(
     .bind(sender_name)
     .bind(sender_role)
     .bind(initial_body)
-    .bind(if truncated { "complete" } else { "streaming" })
+    .bind(delivery_state)
     .bind(stream_key)
     .fetch_one(pool)
     .await
@@ -177,7 +229,7 @@ pub(crate) async fn append_streaming_agent_message(
         )
         .await;
     }
-    if truncated {
+    if truncated && complete_on_truncation {
         queue_agent_message_mentions(pool, message_id).await?;
     }
     Ok(message_id)
@@ -357,10 +409,60 @@ async fn delete_superseded_empty_run_progress_messages(
     Ok(())
 }
 
+pub(crate) async fn delete_intermediate_run_messages(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    channel_id: Uuid,
+    thread_root_id: Option<Uuid>,
+    run_id: Uuid,
+) -> CommandResult<()> {
+    let superseded_ids: Vec<Uuid> = sqlx::query_scalar(
+        r#"
+        select id
+        from messages
+        where sender_agent_id = $1
+          and channel_id = $2
+          and thread_root_id is not distinct from $3
+          and stream_key like $4
+          and body <> ''
+          and delivery_state in ('streaming', 'complete')
+        "#,
+    )
+    .bind(agent_id)
+    .bind(channel_id)
+    .bind(thread_root_id)
+    .bind(format!("{run_id}:%"))
+    .fetch_all(pool)
+    .await
+    .map_err(to_string)?;
+
+    for message_id in superseded_ids {
+        delete_streaming_agent_message(pool, message_id, "superseded_intermediate_reply").await?;
+    }
+    Ok(())
+}
+
 pub(crate) async fn finish_streaming_agent_message(
     pool: &SqlitePool,
     stream_key: &str,
     delivery_state: &str,
+) -> CommandResult<()> {
+    finish_streaming_agent_message_inner(pool, stream_key, delivery_state, true).await
+}
+
+pub(crate) async fn finish_streaming_agent_message_deferred_mentions(
+    pool: &SqlitePool,
+    stream_key: &str,
+    delivery_state: &str,
+) -> CommandResult<()> {
+    finish_streaming_agent_message_inner(pool, stream_key, delivery_state, false).await
+}
+
+async fn finish_streaming_agent_message_inner(
+    pool: &SqlitePool,
+    stream_key: &str,
+    delivery_state: &str,
+    dispatch_mentions: bool,
 ) -> CommandResult<()> {
     if delivery_state != "streaming" {
         if let Some((agent_id, run_id, work_item_id)) =
@@ -407,10 +509,27 @@ pub(crate) async fn finish_streaming_agent_message(
             } else {
                 let _ = notify_ui_refresh(pool, "stream_finish").await;
             }
-            if delivery_state == "complete" {
+            if delivery_state == "complete" && dispatch_mentions {
                 queue_agent_message_mentions(pool, message_id).await?;
             }
         }
+    }
+    Ok(())
+}
+
+pub(crate) async fn dispatch_streaming_agent_message_mentions(
+    pool: &SqlitePool,
+    stream_key: &str,
+) -> CommandResult<()> {
+    let message_id: Option<Uuid> = sqlx::query_scalar(
+        "select id from messages where stream_key = $1 and delivery_state = 'complete'",
+    )
+    .bind(stream_key)
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)?;
+    if let Some(message_id) = message_id {
+        queue_agent_message_mentions(pool, message_id).await?;
     }
     Ok(())
 }
