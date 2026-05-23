@@ -57,6 +57,14 @@ export type Channel = {
   unread_count: number;
 };
 
+export type ThreadActivity = {
+  thread_root_id: string;
+  channel_id: string;
+  unread_count: number;
+  latest_message_id: string;
+  latest_activity_at: string;
+};
+
 export type ChannelMember = {
   channel_id: string;
   agent_id: string;
@@ -271,6 +279,7 @@ export type Bootstrap = {
   web_base_url: string | null;
   owner_profile: OwnerProfile;
   channels: Channel[];
+  thread_activities: ThreadActivity[];
   channel_members: ChannelMember[];
   agents: Agent[];
   messages: Message[];

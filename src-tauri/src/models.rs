@@ -79,6 +79,15 @@ pub(crate) struct Channel {
 }
 
 #[derive(Debug, Serialize)]
+pub(crate) struct ThreadActivity {
+    pub(crate) thread_root_id: Uuid,
+    pub(crate) channel_id: Uuid,
+    pub(crate) unread_count: i32,
+    pub(crate) latest_message_id: Uuid,
+    pub(crate) latest_activity_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
 pub(crate) struct ChannelMember {
     pub(crate) channel_id: Uuid,
     pub(crate) agent_id: Uuid,
@@ -340,6 +349,7 @@ pub(crate) struct Bootstrap {
     pub(crate) web_base_url: Option<String>,
     pub(crate) owner_profile: OwnerProfile,
     pub(crate) channels: Vec<Channel>,
+    pub(crate) thread_activities: Vec<ThreadActivity>,
     pub(crate) channel_members: Vec<ChannelMember>,
     pub(crate) agents: Vec<Agent>,
     pub(crate) messages: Vec<Message>,

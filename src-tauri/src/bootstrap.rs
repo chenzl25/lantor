@@ -9,7 +9,7 @@ use crate::{
     activity_store::{load_agent_activities, load_agent_runs, load_agent_work_items},
     agent_profile::{load_agents, load_owner_profile},
     app::CommandResult,
-    channels::{load_channel_members, load_channels},
+    channels::{load_channel_members, load_channels, load_thread_activities},
     domain::{reminders::load_reminders, schedules::load_agent_schedules},
     launch_agent,
     message_store::{load_artifacts, load_messages, load_saved_messages},
@@ -41,6 +41,7 @@ fn configured_web_base_url() -> Option<String> {
 pub(crate) async fn load_bootstrap(pool: &SqlitePool, db_url: String) -> CommandResult<Bootstrap> {
     let owner_profile = load_owner_profile(pool).await?;
     let channels = load_channels(pool).await?;
+    let thread_activities = load_thread_activities(pool).await?;
     let channel_members = load_channel_members(pool).await?;
     let agents = load_agents(pool).await?;
     let messages = load_messages(pool).await?;
@@ -62,6 +63,7 @@ pub(crate) async fn load_bootstrap(pool: &SqlitePool, db_url: String) -> Command
         web_base_url: configured_web_base_url(),
         owner_profile,
         channels,
+        thread_activities,
         channel_members,
         agents,
         messages,
