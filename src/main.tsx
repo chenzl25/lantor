@@ -2565,10 +2565,26 @@ function App() {
     return new Date(cutoffTime).toISOString();
   }
 
+  async function persistThreadReadMarkers(markers: { threadId: string; dismissedUntil: string }[]) {
+    const cutoffByThreadId = new Map<string, string>();
+    for (const marker of markers) {
+      const existing = cutoffByThreadId.get(marker.threadId);
+      if (!existing || new Date(marker.dismissedUntil).getTime() > new Date(existing).getTime()) {
+        cutoffByThreadId.set(marker.threadId, marker.dismissedUntil);
+      }
+    }
+    const items = Array.from(cutoffByThreadId, ([threadId, dismissedUntil]) => ({
+      itemId: `thread:${threadId}`,
+      dismissedUntil,
+    }));
+    if (items.length === 0) return;
+    await apiInvoke("mark_inbox_items_read", { items });
+  }
+
   function markThreadRead(threadId: string) {
-    void apiInvoke("mark_inbox_items_read", {
-      items: [{ itemId: `thread:${threadId}`, dismissedUntil: threadReadCutoff(threadId) }],
-    }).catch((err) => console.error(err));
+    void persistThreadReadMarkers([
+      { threadId, dismissedUntil: threadReadCutoff(threadId) },
+    ]).catch((err) => console.error(err));
   }
 
   function forgetChannelThread(channelId: string | null | undefined) {
@@ -3235,6 +3251,7 @@ function App() {
         delete next[item.threadId!];
         return next;
       });
+      operations.push(persistThreadReadMarkers([{ threadId: item.threadId, dismissedUntil }]));
     }
     if (item.channelId) {
       setChannelAlertIds((current) => {
@@ -3308,6 +3325,14 @@ function App() {
     });
     await Promise.all([
       persistReadActivityFeedItems(markReadItems, (item) => cutoffByItemId.get(item.id) ?? item.timestamp),
+      persistThreadReadMarkers(
+        markReadItems
+          .filter((item): item is ActivityFeedItem & { threadId: string } => Boolean(item.threadId))
+          .map((item) => ({
+            threadId: item.threadId,
+            dismissedUntil: cutoffByItemId.get(item.id) ?? item.timestamp,
+          })),
+      ),
       ...Array.from(
         new Set(markReadItems.map((item) => item.channelId).filter((id): id is string => Boolean(id))),
         (channelId) => apiInvoke("mark_channel_read", { channelId }),
