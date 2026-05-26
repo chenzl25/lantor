@@ -7180,6 +7180,37 @@ body.resizing-row * {
   list-style: none;
 }
 
+.activity-run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.activity-run-toggle {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-secondary);
+  font-size: var(--type-size-caption);
+  font-weight: var(--type-weight-semibold);
+  cursor: pointer;
+}
+
+.activity-run-toggle:hover,
+.activity-run-toggle:focus-visible {
+  color: var(--ink-primary);
+  text-decoration: underline;
+}
+
+.activity-run-truncation-note {
+  color: var(--muted);
+  font-size: var(--type-size-meta);
+  line-height: 1.35;
+}
+
 .activity-run-step {
   display: grid;
   grid-template-columns: clamp(60px, 18%, 82px) 14px minmax(0, 1fr);

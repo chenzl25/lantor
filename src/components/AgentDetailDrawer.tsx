@@ -1,5 +1,5 @@
 import { ArrowLeft, ArrowRight, Pencil, RotateCcw, Trash2, X } from "lucide-react";
-import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { apiInvoke } from "../apiClient";
 import { APP_DISPLAY_NAME } from "../branding";
 import {
@@ -38,6 +38,9 @@ const AGENT_DETAIL_TABS: Array<{ id: AgentDetailTab; label: string }> = [
   { id: "activity", label: "Activity" },
   { id: "workspace", label: "Workspace" },
 ];
+
+const DEFAULT_ACTIVITY_RUN_COLLAPSED_STEP_COUNT = 3;
+const LATEST_ACTIVITY_RUN_COLLAPSED_STEP_COUNT = 5;
 
 type AgentDetailDrawerProps = {
   agent: Agent;
@@ -429,12 +432,15 @@ export function AgentDetailDrawer({
   onResizeStart,
 }: AgentDetailDrawerProps) {
   const [expandedActivityId, setExpandedActivityId] = useState<string | null>(null);
+  const [expandedActivityRuns, setExpandedActivityRuns] = useState<Set<string>>(new Set());
+  const [pendingCollapsedRunScrollId, setPendingCollapsedRunScrollId] = useState<string | null>(null);
   const [expandedWorkspaceDirs, setExpandedWorkspaceDirs] = useState<Set<string>>(new Set());
   const [workspaceNodes, setWorkspaceNodes] = useState<Record<string, AgentWorkspaceEntry[]>>({});
   const [workspaceLoadingPath, setWorkspaceLoadingPath] = useState<string | null>(null);
   const [workspacePreview, setWorkspacePreview] = useState<AgentWorkspaceFile | null>(null);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [activeDetailTab, setActiveDetailTab] = useState<AgentDetailTab>("activity");
+  const activityRunRefs = useRef(new Map<string, HTMLElement>());
   const deleteDisabled = Boolean(activeRun);
   const agentStatus = agent.status.toLowerCase();
   const restartDisabledReason = activeRun
@@ -468,6 +474,18 @@ export function AgentDetailDrawer({
     setWorkspacePreview(null);
     setWorkspaceError(null);
   }, [agent.id]);
+
+  useEffect(() => {
+    if (!pendingCollapsedRunScrollId) return;
+    const frameId = window.requestAnimationFrame(() => {
+      activityRunRefs.current.get(pendingCollapsedRunScrollId)?.scrollIntoView({
+        block: "start",
+        behavior: "smooth",
+      });
+      setPendingCollapsedRunScrollId(null);
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [expandedActivityRuns, pendingCollapsedRunScrollId]);
 
   async function toggleWorkspaceDir(entry: AgentWorkspaceEntry) {
     const path = workspaceEntryPath(entry);
@@ -855,13 +873,28 @@ export function AgentDetailDrawer({
         {activities.length === 0 && <p className="empty-mini">No activity yet.</p>}
         {activityGroups.length > 0 && (
           <div className="activity-run-list" role="log" aria-label={`${agent.handle} activity by run`}>
-            {activityGroups.map((group) => {
+            {activityGroups.map((group, index) => {
               const KindIcon = group.kindMeta.icon;
               const jumpable = Boolean(group.workItem) && group.kindMeta.jumpable;
+              const collapsedStepCount = index === 0
+                ? LATEST_ACTIVITY_RUN_COLLAPSED_STEP_COUNT
+                : DEFAULT_ACTIVITY_RUN_COLLAPSED_STEP_COUNT;
+              const runExpanded = expandedActivityRuns.has(group.runId);
+              const hasHiddenSteps = group.activities.length > collapsedStepCount;
+              const visibleActivities = runExpanded
+                ? group.activities
+                : group.activities.slice(0, collapsedStepCount);
               return (
                 <article
                   className="activity-run-card"
                   key={group.runId}
+                  ref={(node) => {
+                    if (node) {
+                      activityRunRefs.current.set(group.runId, node);
+                    } else {
+                      activityRunRefs.current.delete(group.runId);
+                    }
+                  }}
                   data-provider-retrying={group.providerRetrying ? "true" : "false"}
                   data-source-kind={group.kindMeta.tone}
                   data-jumpable={jumpable ? "true" : "false"}
@@ -927,7 +960,7 @@ export function AgentDetailDrawer({
                   )}
 
                   <ol className="activity-run-steps">
-                    {group.activities.map((activity) => {
+                    {visibleActivities.map((activity) => {
                       const title = userFacingActivityTitle(activity);
                       const detail = userFacingActivityDetail(activity);
                       const category = userFacingActivityCategory(activity);
@@ -984,6 +1017,36 @@ export function AgentDetailDrawer({
                       );
                     })}
                   </ol>
+
+                  {hasHiddenSteps && (
+                    <div className="activity-run-actions">
+                      <button
+                        type="button"
+                        className="activity-run-toggle"
+                        onClick={() => {
+                          if (runExpanded) setPendingCollapsedRunScrollId(group.runId);
+                          setExpandedActivityRuns((current) => {
+                            const next = new Set(current);
+                            if (next.has(group.runId)) {
+                              next.delete(group.runId);
+                            } else {
+                              next.add(group.runId);
+                            }
+                            return next;
+                          });
+                        }}
+                      >
+                        {runExpanded
+                          ? "Collapse steps"
+                          : `Show all ${group.activities.length} steps`}
+                      </button>
+                      {!runExpanded && (
+                        <span className="activity-run-truncation-note">
+                          Showing latest {collapsedStepCount} of {group.activities.length}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </article>
               );
             })}
