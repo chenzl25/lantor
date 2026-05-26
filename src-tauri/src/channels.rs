@@ -80,24 +80,42 @@ pub(crate) async fn load_thread_activities(
                 m.created_at
             from messages m
             where m.thread_root_id is not null
+              and m.delivery_state <> 'streaming'
               and not (
                 m.sender_role <> 'system'
                 and m.sender_role <> 'owner'
                 and m.stream_key glob '????????-????-????-????-????????????:*'
-                and (
-                  m.delivery_state = 'streaming'
-                  or (
-                    m.delivery_state = 'complete'
-                    and trim(m.body) = ''
-                    and not exists (
-                      select 1 from message_attachments ma where ma.message_id = m.id
-                    )
-                    and not exists (
-                      select 1 from artifacts ar where ar.message_id = m.id
-                    )
-                  )
+                and m.delivery_state = 'complete'
+                and trim(m.body) = ''
+                and not exists (
+                  select 1 from message_attachments ma where ma.message_id = m.id
+                )
+                and not exists (
+                  select 1 from artifacts ar where ar.message_id = m.id
                 )
               )
+        ),
+        thread_read_markers as (
+            select
+                root.id as thread_root_id,
+                case
+                    when thread_read_state.read_until is null then read_state.last_read_at
+                    when read_state.last_read_at is null then thread_read_state.read_until
+                    when julianday(thread_read_state.read_until) >= julianday(read_state.last_read_at)
+                        then thread_read_state.read_until
+                    else read_state.last_read_at
+                end as read_until
+            from messages root
+            left join channel_read_state read_state on read_state.channel_id = root.channel_id
+            left join owner_inbox_read_state thread_read_state
+              on thread_read_state.item_id = 'thread:' || lower(
+                substr(hex(root.id), 1, 8) || '-' ||
+                substr(hex(root.id), 9, 4) || '-' ||
+                substr(hex(root.id), 13, 4) || '-' ||
+                substr(hex(root.id), 17, 4) || '-' ||
+                substr(hex(root.id), 21, 12)
+              )
+            where root.thread_root_id is null
         ),
         latest_visible_thread_replies as (
             select
@@ -121,7 +139,7 @@ pub(crate) async fn load_thread_activities(
             cast(sum(case
                 when reply.sender_role <> 'owner'
                   and julianday(reply.created_at) > julianday(
-                    coalesce(thread_read_state.read_until, read_state.last_read_at, '0001-01-01T00:00:00+00:00')
+                    coalesce(read_marker.read_until, '0001-01-01T00:00:00+00:00')
                   ) then 1
                 else 0
             end) as integer) as unread_count,
@@ -130,15 +148,7 @@ pub(crate) async fn load_thread_activities(
         from messages root
         join visible_thread_replies reply on reply.thread_root_id = root.id
         join latest_visible_thread_replies latest on latest.thread_root_id = root.id
-        left join channel_read_state read_state on read_state.channel_id = root.channel_id
-        left join owner_inbox_read_state thread_read_state
-          on thread_read_state.item_id = 'thread:' || lower(
-            substr(hex(root.id), 1, 8) || '-' ||
-            substr(hex(root.id), 9, 4) || '-' ||
-            substr(hex(root.id), 13, 4) || '-' ||
-            substr(hex(root.id), 17, 4) || '-' ||
-            substr(hex(root.id), 21, 12)
-          )
+        left join thread_read_markers read_marker on read_marker.thread_root_id = root.id
         where root.thread_root_id is null
         group by
             root.id,
@@ -956,6 +966,29 @@ mod tests {
             .await
             .map_err(|err| err.to_string())?;
 
+            sqlx::query(
+                r#"
+                insert into messages (
+                    channel_id, thread_root_id, sender_name, sender_role, body, delivery_state, stream_key, created_at
+                )
+                values (
+                    $1,
+                    $2,
+                    'Dylan',
+                    'agent',
+                    'non-uuid streaming should not count',
+                    'streaming',
+                    'manual-stream-key',
+                    '2026-05-22T08:25:00+00:00'
+                )
+                "#,
+            )
+            .bind(channel_id)
+            .bind(thread_hidden_only_root)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+
             let activities = load_thread_activities(&pool).await?;
             assert_eq!(activities.len(), 3);
 
@@ -980,6 +1013,77 @@ mod tests {
             assert!(activities
                 .iter()
                 .all(|activity| activity.thread_root_id != thread_hidden_only_root));
+
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn thread_activities_use_newer_channel_read_marker_over_older_thread_marker() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let channel_id = insert_test_channel(&pool, "thread-read-marker-max").await?;
+            sqlx::query(
+                r#"
+                insert into channel_read_state (channel_id, last_read_at)
+                values ($1, '2026-05-22T08:30:00+00:00')
+                "#,
+            )
+            .bind(channel_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+
+            let thread_root: Uuid = sqlx::query_scalar(
+                r#"
+                insert into messages (channel_id, sender_name, sender_role, body, created_at)
+                values ($1, 'Martin', 'owner', 'thread root', '2026-05-22T07:00:00+00:00')
+                returning id
+                "#,
+            )
+            .bind(channel_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+
+            let latest_reply: Uuid = sqlx::query_scalar(
+                r#"
+                insert into messages (
+                    channel_id, thread_root_id, sender_name, sender_role, body, created_at
+                )
+                values ($1, $2, 'Dylan', 'agent', 'reply after old thread marker', '2026-05-22T08:20:00+00:00')
+                returning id
+                "#,
+            )
+            .bind(channel_id)
+            .bind(thread_root)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+
+            sqlx::query(
+                r#"
+                insert into owner_inbox_read_state (item_id, read_until)
+                values ($1, '2026-05-22T08:10:00+00:00')
+                "#,
+            )
+            .bind(format!("thread:{thread_root}"))
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+
+            let activities = load_thread_activities(&pool).await?;
+            let activity = activities
+                .iter()
+                .find(|activity| activity.thread_root_id == thread_root)
+                .ok_or_else(|| "missing thread activity".to_owned())?;
+            assert_eq!(activity.latest_message_id, latest_reply);
+            assert_eq!(activity.unread_count, 0);
 
             Ok(())
         }
