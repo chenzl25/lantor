@@ -55,6 +55,7 @@ import {
   SearchScope,
   SearchTimeRange,
   Task,
+  ThreadActivity,
   ThreadReplySummary,
 } from "./types";
 import { agentRequestSourceLabel, buildPresetCommand, firstLines, formatTime, visibleChannelDescription } from "./ui-utils";
@@ -1425,6 +1426,15 @@ function App() {
     setReadActivityFeedItems(data?.read_inbox_items ?? {});
   }, [data?.read_inbox_items]);
 
+  useEffect(() => {
+    const unreadCounts = Object.fromEntries(
+      (data?.thread_activities ?? [])
+        .filter((activity) => activity.unread_count > 0)
+        .map((activity) => [activity.thread_root_id, activity.unread_count]),
+    );
+    setThreadUnreadCounts(unreadCounts);
+  }, [data?.thread_activities]);
+
   function adjustChatTextSize(delta: number) {
     setChatTextSize((current) => {
       const index = CHAT_TEXT_SIZE_OPTIONS.indexOf(current);
@@ -1864,12 +1874,26 @@ function App() {
     );
   }, [threadReplySummaries]);
 
+  const messagesById = useMemo(() => {
+    return new Map(visibleMessages.map((message) => [message.id, message]));
+  }, [visibleMessages]);
+
+  const threadActivitiesByRoot = useMemo(() => {
+    return new Map((data?.thread_activities ?? []).map((activity) => [activity.thread_root_id, activity]));
+  }, [data?.thread_activities]);
+
   const allThreadRootMessages = useMemo(() => {
     const latestByRoot = new Map<string, number>();
     for (const message of visibleMessages) {
       if (!message.thread_root_id) continue;
       const timestamp = new Date(message.created_at).getTime();
       latestByRoot.set(message.thread_root_id, Math.max(latestByRoot.get(message.thread_root_id) ?? 0, timestamp));
+    }
+    for (const activity of data?.thread_activities ?? []) {
+      const timestamp = new Date(activity.latest_activity_at).getTime();
+      if (Number.isFinite(timestamp)) {
+        latestByRoot.set(activity.thread_root_id, Math.max(latestByRoot.get(activity.thread_root_id) ?? 0, timestamp));
+      }
     }
     return visibleMessages
       .filter((message) =>
@@ -1878,7 +1902,7 @@ function App() {
         (message.thread_followed || (threadUnreadCounts[message.id] ?? 0) > 0) &&
         !locallyUnfollowedThreadIds.has(message.id))
       .sort((left, right) => (latestByRoot.get(right.id) ?? 0) - (latestByRoot.get(left.id) ?? 0));
-  }, [visibleMessages, locallyUnfollowedThreadIds, threadUnreadCounts]);
+  }, [data?.thread_activities, visibleMessages, locallyUnfollowedThreadIds, threadUnreadCounts]);
 
   const allActivityFeedItems = useMemo(() => {
     if (!data) return [];
@@ -1946,8 +1970,11 @@ function App() {
 
     for (const root of allThreadRootMessages) {
       const replies = repliesByRoot.get(root.id) ?? [];
-      const unreadCount = threadUnreadCounts[root.id] ?? 0;
-      const latestActivity = replies.length > 0 ? replies[replies.length - 1] : root;
+      const threadActivity = threadActivitiesByRoot.get(root.id);
+      const unreadCount = threadUnreadCounts[root.id] ?? threadActivity?.unread_count ?? 0;
+      const latestActivity = threadActivity
+        ? messagesById.get(threadActivity.latest_message_id) ?? replies[replies.length - 1] ?? root
+        : replies[replies.length - 1] ?? root;
       const unread = unreadCount > 0;
       items.push({
         id: `thread:${root.id}`,
@@ -2045,7 +2072,7 @@ function App() {
       });
 
     return items;
-  }, [allThreadRootMessages, channelAlertIds, data, threadReplyCounts, threadUnreadCounts, visibleMessages]);
+  }, [allThreadRootMessages, channelAlertIds, data, messagesById, threadActivitiesByRoot, threadReplyCounts, threadUnreadCounts, visibleMessages]);
 
   const activityFeedItems = useMemo(() => {
     return allActivityFeedItems
@@ -2519,6 +2546,31 @@ function App() {
     });
   }
 
+  function latestThreadActivity(threadId: string): ThreadActivity | null {
+    return threadActivitiesByRoot.get(threadId) ?? null;
+  }
+
+  function threadReadCutoff(threadId: string) {
+    const activity = latestThreadActivity(threadId);
+    const latestMessage = activity ? messagesById.get(activity.latest_message_id) : null;
+    const latestReply = visibleMessages
+      .filter((message) => message.thread_root_id === threadId)
+      .reduce<Message | null>((latest, message) => {
+        if (!latest || new Date(message.created_at) > new Date(latest.created_at)) return message;
+        return latest;
+      }, null);
+    const latestAt = activity?.latest_activity_at ?? latestMessage?.created_at ?? latestReply?.created_at;
+    const latestTime = latestAt ? new Date(latestAt).getTime() : 0;
+    const cutoffTime = Math.max(Date.now(), Number.isFinite(latestTime) ? latestTime : 0);
+    return new Date(cutoffTime).toISOString();
+  }
+
+  function markThreadRead(threadId: string) {
+    void apiInvoke("mark_inbox_items_read", {
+      items: [{ itemId: `thread:${threadId}`, dismissedUntil: threadReadCutoff(threadId) }],
+    }).catch((err) => console.error(err));
+  }
+
   function forgetChannelThread(channelId: string | null | undefined) {
     if (!channelId) return;
     setChannelThreadMemory((current) => {
@@ -2559,6 +2611,7 @@ function App() {
       delete next[threadId];
       return next;
     });
+    markThreadRead(threadId);
   }
 
   function revealThread(threadId: string | null, channelId = activeChannelId) {
