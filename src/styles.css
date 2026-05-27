@@ -4511,6 +4511,16 @@ mark {
   background: var(--bg-control-flat);
 }
 
+.draft-attachment-trigger {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
 .draft-attachment.image img {
   display: block;
   width: 100%;
