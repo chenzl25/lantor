@@ -38,7 +38,7 @@ mod web;
 use std::{env, fs, path::PathBuf};
 
 use sqlx::{Row, SqlitePool};
-use tauri::{LogicalSize, Manager, WebviewWindow, WindowEvent};
+use tauri::{LogicalPosition, LogicalSize, Manager, WebviewWindow, WindowEvent};
 use uuid::Uuid;
 
 use agent_inbox_wake::{
@@ -87,18 +87,43 @@ const MIN_RESTORED_WINDOW_WIDTH: f64 = 1180.0;
 const MIN_RESTORED_WINDOW_HEIGHT: f64 = 760.0;
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
-struct WindowSizeState {
+struct WindowState {
     width: f64,
     height: f64,
+    #[serde(default)]
+    x: Option<f64>,
+    #[serde(default)]
+    y: Option<f64>,
 }
 
-impl WindowSizeState {
-    fn is_valid(&self) -> bool {
+impl WindowState {
+    fn has_valid_size(&self) -> bool {
         self.width.is_finite()
             && self.height.is_finite()
             && self.width >= MIN_RESTORED_WINDOW_WIDTH
             && self.height >= MIN_RESTORED_WINDOW_HEIGHT
     }
+
+    fn has_valid_position(&self) -> bool {
+        self.x.is_some_and(f64::is_finite) && self.y.is_some_and(f64::is_finite)
+    }
+}
+
+fn logical_rect_intersects(
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+    monitor_left: f64,
+    monitor_top: f64,
+    monitor_width: f64,
+    monitor_height: f64,
+) -> bool {
+    let right = left + width;
+    let bottom = top + height;
+    let monitor_right = monitor_left + monitor_width;
+    let monitor_bottom = monitor_top + monitor_height;
+    left < monitor_right && right > monitor_left && top < monitor_bottom && bottom > monitor_top
 }
 
 fn window_state_path(app: &tauri::AppHandle) -> Option<PathBuf> {
@@ -108,22 +133,54 @@ fn window_state_path(app: &tauri::AppHandle) -> Option<PathBuf> {
         .map(|dir| dir.join(WINDOW_STATE_FILE))
 }
 
-fn load_window_size(path: &PathBuf) -> Option<WindowSizeState> {
+fn load_window_state(path: &PathBuf) -> Option<WindowState> {
     let value = fs::read_to_string(path).ok()?;
-    let state = serde_json::from_str::<WindowSizeState>(&value).ok()?;
-    state.is_valid().then_some(state)
+    let state = serde_json::from_str::<WindowState>(&value).ok()?;
+    state.has_valid_size().then_some(state)
 }
 
-fn save_window_size(window: &WebviewWindow, path: &PathBuf) {
+fn can_restore_window_position(window: &WebviewWindow, state: &WindowState) -> bool {
+    if !state.has_valid_position() {
+        return false;
+    }
+    let Ok(monitors) = window.available_monitors() else {
+        return true;
+    };
+    if monitors.is_empty() {
+        return true;
+    }
+    let scale_factor = window.scale_factor().unwrap_or(1.0).max(0.1);
+    let left = state.x.expect("valid position should have x");
+    let top = state.y.expect("valid position should have y");
+    monitors.iter().any(|monitor| {
+        let position = monitor.position();
+        let size = monitor.size();
+        logical_rect_intersects(
+            left,
+            top,
+            state.width,
+            state.height,
+            f64::from(position.x) / scale_factor,
+            f64::from(position.y) / scale_factor,
+            f64::from(size.width) / scale_factor,
+            f64::from(size.height) / scale_factor,
+        )
+    })
+}
+
+fn save_window_state(window: &WebviewWindow, path: &PathBuf) {
     let Ok(size) = window.inner_size() else {
         return;
     };
     let scale_factor = window.scale_factor().unwrap_or(1.0).max(0.1);
-    let state = WindowSizeState {
+    let position = window.outer_position().ok();
+    let state = WindowState {
         width: f64::from(size.width) / scale_factor,
         height: f64::from(size.height) / scale_factor,
+        x: position.map(|position| f64::from(position.x) / scale_factor),
+        y: position.map(|position| f64::from(position.y) / scale_factor),
     };
-    if !state.is_valid() {
+    if !state.has_valid_size() {
         return;
     }
     if let Some(parent) = path.parent() {
@@ -134,70 +191,122 @@ fn save_window_size(window: &WebviewWindow, path: &PathBuf) {
     }
 }
 
-fn restore_window_size(window: &WebviewWindow, path: &PathBuf) {
-    let Some(state) = load_window_size(path) else {
+fn restore_window_state(window: &WebviewWindow, path: &PathBuf) {
+    let Some(state) = load_window_state(path) else {
         return;
     };
     let _ = window.set_size(LogicalSize::new(state.width, state.height));
-    let _ = window.center();
+    if can_restore_window_position(window, &state) {
+        let _ = window.set_position(LogicalPosition::new(
+            state.x.expect("valid position should have x"),
+            state.y.expect("valid position should have y"),
+        ));
+    } else {
+        let _ = window.center();
+    }
 }
 
-fn install_window_size_persistence(window: &WebviewWindow, path: PathBuf) {
-    restore_window_size(window, &path);
+fn install_window_state_persistence(window: &WebviewWindow, path: PathBuf) {
+    restore_window_state(window, &path);
     let window_for_events = window.clone();
     window.on_window_event(move |event| match event {
-        WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
-            save_window_size(&window_for_events, &path);
-        }
         WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {
-            save_window_size(&window_for_events, &path);
+            save_window_state(&window_for_events, &path);
         }
         _ => {}
     });
 }
 
 #[cfg(test)]
-mod window_size_tests {
-    use super::{load_window_size, WindowSizeState, MIN_RESTORED_WINDOW_HEIGHT, MIN_RESTORED_WINDOW_WIDTH};
-    use std::{fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+mod window_state_tests {
+    use super::{
+        load_window_state, logical_rect_intersects, WindowState, MIN_RESTORED_WINDOW_HEIGHT,
+        MIN_RESTORED_WINDOW_WIDTH,
+    };
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn temp_window_state_path() -> PathBuf {
-        let unique = SystemTime::now()
+        let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system time should be after the unix epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("lantor-window-state-{unique}.json"))
+        let count = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "lantor-window-state-{}-{nanos}-{count}.json",
+            std::process::id()
+        ))
     }
 
     #[test]
-    fn loads_valid_saved_window_size() {
+    fn loads_valid_saved_window_state() {
         let path = temp_window_state_path();
-        let value = serde_json::to_string(&WindowSizeState {
+        let value = serde_json::to_string(&WindowState {
             width: MIN_RESTORED_WINDOW_WIDTH + 120.0,
             height: MIN_RESTORED_WINDOW_HEIGHT + 80.0,
+            x: Some(-240.0),
+            y: Some(80.0),
         })
         .expect("window state should serialize");
         fs::write(&path, value).expect("window state should be written");
 
-        let state = load_window_size(&path).expect("valid window state should load");
-        assert!(state.is_valid());
+        let state = load_window_state(&path).expect("valid window state should load");
+        assert!(state.has_valid_size());
+        assert!(state.has_valid_position());
+        assert_eq!(state.x, Some(-240.0));
+        assert_eq!(state.y, Some(80.0));
 
         let _ = fs::remove_file(path);
     }
 
     #[test]
-    fn ignores_saved_window_size_below_minimums() {
+    fn loads_legacy_size_only_window_state() {
         let path = temp_window_state_path();
-        let value = serde_json::to_string(&WindowSizeState {
+        let value = serde_json::json!({
+            "width": MIN_RESTORED_WINDOW_WIDTH + 120.0,
+            "height": MIN_RESTORED_WINDOW_HEIGHT + 80.0
+        })
+        .to_string();
+        fs::write(&path, value).expect("window state should be written");
+
+        let state = load_window_state(&path).expect("legacy window state should load");
+        assert!(state.has_valid_size());
+        assert!(!state.has_valid_position());
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn ignores_saved_window_state_below_minimums() {
+        let path = temp_window_state_path();
+        let value = serde_json::to_string(&WindowState {
             width: MIN_RESTORED_WINDOW_WIDTH - 1.0,
             height: MIN_RESTORED_WINDOW_HEIGHT,
+            x: Some(120.0),
+            y: Some(80.0),
         })
         .expect("window state should serialize");
         fs::write(&path, value).expect("window state should be written");
 
-        assert!(load_window_size(&path).is_none());
+        assert!(load_window_state(&path).is_none());
 
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn detects_when_window_rect_is_outside_monitor_bounds() {
+        assert!(logical_rect_intersects(
+            100.0, 100.0, 1200.0, 800.0, 0.0, 0.0, 1440.0, 900.0
+        ));
+        assert!(!logical_rect_intersects(
+            2000.0, 100.0, 1200.0, 800.0, 0.0, 0.0, 1440.0, 900.0
+        ));
     }
 }
 
@@ -286,7 +395,7 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_title("Lantor");
                 if let Some(path) = window_state_path(app.handle()) {
-                    install_window_size_persistence(&window, path);
+                    install_window_state_persistence(&window, path);
                 }
             }
             Ok(())
