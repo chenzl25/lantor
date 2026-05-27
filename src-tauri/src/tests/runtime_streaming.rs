@@ -425,6 +425,116 @@ async fn held_visible_also_gates_visible_side_effects() {
 }
 
 #[tokio::test]
+async fn streaming_event_only_buffer_advertises_side_effect_only_actions() {
+    // Follow-up regression: when the streaming path produces a buffer whose
+    // only content is held visible side effects (no draft reply body), the
+    // interrupted_action payload must label itself `visible_control_event`
+    // with `allowed_actions = ["yield", "force_send"]`, not `public_reply`
+    // with revise. This mirrors `hold_visible_control_event` and prevents
+    // payload/prompt vs. backend `revise`-guard drift in
+    // `hold_streaming_public_output`.
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "stream-event-only-agent").await?;
+        let channel_id = insert_test_channel(&pool, "stream-event-only-channel").await?;
+        sqlx::query("insert into channel_members (channel_id, agent_id) values ($1, $2)")
+            .bind(channel_id)
+            .bind(agent_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let (work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        let stream_key = format!("{run_id}:event-only");
+        let event = json!({
+            "type": "channel_message_create",
+            "channel_id": channel_id,
+            "body": "event-only side effect"
+        });
+        // Streaming body contains ONLY a visible side-effect event line and
+        // no surrounding prose; visible_body parses to empty.
+        let body = format!("LANTOR_EVENT {event}");
+
+        append_streaming_agent_message(&pool, agent_id, channel_id, None, &stream_key, &body)
+            .await?;
+        finish_streaming_agent_message(&pool, &stream_key, "complete").await?;
+
+        let (buffer_body, held_events): (String, String) = sqlx::query_as(
+            "select body, held_visible_events from agent_output_buffers where stream_key = $1",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            buffer_body, "",
+            "streaming event-only buffer should have empty body, got: {buffer_body:?}"
+        );
+        assert!(
+            held_events.contains("event-only side effect"),
+            "held_visible_events should carry the queued side effect: {held_events}"
+        );
+
+        let (interrupted_kind, allowed_actions): (String, String) = sqlx::query_as(
+            "select json_extract(payload, '$.interrupted_action'), json_extract(payload, '$.allowed_actions') from agent_inbox_items where kind = 'interrupted_action' and json_extract(payload, '$.stream_key') = $1",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            interrupted_kind, "visible_control_event",
+            "streaming event-only buffer must advertise visible_control_event, not public_reply"
+        );
+        assert_eq!(
+            allowed_actions, r#"["yield","force_send"]"#,
+            "streaming event-only buffer must not advertise revise"
+        );
+
+        // Backend must also reject `revise` for this buffer (defense in depth
+        // against any caller that ignores allowed_actions).
+        let resolve_result = crate::publish_guard::resolve_interrupted_action(
+            &pool,
+            agent_id,
+            run_id,
+            &stream_key,
+            "revise",
+        )
+        .await;
+        assert!(
+            resolve_result.is_err(),
+            "revise on a streaming event-only buffer must be rejected, got: {resolve_result:?}"
+        );
+
+        // Buffer / work item / inbox item state stays intact after rejection.
+        let (state_after, body_after, held_after): (String, String, String) = sqlx::query_as(
+            "select state, body, held_visible_events from agent_output_buffers where stream_key = $1",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(state_after, "held");
+        assert_eq!(body_after, "");
+        assert_eq!(held_after, held_events);
+        let work_status: String =
+            sqlx::query_scalar("select status from agent_work_items where id = $1")
+                .bind(work_item_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(work_status, "interrupted");
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn held_visible_side_effects_use_source_surface_freshness() {
     let Some((pool, schema)) = test_pool().await else {
         return;
