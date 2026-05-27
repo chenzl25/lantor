@@ -44,6 +44,7 @@ pub(crate) struct InboxWakeItem {
     pub(crate) priority: i32,
     pub(crate) title: String,
     pub(crate) body_preview: String,
+    pub(crate) payload: String,
     pub(crate) message_created_at: Option<DateTime<Utc>>,
     pub(crate) sender_name: Option<String>,
     pub(crate) sender_role: Option<String>,
@@ -85,6 +86,57 @@ impl InboxWakeItem {
             preview
         )
     }
+
+    fn context_detail_lines(&self) -> Vec<String> {
+        if self.kind != "interrupted_action" {
+            return Vec::new();
+        }
+        let Ok(payload) = serde_json::from_str::<Value>(&self.payload) else {
+            return Vec::new();
+        };
+        let mut lines = vec![
+            "   interrupted_action: review the held public output before replying.".to_owned(),
+            "   decision: choose one of revise, yield, or force_send.".to_owned(),
+        ];
+        for key in [
+            "reason",
+            "stream_key",
+            "action_kind",
+            "base_version",
+            "current_version",
+            "base_thread_version",
+        ] {
+            if let Some(value) = payload.get(key) {
+                lines.push(format!("   {key}: {}", compact_payload_value(value, 512)));
+            }
+        }
+        if let Some(actions) = payload.get("allowed_actions") {
+            lines.push(format!(
+                "   allowed_actions: {}",
+                compact_payload_value(actions, 512)
+            ));
+        }
+        if let Some(draft) = payload.get("draft_body").and_then(Value::as_str) {
+            lines.push(format!(
+                "   draft_body: {}",
+                compact_chars_middle(draft, DISPATCH_MESSAGE_BODY_LIMIT).replace('\n', "\\n")
+            ));
+        }
+        if let Some(events) = payload.get("held_visible_events").and_then(Value::as_array) {
+            lines.push(format!("   held_visible_events_count: {}", events.len()));
+        }
+        lines.push("   protocol: for yield or force_send, emit LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"<stream_key>\",\"action\":\"yield|force_send\"} and do not also post a normal reply.".to_owned());
+        lines.push("   protocol: for revise, emit LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"<stream_key>\",\"action\":\"revise\"}, then continue with the revised visible reply in this same turn.".to_owned());
+        lines
+    }
+}
+
+fn compact_payload_value(value: &Value, limit: usize) -> String {
+    let rendered = match value {
+        Value::String(value) => value.clone(),
+        _ => value.to_string(),
+    };
+    compact_chars_middle(&rendered, limit).replace('\n', "\\n")
 }
 
 pub(crate) struct InboxWakeSummary {
@@ -247,6 +299,7 @@ fn inbox_wake_item_from_row(row: &SqliteRow) -> InboxWakeItem {
         priority: row.get("priority"),
         title: row.get("title"),
         body_preview: row.get("body_preview"),
+        payload: row.get("payload"),
         message_created_at: row.get("message_created_at"),
         sender_name: row.get("sender_name"),
         sender_role: row.get("sender_role"),
@@ -271,6 +324,7 @@ async fn next_unread_inbox_wake_item(
             i.priority,
             i.title,
             i.body_preview,
+            i.payload,
             m.created_at as message_created_at,
             m.sender_name,
             m.sender_role
@@ -311,6 +365,7 @@ async fn load_unread_inbox_wake_batch(
             i.priority,
             i.title,
             i.body_preview,
+            i.payload,
             m.created_at as message_created_at,
             m.sender_name,
             m.sender_role
@@ -354,6 +409,7 @@ pub(crate) async fn load_inbox_wake_items_for_work_item(
             i.priority,
             i.title,
             i.body_preview,
+            i.payload,
             m.created_at as message_created_at,
             m.sender_name,
             m.sender_role
@@ -526,6 +582,7 @@ pub(crate) fn inbox_wake_context(
             "   kind: {}, priority: {}, title: {}",
             item.kind, item.priority, item.title
         ));
+        lines.extend(item.context_detail_lines());
         if index + 1 < items.len() {
             lines.push(String::new());
         }
@@ -569,6 +626,7 @@ pub(crate) fn build_steer_followup_prompt(items: &[InboxWakeItem]) -> String {
             lines.push(item.message_header());
         }
         lines.push(format!("   inbox_id: {}", item.id));
+        lines.extend(item.context_detail_lines());
         if index + 1 < items.len() {
             lines.push(String::new());
         }

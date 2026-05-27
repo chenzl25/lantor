@@ -7,8 +7,9 @@ use super::{
     streaming_message_body_is_empty, STREAMING_MESSAGE_BODY_LIMIT,
 };
 use crate::domain::reminders::load_reminders;
+use crate::events::control::handle_streaming_agent_event_json;
 use crate::message_store::load_messages;
-use crate::publish_guard::bump_thread_version;
+use crate::publish_guard::{bump_thread_version, current_thread_version};
 use crate::runtime::process::{load_runtime_thread_id, upsert_runtime_thread_id};
 use crate::test_support::{drop_test_schema, insert_test_agent, insert_test_channel, test_pool};
 use chrono::{Duration as ChronoDuration, Utc};
@@ -117,6 +118,29 @@ async fn streaming_agent_messages_append_and_finish() {
 }
 
 #[tokio::test]
+async fn truncation_completion_bumps_thread_version() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "truncation-version-agent").await?;
+        let channel_id = insert_test_channel(&pool, "truncation-version").await?;
+        let stream_key = "truncation-version-stream";
+        let body = "x".repeat(STREAMING_MESSAGE_BODY_LIMIT + 1024);
+
+        append_streaming_agent_message(&pool, agent_id, channel_id, None, stream_key, &body)
+            .await?;
+
+        let version = current_thread_version(&pool, channel_id, None).await?;
+        assert_eq!(version, 1);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn streaming_placeholder_is_reused_for_visible_reply() {
     let Some((pool, schema)) = test_pool().await else {
         return;
@@ -206,6 +230,13 @@ async fn gate_blocks_before_placeholder_creation() {
         .await
         .map_err(|err| err.to_string())?;
         assert_eq!(interrupted, 1);
+        let base_thread_version: i64 = sqlx::query_scalar(
+            "select json_extract(payload, '$.base_thread_version') from agent_inbox_items where kind = 'interrupted_action' order by created_at desc limit 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(base_thread_version, 1);
 
         let status: String =
             sqlx::query_scalar("select status from agent_work_items where run_id is null limit 1")
@@ -213,6 +244,52 @@ async fn gate_blocks_before_placeholder_creation() {
                 .await
                 .map_err(|err| err.to_string())?;
         assert_eq!(status, "interrupted");
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn interrupted_action_revise_resolves_held_buffer() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "revise-held-agent").await?;
+        let channel_id = insert_test_channel(&pool, "revise-held-channel").await?;
+        let (_work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        let stream_key = format!("{run_id}:item-1");
+
+        append_streaming_agent_message(&pool, agent_id, channel_id, None, &stream_key, "Old")
+            .await?;
+        crate::publish_guard::resolve_interrupted_action(
+            &pool,
+            agent_id,
+            run_id,
+            &stream_key,
+            "revise",
+        )
+        .await?;
+
+        let buffer_state: String =
+            sqlx::query_scalar("select state from agent_output_buffers where stream_key = $1")
+                .bind(&stream_key)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(buffer_state, "revised");
+
+        let open_items: i64 = sqlx::query_scalar(
+            "select count(*) from agent_inbox_items where kind = 'interrupted_action' and state <> 'archived'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(open_items, 0);
         Ok(())
     }
     .await;
@@ -314,6 +391,156 @@ async fn held_visible_also_gates_visible_side_effects() {
         .await
         .map_err(|err| err.to_string())?;
         assert!(held_events.contains("channel_message_create"));
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn held_visible_side_effects_use_source_surface_freshness() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "held-cross-surface-agent").await?;
+        let source_channel_id = insert_test_channel(&pool, "source-surface").await?;
+        let target_channel_id = insert_test_channel(&pool, "target-surface").await?;
+        sqlx::query("insert into channel_members (channel_id, agent_id) values ($1, $2)")
+            .bind(target_channel_id)
+            .bind(agent_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let (_work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, source_channel_id, None, 0).await?;
+        bump_thread_version(&pool, source_channel_id, None).await?;
+        let event = json!({
+            "type": "channel_message_create",
+            "channel_id": target_channel_id,
+            "body": "cross surface side effect"
+        })
+        .to_string();
+
+        handle_streaming_agent_event_json(&pool, agent_id, run_id, &event).await?;
+
+        let posted_side_effects: i64 = sqlx::query_scalar(
+            "select count(*) from messages where channel_id = $1 and body = 'cross surface side effect'",
+        )
+        .bind(target_channel_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(posted_side_effects, 0);
+
+        let held_surface: (Uuid, Option<Uuid>) = sqlx::query_as(
+            "select channel_id, thread_root_id from agent_output_buffers where run_id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(held_surface, (source_channel_id, None));
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn target_surface_change_does_not_hold_cross_surface_side_effect() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "allowed-cross-surface-agent").await?;
+        let source_channel_id = insert_test_channel(&pool, "fresh-source-surface").await?;
+        let target_channel_id = insert_test_channel(&pool, "changed-target-surface").await?;
+        sqlx::query("insert into channel_members (channel_id, agent_id) values ($1, $2)")
+            .bind(target_channel_id)
+            .bind(agent_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let (_work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, source_channel_id, None, 0).await?;
+        bump_thread_version(&pool, target_channel_id, None).await?;
+        let event = json!({
+            "type": "channel_message_create",
+            "channel_id": target_channel_id,
+            "body": "allowed cross surface side effect"
+        })
+        .to_string();
+
+        handle_streaming_agent_event_json(&pool, agent_id, run_id, &event).await?;
+
+        let posted_side_effects: i64 = sqlx::query_scalar(
+            "select count(*) from messages where channel_id = $1 and body = 'allowed cross surface side effect'",
+        )
+        .bind(target_channel_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(posted_side_effects, 1);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn repeated_held_visible_events_are_aggregated_into_one_interruption() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "aggregate-held-agent").await?;
+        let channel_id = insert_test_channel(&pool, "aggregate-held-channel").await?;
+        sqlx::query("insert into channel_members (channel_id, agent_id) values ($1, $2)")
+            .bind(channel_id)
+            .bind(agent_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let (_work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        for body in ["first held event", "second held event"] {
+            let event = json!({
+                "type": "channel_message_create",
+                "channel_id": channel_id,
+                "body": body
+            })
+            .to_string();
+            handle_streaming_agent_event_json(&pool, agent_id, run_id, &event).await?;
+        }
+
+        let buffer_count: i64 =
+            sqlx::query_scalar("select count(*) from agent_output_buffers where run_id = $1")
+                .bind(run_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(buffer_count, 1);
+        let item_count: i64 = sqlx::query_scalar(
+            "select count(*) from agent_inbox_items where kind = 'interrupted_action'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(item_count, 1);
+        let held_events: String = sqlx::query_scalar(
+            "select held_visible_events from agent_output_buffers where run_id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert!(held_events.contains("first held event"));
+        assert!(held_events.contains("second held event"));
         Ok(())
     }
     .await;

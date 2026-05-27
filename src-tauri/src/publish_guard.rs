@@ -168,6 +168,28 @@ async fn work_item_base_thread_version(
     Ok(value.get("base_thread_version").and_then(Value::as_i64))
 }
 
+pub(crate) async fn work_item_public_surface(
+    pool: &SqlitePool,
+    work_item_id: Option<Uuid>,
+) -> CommandResult<Option<(Uuid, Option<Uuid>)>> {
+    let Some(work_item_id) = work_item_id else {
+        return Ok(None);
+    };
+    let row = sqlx::query("select channel_id, thread_root_id from agent_work_items where id = $1")
+        .bind(work_item_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(to_string)?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let channel_id: Option<Uuid> = row.get("channel_id");
+    Ok(channel_id.map(|channel_id| {
+        let thread_root_id: Option<Uuid> = row.get("thread_root_id");
+        (channel_id, thread_root_id)
+    }))
+}
+
 async fn task_owner_for_thread(
     pool: &SqlitePool,
     thread_root_id: Option<Uuid>,
@@ -226,6 +248,42 @@ pub(crate) async fn run_work_item_id(
         .map(|value| value.flatten())
 }
 
+async fn held_buffer_stream_key_for_work(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    work_item_id: Option<Uuid>,
+    channel_id: Uuid,
+    thread_root_id: Option<Uuid>,
+    except_stream_key: Option<&str>,
+) -> CommandResult<Option<String>> {
+    let Some(work_item_id) = work_item_id else {
+        return Ok(None);
+    };
+    let row: Option<String> = sqlx::query_scalar(
+        r#"
+        select stream_key
+        from agent_output_buffers
+        where agent_id = $1
+          and work_item_id = $2
+          and channel_id = $3
+          and thread_root_id is not distinct from $4
+          and state = 'held'
+          and ($5 is null or stream_key <> $5)
+        order by created_at asc
+        limit 1
+        "#,
+    )
+    .bind(agent_id)
+    .bind(work_item_id)
+    .bind(channel_id)
+    .bind(thread_root_id)
+    .bind(except_stream_key)
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)?;
+    Ok(row)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn hold_visible_control_event(
     pool: &SqlitePool,
@@ -238,7 +296,16 @@ pub(crate) async fn hold_visible_control_event(
     event_json: &str,
     decision: PublishDecision,
 ) -> CommandResult<String> {
-    let stream_key = format!("{run_id}:event:{}", Uuid::new_v4());
+    let stream_key = held_buffer_stream_key_for_work(
+        pool,
+        agent_id,
+        work_item_id,
+        channel_id,
+        thread_root_id,
+        None,
+    )
+    .await?
+    .unwrap_or_else(|| format!("{run_id}:event:{}", Uuid::new_v4()));
     let reason = decision.reason().unwrap_or("stale_context");
     let base_version = match decision {
         PublishDecision::HoldStale { base_version, .. } => base_version,
@@ -247,6 +314,23 @@ pub(crate) async fn hold_visible_control_event(
             .unwrap_or(0),
     };
     let current_version = current_thread_version(pool, channel_id, thread_root_id).await?;
+    let existing_buffer: Option<(String, String)> = sqlx::query_as(
+        "select body, held_visible_events from agent_output_buffers where stream_key = $1 and state = 'held'",
+    )
+    .bind(&stream_key)
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)?;
+    let existing_body = existing_buffer
+        .as_ref()
+        .map(|(body, _)| body.as_str())
+        .unwrap_or("");
+    let mut held_visible_events = existing_buffer
+        .as_ref()
+        .map(|(_, events)| events.as_str())
+        .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+        .unwrap_or_default();
+    held_visible_events.push(event_json.to_owned());
     sqlx::query(
         r#"
         insert into agent_output_buffers (
@@ -254,6 +338,11 @@ pub(crate) async fn hold_visible_control_event(
             reason, base_version, current_version, body, held_visible_events
         )
         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, '', $10)
+        on conflict(stream_key) do update
+        set reason = excluded.reason,
+            current_version = excluded.current_version,
+            held_visible_events = excluded.held_visible_events,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
         "#,
     )
     .bind(&stream_key)
@@ -265,7 +354,7 @@ pub(crate) async fn hold_visible_control_event(
     .bind(reason)
     .bind(base_version)
     .bind(current_version)
-    .bind(json!([event_json]).to_string())
+    .bind(json!(held_visible_events).to_string())
     .execute(pool)
     .await
     .map_err(to_string)?;
@@ -279,16 +368,22 @@ pub(crate) async fn hold_visible_control_event(
         .map_err(to_string)?;
         notify_ui_work_item_changed(pool, work_item_id, "work_item_interrupted").await;
     }
+    let has_held_reply = !existing_body.trim().is_empty();
     let payload = json!({
-        "interrupted_action": "visible_control_event",
+        "interrupted_action": if has_held_reply { "public_reply" } else { "visible_control_event" },
         "reason": reason,
-        "draft_body": "",
+        "draft_body": existing_body,
         "base_version": base_version,
         "current_version": current_version,
+        "base_thread_version": current_version,
         "stream_key": stream_key,
-        "action_kind": action_kind.as_str(),
-        "held_visible_events": [event_json],
-        "allowed_actions": ["yield", "force_send"],
+        "action_kind": if has_held_reply { PublishActionKind::ReplyText.as_str() } else { action_kind.as_str() },
+        "held_visible_events": held_visible_events,
+        "allowed_actions": if has_held_reply {
+            json!(["revise", "yield", "force_send"])
+        } else {
+            json!(["yield", "force_send"])
+        },
     });
     upsert_interrupted_action(
         pool,
@@ -427,10 +522,24 @@ pub(crate) async fn hold_streaming_public_output(
     terminal: bool,
     decision: PublishDecision,
 ) -> CommandResult<Uuid> {
+    let buffer_stream_key = if output_buffer_exists(pool, stream_key).await? {
+        stream_key.to_owned()
+    } else {
+        held_buffer_stream_key_for_work(
+            pool,
+            agent_id,
+            work_item_id,
+            channel_id,
+            thread_root_id,
+            Some(stream_key),
+        )
+        .await?
+        .unwrap_or_else(|| stream_key.to_owned())
+    };
     let existing: Option<(String, String, String, i64, i64)> = sqlx::query_as(
         "select body, held_visible_events, reason, base_version, current_version from agent_output_buffers where stream_key = $1",
     )
-    .bind(stream_key)
+    .bind(&buffer_stream_key)
     .fetch_optional(pool)
     .await
     .map_err(to_string)?;
@@ -477,7 +586,7 @@ pub(crate) async fn hold_streaming_public_output(
             updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
         "#,
     )
-    .bind(stream_key)
+    .bind(&buffer_stream_key)
     .bind(agent_id)
     .bind(run_id)
     .bind(work_item_id)
@@ -515,7 +624,8 @@ pub(crate) async fn hold_streaming_public_output(
         "draft_body": visible_body,
         "base_version": base_version,
         "current_version": current_version,
-        "stream_key": stream_key,
+        "base_thread_version": current_version,
+        "stream_key": buffer_stream_key,
         "action_kind": PublishActionKind::ReplyText.as_str(),
         "held_visible_events": held_visible_events,
         "allowed_actions": ["revise", "yield", "force_send"],
@@ -526,7 +636,7 @@ pub(crate) async fn hold_streaming_public_output(
         work_item_id,
         channel_id,
         thread_root_id,
-        stream_key,
+        &buffer_stream_key,
         reason,
         payload,
     )
@@ -540,7 +650,7 @@ pub(crate) async fn hold_streaming_public_output(
         json!({
             "reason": reason,
             "work_item_id": work_item_id,
-            "stream_key": stream_key,
+            "stream_key": buffer_stream_key,
             "base_version": base_version,
             "current_version": current_version,
         })
@@ -616,6 +726,31 @@ pub(crate) async fn resolve_interrupted_action(
                 .await
                 .map_err(to_string)?;
                 notify_ui_work_item_changed(pool, work_item_id, "interrupted_action_yielded").await;
+            }
+        }
+        "revise" => {
+            sqlx::query(
+                "update agent_output_buffers set state = 'revised', updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where stream_key = $1",
+            )
+            .bind(stream_key)
+            .execute(pool)
+            .await
+            .map_err(to_string)?;
+            if let Some(work_item_id) = work_item_id {
+                sqlx::query(
+                    r#"
+                    update agent_work_items
+                    set status = 'done',
+                        completed_at = coalesce(completed_at, strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                        updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+                    where id = $1
+                    "#,
+                )
+                .bind(work_item_id)
+                .execute(pool)
+                .await
+                .map_err(to_string)?;
+                notify_ui_work_item_changed(pool, work_item_id, "interrupted_action_revised").await;
             }
         }
         "force_send" | "send_as_is" => {

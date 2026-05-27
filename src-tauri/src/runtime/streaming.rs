@@ -182,6 +182,7 @@ async fn append_streaming_agent_message_inner(
             .await;
         }
         if truncated && complete_on_truncation {
+            bump_thread_version(pool, channel_id, thread_root_id).await?;
             queue_agent_message_mentions(pool, message_id).await?;
         }
         return Ok(message_id);
@@ -285,6 +286,7 @@ async fn append_streaming_agent_message_inner(
         .await;
     }
     if truncated && complete_on_truncation {
+        bump_thread_version(pool, channel_id, thread_root_id).await?;
         queue_agent_message_mentions(pool, message_id).await?;
     }
     Ok(message_id)

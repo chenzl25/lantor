@@ -26,7 +26,7 @@ use crate::message_store::{
 };
 use crate::publish_guard::{
     can_publish_public_output, control_action_kind_for_event_type, hold_visible_control_event,
-    resolve_interrupted_action, run_work_item_id, PublishDecision,
+    resolve_interrupted_action, run_work_item_id, work_item_public_surface, PublishDecision,
 };
 use crate::runtime::streaming::mark_run_work_item_silent;
 use crate::task_messages::create_agent_task_thread;
@@ -623,11 +623,14 @@ async fn maybe_hold_visible_streaming_event(
         _ => return Ok(None),
     };
     let work_item_id = run_work_item_id(pool, run_id).await?;
+    let (gate_channel_id, gate_thread_root_id) = work_item_public_surface(pool, work_item_id)
+        .await?
+        .unwrap_or((channel_id, thread_root_id));
     let decision = can_publish_public_output(
         pool,
         agent_id,
-        channel_id,
-        thread_root_id,
+        gate_channel_id,
+        gate_thread_root_id,
         work_item_id,
         action_kind,
     )
@@ -640,8 +643,8 @@ async fn maybe_hold_visible_streaming_event(
         agent_id,
         run_id,
         work_item_id,
-        channel_id,
-        thread_root_id,
+        gate_channel_id,
+        gate_thread_root_id,
         action_kind,
         json,
         decision,
