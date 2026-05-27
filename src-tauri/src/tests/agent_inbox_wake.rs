@@ -134,6 +134,7 @@ fn interrupted_action_context_exposes_payload_and_resolution_protocol() {
             title: "Public reply held because the thread changed".to_owned(),
             body_preview: "stale_context".to_owned(),
             payload: json!({
+                "interrupted_action": "public_reply",
                 "reason": "stale_context",
                 "stream_key": stream_key,
                 "action_kind": "reply_text",
@@ -153,10 +154,69 @@ fn interrupted_action_context_exposes_payload_and_resolution_protocol() {
     );
 
     assert!(context.contains("interrupted_action: review the held public output"));
+    assert!(context.contains("decision: choose one of revise, yield, or force_send."));
     assert!(context.contains("allowed_actions: [\"revise\",\"yield\",\"force_send\"]"));
     assert!(context.contains("draft_body: old answer"));
     assert!(context.contains("interrupted_action_resolve"));
     assert!(context.contains("then continue with the revised visible reply"));
+    assert!(!context.contains("revise is not allowed for this interruption"));
+}
+
+#[test]
+fn interrupted_action_context_for_side_effect_only_omits_revise_protocol() {
+    // Regression for issue #96: when the held interruption is side-effect-only
+    // (no draft reply to rewrite), the prompt must not advertise `revise` as a
+    // decision option or render the revise resolution protocol.
+    let stream_key = format!("{}:event-1", Uuid::new_v4());
+    let context = inbox_wake_context(
+        &[InboxWakeItem {
+            id: Uuid::new_v4(),
+            channel_id: Some(Uuid::new_v4()),
+            channel_name: Some("coordination".to_owned()),
+            channel_kind: Some("channel".to_owned()),
+            thread_root_id: Some(Uuid::new_v4()),
+            source_message_id: None,
+            task_id: None,
+            kind: "interrupted_action".to_owned(),
+            priority: 95,
+            title: "Public reply held because the thread changed".to_owned(),
+            body_preview: "stale_context".to_owned(),
+            payload: json!({
+                "interrupted_action": "visible_control_event",
+                "reason": "stale_context",
+                "stream_key": stream_key,
+                "action_kind": "channel_message_create",
+                "base_version": 1,
+                "current_version": 2,
+                "base_thread_version": 2,
+                "draft_body": "",
+                "allowed_actions": ["yield", "force_send"],
+                "held_visible_events": [
+                    "{\"type\":\"channel_message_create\",\"body\":\"queued side effect\"}"
+                ]
+            })
+            .to_string(),
+            message_created_at: None,
+            sender_name: None,
+            sender_role: None,
+        }],
+        &[],
+    );
+
+    assert!(context.contains("interrupted_action: review the held public output"));
+    assert!(context.contains("decision: choose one of yield or force_send."));
+    assert!(context.contains("allowed_actions: [\"yield\",\"force_send\"]"));
+    assert!(context.contains("interrupted_action: visible_control_event"));
+    assert!(context.contains("held_visible_events_count: 1"));
+    assert!(context.contains("revise is not allowed for this interruption"));
+    assert!(
+        !context.contains("then continue with the revised visible reply"),
+        "side-effect-only interruption must not render the revise protocol line"
+    );
+    assert!(
+        !context.contains("\"action\":\"revise\""),
+        "side-effect-only interruption must not emit a `revise` example payload"
+    );
 }
 
 #[tokio::test]

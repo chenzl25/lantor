@@ -94,13 +94,33 @@ impl InboxWakeItem {
         let Ok(payload) = serde_json::from_str::<Value>(&self.payload) else {
             return Vec::new();
         };
+        let allowed_actions: Vec<String> = payload
+            .get("allowed_actions")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_else(|| {
+                vec![
+                    "revise".to_owned(),
+                    "yield".to_owned(),
+                    "force_send".to_owned(),
+                ]
+            });
+        let can_revise = allowed_actions.iter().any(|action| action == "revise");
+        let decision_choices = join_human_oxford(&allowed_actions);
         let mut lines = vec![
             "   interrupted_action: review the held public output before replying.".to_owned(),
-            "   decision: choose one of revise, yield, or force_send.".to_owned(),
+            format!("   decision: choose one of {decision_choices}."),
         ];
         for key in [
             "reason",
             "stream_key",
+            "interrupted_action",
             "action_kind",
             "base_version",
             "current_version",
@@ -126,8 +146,24 @@ impl InboxWakeItem {
             lines.push(format!("   held_visible_events_count: {}", events.len()));
         }
         lines.push("   protocol: for yield or force_send, emit LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"<stream_key>\",\"action\":\"yield|force_send\"} and do not also post a normal reply.".to_owned());
-        lines.push("   protocol: for revise, emit LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"<stream_key>\",\"action\":\"revise\"}, then continue with the revised visible reply in this same turn.".to_owned());
+        if can_revise {
+            lines.push("   protocol: for revise, emit LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"<stream_key>\",\"action\":\"revise\"}, then continue with the revised visible reply in this same turn.".to_owned());
+        } else {
+            lines.push("   protocol: revise is not allowed for this interruption (no draft reply to rewrite); choose yield or force_send.".to_owned());
+        }
         lines
+    }
+}
+
+fn join_human_oxford(items: &[String]) -> String {
+    match items.len() {
+        0 => String::new(),
+        1 => items[0].clone(),
+        2 => format!("{} or {}", items[0], items[1]),
+        _ => {
+            let (last, head) = items.split_last().unwrap();
+            format!("{}, or {last}", head.join(", "))
+        }
     }
 }
 

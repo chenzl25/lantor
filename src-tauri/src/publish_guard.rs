@@ -42,6 +42,59 @@ impl PublishActionKind {
     }
 }
 
+/// Shape of a held interruption: either a draft public reply that the agent
+/// can rewrite, or a side-effect-only buffer (artifact/attachment/cross-channel
+/// message) with no draft body to revise.
+///
+/// Single source of truth for `interrupted_action` payload, `allowed_actions`,
+/// and the backend guard that `resolve_interrupted_action` enforces. Keep this
+/// in sync with the prompt rendering in `agent_inbox_wake::context_detail_lines`
+/// (which reads `allowed_actions` from the payload).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InterruptedActionKind {
+    PublicReply,
+    VisibleControlEvent,
+}
+
+impl InterruptedActionKind {
+    /// Derive the kind from the current buffer contents. A non-empty draft body
+    /// means there is something to revise (PublicReply); otherwise the buffer
+    /// only carries held side effects with no semantically meaningful "draft"
+    /// to rewrite (VisibleControlEvent).
+    pub(crate) fn from_buffer(body: &str, _held_visible_events_count: usize) -> Self {
+        if body.trim().is_empty() {
+            Self::VisibleControlEvent
+        } else {
+            Self::PublicReply
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::PublicReply => "public_reply",
+            Self::VisibleControlEvent => "visible_control_event",
+        }
+    }
+
+    pub(crate) fn allowed_actions(self) -> &'static [&'static str] {
+        match self {
+            Self::PublicReply => &["revise", "yield", "force_send"],
+            Self::VisibleControlEvent => &["yield", "force_send"],
+        }
+    }
+
+    /// Whether the given resolve action is semantically valid for this kind.
+    /// Accepts `send_as_is` as an alias for `force_send` to match the parser.
+    pub(crate) fn allows(self, action: &str) -> bool {
+        let normalized = if action == "send_as_is" {
+            "force_send"
+        } else {
+            action
+        };
+        self.allowed_actions().contains(&normalized)
+    }
+}
+
 pub(crate) fn control_action_kind_for_event_type(event_type: &str) -> PublishActionKind {
     match event_type {
         "channel_message_create" | "message" | "task_create" | "handoff_create" => {
@@ -392,22 +445,22 @@ pub(crate) async fn hold_visible_control_event(
         .map_err(to_string)?;
         notify_ui_work_item_changed(pool, work_item_id, "work_item_interrupted").await;
     }
-    let has_held_reply = !existing_body.trim().is_empty();
+    let kind = InterruptedActionKind::from_buffer(existing_body, held_visible_events.len());
+    let payload_action_kind = match kind {
+        InterruptedActionKind::PublicReply => PublishActionKind::ReplyText.as_str(),
+        InterruptedActionKind::VisibleControlEvent => action_kind.as_str(),
+    };
     let payload = json!({
-        "interrupted_action": if has_held_reply { "public_reply" } else { "visible_control_event" },
+        "interrupted_action": kind.as_str(),
         "reason": reason,
         "draft_body": existing_body,
         "base_version": base_version,
         "current_version": current_version,
         "base_thread_version": current_version,
         "stream_key": stream_key,
-        "action_kind": if has_held_reply { PublishActionKind::ReplyText.as_str() } else { action_kind.as_str() },
+        "action_kind": payload_action_kind,
         "held_visible_events": held_visible_events,
-        "allowed_actions": if has_held_reply {
-            json!(["revise", "yield", "force_send"])
-        } else {
-            json!(["yield", "force_send"])
-        },
+        "allowed_actions": kind.allowed_actions(),
     });
     upsert_interrupted_action(
         pool,
@@ -642,8 +695,9 @@ pub(crate) async fn hold_streaming_public_output(
         notify_ui_work_item_changed(pool, work_item_id, "work_item_interrupted").await;
     }
 
+    let kind = InterruptedActionKind::from_buffer(&visible_body, held_visible_events.len());
     let payload = json!({
-        "interrupted_action": "public_reply",
+        "interrupted_action": kind.as_str(),
         "reason": reason,
         "draft_body": visible_body,
         "base_version": base_version,
@@ -652,7 +706,7 @@ pub(crate) async fn hold_streaming_public_output(
         "stream_key": buffer_stream_key,
         "action_kind": PublishActionKind::ReplyText.as_str(),
         "held_visible_events": held_visible_events,
-        "allowed_actions": ["revise", "yield", "force_send"],
+        "allowed_actions": kind.allowed_actions(),
     });
     upsert_interrupted_action(
         pool,
@@ -726,6 +780,37 @@ pub(crate) async fn resolve_interrupted_action(
     let body: String = row.get("body");
     let held_visible_events: String = row.get("held_visible_events");
     let current_version: i64 = row.get("current_version");
+
+    // Reject actions that are not semantically valid for this buffer shape
+    // *before* mutating any state. In particular, a side-effect-only buffer
+    // (no draft body) must not accept `revise`, otherwise the resolve path
+    // would clear `held_visible_events` and silently drop the side effects.
+    let held_events_count = serde_json::from_str::<Vec<String>>(&held_visible_events)
+        .map(|events| events.len())
+        .unwrap_or(0);
+    let kind = InterruptedActionKind::from_buffer(&body, held_events_count);
+    if !kind.allows(action) {
+        record_agent_activity(
+            pool,
+            Some(agent_id),
+            Some(run_id),
+            "decision",
+            "Interrupted action resolve rejected",
+            json!({
+                "stream_key": stream_key,
+                "action": action,
+                "interrupted_action": kind.as_str(),
+                "allowed_actions": kind.allowed_actions(),
+            })
+            .to_string(),
+        )
+        .await?;
+        return Err(format!(
+            "action '{action}' is not allowed for interrupted_action '{}'; allowed: {}",
+            kind.as_str(),
+            kind.allowed_actions().join(", "),
+        ));
+    }
 
     match action {
         "yield" => {
