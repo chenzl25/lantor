@@ -168,6 +168,30 @@ async fn work_item_base_thread_version(
     Ok(value.get("base_thread_version").and_then(Value::as_i64))
 }
 
+async fn repin_work_item_base_thread_version(
+    pool: &SqlitePool,
+    work_item_id: Option<Uuid>,
+    base_thread_version: i64,
+) -> CommandResult<()> {
+    let Some(work_item_id) = work_item_id else {
+        return Ok(());
+    };
+    sqlx::query(
+        r#"
+        update agent_inbox_items
+        set payload = json_set(payload, '$.base_thread_version', $2),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where work_item_id = $1
+        "#,
+    )
+    .bind(work_item_id)
+    .bind(base_thread_version)
+    .execute(pool)
+    .await
+    .map_err(to_string)?;
+    Ok(())
+}
+
 pub(crate) async fn work_item_public_surface(
     pool: &SqlitePool,
     work_item_id: Option<Uuid>,
@@ -683,7 +707,7 @@ pub(crate) async fn resolve_interrupted_action(
 ) -> CommandResult<String> {
     let Some(row) = sqlx::query(
         r#"
-        select work_item_id, channel_id, thread_root_id, body, held_visible_events
+        select work_item_id, channel_id, thread_root_id, body, held_visible_events, current_version
         from agent_output_buffers
         where stream_key = $1 and agent_id = $2 and state = 'held'
         "#,
@@ -701,6 +725,7 @@ pub(crate) async fn resolve_interrupted_action(
     let thread_root_id: Option<Uuid> = row.get("thread_root_id");
     let body: String = row.get("body");
     let held_visible_events: String = row.get("held_visible_events");
+    let current_version: i64 = row.get("current_version");
 
     match action {
         "yield" => {
@@ -729,8 +754,9 @@ pub(crate) async fn resolve_interrupted_action(
             }
         }
         "revise" => {
+            repin_work_item_base_thread_version(pool, work_item_id, current_version).await?;
             sqlx::query(
-                "update agent_output_buffers set state = 'revised', updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where stream_key = $1",
+                "update agent_output_buffers set state = 'revised', body = '', held_visible_events = '[]', updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where stream_key = $1",
             )
             .bind(stream_key)
             .execute(pool)

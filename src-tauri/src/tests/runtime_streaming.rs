@@ -252,7 +252,7 @@ async fn gate_blocks_before_placeholder_creation() {
 }
 
 #[tokio::test]
-async fn interrupted_action_revise_resolves_held_buffer() {
+async fn interrupted_action_revise_allows_revised_reply_on_same_stream_key() {
     let Some((pool, schema)) = test_pool().await else {
         return;
     };
@@ -262,7 +262,7 @@ async fn interrupted_action_revise_resolves_held_buffer() {
         let (_work_item_id, run_id) =
             insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
         bump_thread_version(&pool, channel_id, None).await?;
-        let stream_key = format!("{run_id}:item-1");
+        let stream_key = format!("{run_id}:claude-assistant");
 
         append_streaming_agent_message(&pool, agent_id, channel_id, None, &stream_key, "Old")
             .await?;
@@ -282,6 +282,13 @@ async fn interrupted_action_revise_resolves_held_buffer() {
                 .await
                 .map_err(|err| err.to_string())?;
         assert_eq!(buffer_state, "revised");
+        let buffer_body: String =
+            sqlx::query_scalar("select body from agent_output_buffers where stream_key = $1")
+                .bind(&stream_key)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(buffer_body, "");
 
         let open_items: i64 = sqlx::query_scalar(
             "select count(*) from agent_inbox_items where kind = 'interrupted_action' and state <> 'archived'",
@@ -290,6 +297,25 @@ async fn interrupted_action_revise_resolves_held_buffer() {
         .await
         .map_err(|err| err.to_string())?;
         assert_eq!(open_items, 0);
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "Revised answer",
+        )
+        .await?;
+        finish_streaming_agent_message(&pool, &stream_key, "complete").await?;
+
+        let messages = load_messages(&pool).await?;
+        let message = messages
+            .iter()
+            .find(|message| message.stream_key == stream_key)
+            .expect("revised reply should publish on the same stream key");
+        assert_eq!(message.body, "Revised answer");
+        assert_eq!(message.delivery_state, "complete");
         Ok(())
     }
     .await;
