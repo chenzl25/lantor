@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowLeft, Bookmark, CheckCircle2, Hash, MessageSquare, Paperclip, RotateCcw, Send, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, Bookmark, CheckCircle2, Crosshair, Hash, MessageSquare, Paperclip, RotateCcw, Send, X } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { useAutoGrowTextarea } from "../hooks/useAutoGrowTextarea";
 import { useMentionPicker } from "../hooks/useMentionPicker";
@@ -101,6 +101,7 @@ type ThreadPanelProps = {
   openAgentDetail: (agent: Agent) => void;
   openArtifact: (artifact: Artifact) => void;
   openWorkItem?: (item: AgentWorkItem, focusedMessageIdOverride?: string | null) => void;
+  onLocateRoot: (message: Message) => void;
   shareBaseUrl: string | null;
   savedMessageIds: Set<string>;
   focusedMessageId: string | null;
@@ -141,6 +142,7 @@ export function ThreadPanel({
   openAgentDetail,
   openArtifact,
   openWorkItem,
+  onLocateRoot,
   shareBaseUrl,
   savedMessageIds,
   focusedMessageId,
@@ -455,7 +457,22 @@ export function ThreadPanel({
             Thread <span>{channel ? isDm ? `- @${dmAgent?.handle || "agent"}` : `- #${channel.name}` : "- no channel"}</span>
           </h2>
         </div>
-        <button type="button" className="thread-close" onClick={onClose} aria-label="Close thread panel"><X size={18} /></button>
+        <div className="thread-header-actions">
+          <button
+            type="button"
+            className="thread-locate-root"
+            onClick={() => {
+              if (activeRoot) onLocateRoot(activeRoot);
+            }}
+            disabled={!activeRoot}
+            data-tooltip={isDm ? "Locate this thread in DM" : "Locate this thread in channel"}
+            aria-label={isDm ? "Locate this thread in direct message" : "Locate this thread in channel"}
+          >
+            <Crosshair size={16} />
+            <span>Locate</span>
+          </button>
+          <button type="button" className="thread-close" onClick={onClose} aria-label="Close thread panel"><X size={18} /></button>
+        </div>
       </header>
 
       <section className="thread-focus">
