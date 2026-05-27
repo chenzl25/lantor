@@ -1921,6 +1921,71 @@ button,
   color: var(--ink-control);
 }
 
+.thread-header-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.thread-header-actions button[data-tooltip] {
+  position: relative;
+}
+
+.thread-header-actions button[data-tooltip]:not(:disabled)::after {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 8;
+  max-width: 220px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--surface-tooltip);
+  color: var(--ink-on-tooltip);
+  content: attr(data-tooltip);
+  font-size: var(--type-size-caption);
+  font-weight: var(--type-weight-semibold);
+  line-height: 14px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-2px);
+  transition:
+    opacity 60ms ease,
+    transform 60ms ease;
+  white-space: nowrap;
+}
+
+.thread-header-actions button[data-tooltip]:not(:disabled)::before {
+  position: absolute;
+  top: calc(100% + 3px);
+  right: 15px;
+  z-index: 8;
+  width: 8px;
+  height: 8px;
+  background: var(--surface-tooltip);
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-2px) rotate(45deg);
+  transition:
+    opacity 60ms ease,
+    transform 60ms ease;
+}
+
+.thread-header-actions button[data-tooltip]:not(:disabled):hover::after,
+.thread-header-actions button[data-tooltip]:not(:disabled):focus-visible::after,
+.thread-header-actions button[data-tooltip]:not(:disabled):hover::before,
+.thread-header-actions button[data-tooltip]:not(:disabled):focus-visible::before {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.thread-header-actions button[data-tooltip]:not(:disabled):hover::before,
+.thread-header-actions button[data-tooltip]:not(:disabled):focus-visible::before {
+  transform: translateY(0) rotate(45deg);
+}
+
 .thread header .thread-mobile-back {
   display: none;
 }

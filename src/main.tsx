@@ -2638,6 +2638,19 @@ function App() {
     }
   }
 
+  function revealThreadRootInChannel(message: Message) {
+    setSelectedAgentId(null);
+    setActiveTab("chat");
+    setActiveChannelId(message.channel_id);
+    if (isMobileViewport()) {
+      setShowThread(false);
+    }
+    setFocusedMessageId(null);
+    window.requestAnimationFrame(() => {
+      setFocusedMessageId(message.id);
+    });
+  }
+
   function canNavigateBack() {
     if (isMobileViewport()) return false;
     return appHistoryReadyRef.current && appHistoryIndexRef.current > 0;
@@ -3688,6 +3701,7 @@ function App() {
           openAgentDetail={(agent) => setSelectedAgentId(agent.id)}
           openArtifact={openArtifact}
           openWorkItem={openWorkItem}
+          onLocateRoot={revealThreadRootInChannel}
           shareBaseUrl={shareBaseUrl}
           savedMessageIds={savedMessageIds}
           focusedMessageId={focusedMessageId}
