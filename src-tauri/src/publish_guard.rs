@@ -513,6 +513,7 @@ async fn parse_and_apply_buffer_control_events(
     Ok((visible_body, held_visible_events))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn upsert_interrupted_action(
     pool: &SqlitePool,
     agent_id: Uuid,
