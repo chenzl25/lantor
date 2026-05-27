@@ -35,10 +35,10 @@ mod ui_notifications;
 mod usage;
 mod web;
 
-use std::env;
+use std::{env, fs, path::PathBuf};
 
 use sqlx::{Row, SqlitePool};
-use tauri::Manager;
+use tauri::{LogicalSize, Manager, WebviewWindow, WindowEvent};
 use uuid::Uuid;
 
 use agent_inbox_wake::{
@@ -81,6 +81,125 @@ use lifecycle_commands::{
 use runtime::supervisor::run_supervisor;
 use system_commands::{check_runtime, open_external_url};
 use ui_notifications::spawn_ui_refresh_listener;
+
+const WINDOW_STATE_FILE: &str = "window-state.json";
+const MIN_RESTORED_WINDOW_WIDTH: f64 = 1180.0;
+const MIN_RESTORED_WINDOW_HEIGHT: f64 = 760.0;
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct WindowSizeState {
+    width: f64,
+    height: f64,
+}
+
+impl WindowSizeState {
+    fn is_valid(&self) -> bool {
+        self.width.is_finite()
+            && self.height.is_finite()
+            && self.width >= MIN_RESTORED_WINDOW_WIDTH
+            && self.height >= MIN_RESTORED_WINDOW_HEIGHT
+    }
+}
+
+fn window_state_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join(WINDOW_STATE_FILE))
+}
+
+fn load_window_size(path: &PathBuf) -> Option<WindowSizeState> {
+    let value = fs::read_to_string(path).ok()?;
+    let state = serde_json::from_str::<WindowSizeState>(&value).ok()?;
+    state.is_valid().then_some(state)
+}
+
+fn save_window_size(window: &WebviewWindow, path: &PathBuf) {
+    let Ok(size) = window.inner_size() else {
+        return;
+    };
+    let scale_factor = window.scale_factor().unwrap_or(1.0).max(0.1);
+    let state = WindowSizeState {
+        width: f64::from(size.width) / scale_factor,
+        height: f64::from(size.height) / scale_factor,
+    };
+    if !state.is_valid() {
+        return;
+    }
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(value) = serde_json::to_string_pretty(&state) {
+        let _ = fs::write(path, value);
+    }
+}
+
+fn restore_window_size(window: &WebviewWindow, path: &PathBuf) {
+    let Some(state) = load_window_size(path) else {
+        return;
+    };
+    let _ = window.set_size(LogicalSize::new(state.width, state.height));
+    let _ = window.center();
+}
+
+fn install_window_size_persistence(window: &WebviewWindow, path: PathBuf) {
+    restore_window_size(window, &path);
+    let window_for_events = window.clone();
+    window.on_window_event(move |event| match event {
+        WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+            save_window_size(&window_for_events, &path);
+        }
+        WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {
+            save_window_size(&window_for_events, &path);
+        }
+        _ => {}
+    });
+}
+
+#[cfg(test)]
+mod window_size_tests {
+    use super::{load_window_size, WindowSizeState, MIN_RESTORED_WINDOW_HEIGHT, MIN_RESTORED_WINDOW_WIDTH};
+    use std::{fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+
+    fn temp_window_state_path() -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after the unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("lantor-window-state-{unique}.json"))
+    }
+
+    #[test]
+    fn loads_valid_saved_window_size() {
+        let path = temp_window_state_path();
+        let value = serde_json::to_string(&WindowSizeState {
+            width: MIN_RESTORED_WINDOW_WIDTH + 120.0,
+            height: MIN_RESTORED_WINDOW_HEIGHT + 80.0,
+        })
+        .expect("window state should serialize");
+        fs::write(&path, value).expect("window state should be written");
+
+        let state = load_window_size(&path).expect("valid window state should load");
+        assert!(state.is_valid());
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn ignores_saved_window_size_below_minimums() {
+        let path = temp_window_state_path();
+        let value = serde_json::to_string(&WindowSizeState {
+            width: MIN_RESTORED_WINDOW_WIDTH - 1.0,
+            height: MIN_RESTORED_WINDOW_HEIGHT,
+        })
+        .expect("window state should serialize");
+        fs::write(&path, value).expect("window state should be written");
+
+        assert!(load_window_size(&path).is_none());
+
+        let _ = fs::remove_file(path);
+    }
+}
 
 async fn resolve_run_reminder_anchor(
     pool: &SqlitePool,
@@ -166,6 +285,9 @@ pub fn run() {
             spawn_reminder_worker(reminder_pool.clone());
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_title("Lantor");
+                if let Some(path) = window_state_path(app.handle()) {
+                    install_window_size_persistence(&window, path);
+                }
             }
             Ok(())
         })
