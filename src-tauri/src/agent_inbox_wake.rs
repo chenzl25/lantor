@@ -10,6 +10,7 @@ use crate::{
     app::{to_string, CommandResult},
     context_tool::short_id,
     events::activity::record_agent_activity,
+    publish_guard::inbox_payload_with_base_thread_version,
     text::compact_chars_middle,
 };
 
@@ -95,6 +96,13 @@ pub(crate) async fn create_agent_inbox_item(
     pool: &SqlitePool,
     input: AgentInboxItemInput<'_>,
 ) -> CommandResult<Uuid> {
+    let payload = inbox_payload_with_base_thread_version(
+        pool,
+        &input.payload,
+        input.channel_id,
+        input.thread_root_id,
+    )
+    .await?;
     if let Some(source_message_id) = input.source_message_id {
         let existing_id: Option<Uuid> = sqlx::query_scalar(
             r#"
@@ -137,7 +145,7 @@ pub(crate) async fn create_agent_inbox_item(
                 input.body_preview,
                 DISPATCH_MESSAGE_BODY_LIMIT,
             ))
-            .bind(input.payload)
+            .bind(payload.to_string())
             .execute(pool)
             .await
             .map_err(to_string)?;
@@ -167,7 +175,7 @@ pub(crate) async fn create_agent_inbox_item(
         input.body_preview,
         DISPATCH_MESSAGE_BODY_LIMIT,
     ))
-    .bind(input.payload)
+    .bind(payload.to_string())
     .fetch_one(pool)
     .await
     .map_err(to_string)?;

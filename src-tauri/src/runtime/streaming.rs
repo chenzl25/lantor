@@ -13,6 +13,10 @@ use crate::events::{
     },
 };
 use crate::message_store::load_message;
+use crate::publish_guard::{
+    bump_thread_version, can_publish_public_output, hold_streaming_public_output,
+    output_buffer_exists, PublishActionKind, PublishDecision,
+};
 use crate::ui_notifications::{
     notify_ui_message_delete, notify_ui_message_delta, notify_ui_message_upsert, notify_ui_refresh,
     notify_ui_work_item_changed,
@@ -92,6 +96,28 @@ async fn append_streaming_agent_message_inner(
     if stream_key.trim().is_empty() {
         return Err("stream_key is empty".to_owned());
     }
+    if output_buffer_exists(pool, stream_key).await? {
+        if let Some((control_agent_id, run_id, work_item_id)) =
+            load_streaming_control_context(pool, stream_key).await?
+        {
+            return hold_streaming_public_output(
+                pool,
+                control_agent_id,
+                run_id,
+                work_item_id,
+                channel_id,
+                thread_root_id,
+                stream_key,
+                delta,
+                false,
+                PublishDecision::HoldStale {
+                    base_version: 0,
+                    current_version: 0,
+                },
+            )
+            .await;
+        }
+    }
     if delta.is_empty() {
         return ensure_streaming_agent_message(
             pool,
@@ -170,6 +196,35 @@ async fn append_streaming_agent_message_inner(
     )
     .await?;
 
+    if let Some((control_agent_id, run_id, work_item_id)) =
+        load_streaming_control_context(pool, stream_key).await?
+    {
+        let decision = can_publish_public_output(
+            pool,
+            control_agent_id,
+            channel_id,
+            thread_root_id,
+            work_item_id,
+            PublishActionKind::ReplyText,
+        )
+        .await?;
+        if !matches!(decision, PublishDecision::Allow) {
+            return hold_streaming_public_output(
+                pool,
+                control_agent_id,
+                run_id,
+                work_item_id,
+                channel_id,
+                thread_root_id,
+                stream_key,
+                delta,
+                false,
+                decision,
+            )
+            .await;
+        }
+    }
+
     let sender = sqlx::query("select display_name, role from agents where id = $1")
         .bind(agent_id)
         .fetch_one(pool)
@@ -245,6 +300,9 @@ pub(crate) async fn ensure_streaming_agent_message(
     if stream_key.trim().is_empty() {
         return Err("stream_key is empty".to_owned());
     }
+    if output_buffer_exists(pool, stream_key).await? {
+        return Ok(Uuid::new_v4());
+    }
 
     if let Some(existing) = sqlx::query_scalar("select id from messages where stream_key = $1")
         .bind(stream_key)
@@ -253,6 +311,35 @@ pub(crate) async fn ensure_streaming_agent_message(
         .map_err(to_string)?
     {
         return Ok(existing);
+    }
+
+    if let Some((control_agent_id, run_id, work_item_id)) =
+        load_streaming_control_context(pool, stream_key).await?
+    {
+        let decision = can_publish_public_output(
+            pool,
+            control_agent_id,
+            channel_id,
+            thread_root_id,
+            work_item_id,
+            PublishActionKind::ReplyText,
+        )
+        .await?;
+        if !matches!(decision, PublishDecision::Allow) {
+            return hold_streaming_public_output(
+                pool,
+                control_agent_id,
+                run_id,
+                work_item_id,
+                channel_id,
+                thread_root_id,
+                stream_key,
+                "",
+                false,
+                decision,
+            )
+            .await;
+        }
     }
 
     let sender = sqlx::query("select display_name, role from agents where id = $1")
@@ -464,6 +551,40 @@ async fn finish_streaming_agent_message_inner(
     delivery_state: &str,
     dispatch_mentions: bool,
 ) -> CommandResult<()> {
+    if output_buffer_exists(pool, stream_key).await? {
+        if let Some((agent_id, run_id, work_item_id)) =
+            load_streaming_control_context(pool, stream_key).await?
+        {
+            let row = sqlx::query(
+                "select channel_id, thread_root_id from agent_output_buffers where stream_key = $1",
+            )
+            .bind(stream_key)
+            .fetch_optional(pool)
+            .await
+            .map_err(to_string)?;
+            if let Some(row) = row {
+                let channel_id: Uuid = row.get("channel_id");
+                let thread_root_id: Option<Uuid> = row.get("thread_root_id");
+                let _ = hold_streaming_public_output(
+                    pool,
+                    agent_id,
+                    run_id,
+                    work_item_id,
+                    channel_id,
+                    thread_root_id,
+                    stream_key,
+                    "",
+                    true,
+                    PublishDecision::HoldStale {
+                        base_version: 0,
+                        current_version: 0,
+                    },
+                )
+                .await?;
+            }
+        }
+        return Ok(());
+    }
     if delivery_state != "streaming" {
         if let Some((agent_id, run_id, work_item_id)) =
             load_streaming_control_context(pool, stream_key).await?
@@ -505,6 +626,9 @@ async fn finish_streaming_agent_message_inner(
                 .map_err(to_string)?;
         if let Some(message_id) = message_id {
             if let Ok(message) = load_message(pool, message_id).await {
+                if delivery_state == "complete" {
+                    bump_thread_version(pool, message.channel_id, message.thread_root_id).await?;
+                }
                 let _ = notify_ui_message_upsert(pool, &message, "stream_finish").await;
             } else {
                 let _ = notify_ui_refresh(pool, "stream_finish").await;

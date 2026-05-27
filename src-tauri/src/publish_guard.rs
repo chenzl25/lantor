@@ -1,0 +1,701 @@
+use serde_json::{json, Value};
+use sqlx::{Row, SqlitePool};
+use uuid::Uuid;
+
+use crate::agent_routing::queue_agent_message_mentions;
+use crate::app::{to_string, CommandResult};
+use crate::events::{
+    activity::record_agent_activity,
+    control::{
+        handle_claimed_agent_event_json, handle_streaming_agent_event_json,
+        split_complete_streaming_agent_event_lines, split_terminal_streaming_agent_event_lines,
+        streaming_agent_event_is_visible_side_effect,
+    },
+};
+use crate::message_store::{insert_agent_message_with_options, load_message};
+use crate::ui_notifications::{
+    notify_ui_message_upsert, notify_ui_refresh, notify_ui_work_item_changed,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PublishActionKind {
+    ReplyText,
+    ChannelMessageCreate,
+    ArtifactCreate,
+    AttachmentCreate,
+    InternalControl,
+}
+
+impl PublishActionKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::ReplyText => "reply_text",
+            Self::ChannelMessageCreate => "channel_message_create",
+            Self::ArtifactCreate => "artifact_create",
+            Self::AttachmentCreate => "attachment_create",
+            Self::InternalControl => "internal_control",
+        }
+    }
+
+    pub(crate) fn is_visible(self) -> bool {
+        !matches!(self, Self::InternalControl)
+    }
+}
+
+pub(crate) fn control_action_kind_for_event_type(event_type: &str) -> PublishActionKind {
+    match event_type {
+        "channel_message_create" | "message" | "task_create" | "handoff_create" => {
+            PublishActionKind::ChannelMessageCreate
+        }
+        "artifact_create" => PublishActionKind::ArtifactCreate,
+        "attachment_create" => PublishActionKind::AttachmentCreate,
+        _ => PublishActionKind::InternalControl,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PublishDecision {
+    Allow,
+    HoldStale {
+        base_version: i64,
+        current_version: i64,
+    },
+    HoldNotOwner {
+        current_owner: Uuid,
+    },
+}
+
+impl PublishDecision {
+    pub(crate) fn reason(&self) -> Option<&'static str> {
+        match self {
+            Self::Allow => None,
+            Self::HoldStale { .. } => Some("stale_context"),
+            Self::HoldNotOwner { .. } => Some("not_owner"),
+        }
+    }
+}
+
+fn surface(channel_id: Uuid, thread_root_id: Option<Uuid>) -> (&'static str, Uuid) {
+    match thread_root_id {
+        Some(thread_root_id) => ("thread", thread_root_id),
+        None => ("channel", channel_id),
+    }
+}
+
+pub(crate) async fn current_thread_version(
+    pool: &SqlitePool,
+    channel_id: Uuid,
+    thread_root_id: Option<Uuid>,
+) -> CommandResult<i64> {
+    let (surface_kind, surface_id) = surface(channel_id, thread_root_id);
+    let version: Option<i64> = sqlx::query_scalar(
+        "select version from thread_versions where surface_kind = $1 and surface_id = $2",
+    )
+    .bind(surface_kind)
+    .bind(surface_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)?;
+    Ok(version.unwrap_or(0))
+}
+
+pub(crate) async fn bump_thread_version(
+    pool: &SqlitePool,
+    channel_id: Uuid,
+    thread_root_id: Option<Uuid>,
+) -> CommandResult<()> {
+    let (surface_kind, surface_id) = surface(channel_id, thread_root_id);
+    sqlx::query(
+        r#"
+        insert into thread_versions (surface_kind, surface_id, version)
+        values ($1, $2, 1)
+        on conflict(surface_kind, surface_id) do update
+        set version = version + 1,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        "#,
+    )
+    .bind(surface_kind)
+    .bind(surface_id)
+    .execute(pool)
+    .await
+    .map_err(to_string)?;
+    Ok(())
+}
+
+pub(crate) async fn inbox_payload_with_base_thread_version(
+    pool: &SqlitePool,
+    payload: &Value,
+    channel_id: Option<Uuid>,
+    thread_root_id: Option<Uuid>,
+) -> CommandResult<Value> {
+    let mut payload = payload.clone();
+    let Some(channel_id) = channel_id else {
+        return Ok(payload);
+    };
+    let version = current_thread_version(pool, channel_id, thread_root_id).await?;
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("base_thread_version".to_owned(), json!(version));
+    }
+    Ok(payload)
+}
+
+async fn work_item_base_thread_version(
+    pool: &SqlitePool,
+    work_item_id: Option<Uuid>,
+) -> CommandResult<Option<i64>> {
+    let Some(work_item_id) = work_item_id else {
+        return Ok(None);
+    };
+    let payload: Option<String> = sqlx::query_scalar(
+        r#"
+        select i.payload
+        from agent_inbox_items i
+        where i.work_item_id = $1
+        order by i.created_at asc
+        limit 1
+        "#,
+    )
+    .bind(work_item_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)?;
+    let Some(payload) = payload else {
+        return Ok(None);
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&payload) else {
+        return Ok(None);
+    };
+    Ok(value.get("base_thread_version").and_then(Value::as_i64))
+}
+
+async fn task_owner_for_thread(
+    pool: &SqlitePool,
+    thread_root_id: Option<Uuid>,
+) -> CommandResult<Option<Uuid>> {
+    let Some(thread_root_id) = thread_root_id else {
+        return Ok(None);
+    };
+    sqlx::query_scalar("select assignee_agent_id from tasks where message_id = $1")
+        .bind(thread_root_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(to_string)
+}
+
+pub(crate) async fn can_publish_public_output(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    channel_id: Uuid,
+    thread_root_id: Option<Uuid>,
+    work_item_id: Option<Uuid>,
+    action_kind: PublishActionKind,
+) -> CommandResult<PublishDecision> {
+    if !action_kind.is_visible() {
+        return Ok(PublishDecision::Allow);
+    }
+    if let Some(owner_id) = task_owner_for_thread(pool, thread_root_id).await? {
+        if owner_id != agent_id {
+            return Ok(PublishDecision::HoldNotOwner {
+                current_owner: owner_id,
+            });
+        }
+    }
+
+    let current_version = current_thread_version(pool, channel_id, thread_root_id).await?;
+    let Some(base_version) = work_item_base_thread_version(pool, work_item_id).await? else {
+        return Ok(PublishDecision::Allow);
+    };
+    if base_version < current_version {
+        return Ok(PublishDecision::HoldStale {
+            base_version,
+            current_version,
+        });
+    }
+    Ok(PublishDecision::Allow)
+}
+
+pub(crate) async fn run_work_item_id(
+    pool: &SqlitePool,
+    run_id: Uuid,
+) -> CommandResult<Option<Uuid>> {
+    sqlx::query_scalar("select work_item_id from agent_runs where id = $1")
+        .bind(run_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(to_string)
+        .map(|value| value.flatten())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn hold_visible_control_event(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    run_id: Uuid,
+    work_item_id: Option<Uuid>,
+    channel_id: Uuid,
+    thread_root_id: Option<Uuid>,
+    action_kind: PublishActionKind,
+    event_json: &str,
+    decision: PublishDecision,
+) -> CommandResult<String> {
+    let stream_key = format!("{run_id}:event:{}", Uuid::new_v4());
+    let reason = decision.reason().unwrap_or("stale_context");
+    let base_version = match decision {
+        PublishDecision::HoldStale { base_version, .. } => base_version,
+        _ => work_item_base_thread_version(pool, work_item_id)
+            .await?
+            .unwrap_or(0),
+    };
+    let current_version = current_thread_version(pool, channel_id, thread_root_id).await?;
+    sqlx::query(
+        r#"
+        insert into agent_output_buffers (
+            stream_key, agent_id, run_id, work_item_id, channel_id, thread_root_id,
+            reason, base_version, current_version, body, held_visible_events
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, '', $10)
+        "#,
+    )
+    .bind(&stream_key)
+    .bind(agent_id)
+    .bind(run_id)
+    .bind(work_item_id)
+    .bind(channel_id)
+    .bind(thread_root_id)
+    .bind(reason)
+    .bind(base_version)
+    .bind(current_version)
+    .bind(json!([event_json]).to_string())
+    .execute(pool)
+    .await
+    .map_err(to_string)?;
+    if let Some(work_item_id) = work_item_id {
+        sqlx::query(
+            "update agent_work_items set status = 'interrupted', updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where id = $1 and status not in ('cancelled', 'failed', 'done', 'silent')",
+        )
+        .bind(work_item_id)
+        .execute(pool)
+        .await
+        .map_err(to_string)?;
+        notify_ui_work_item_changed(pool, work_item_id, "work_item_interrupted").await;
+    }
+    let payload = json!({
+        "interrupted_action": "visible_control_event",
+        "reason": reason,
+        "draft_body": "",
+        "base_version": base_version,
+        "current_version": current_version,
+        "stream_key": stream_key,
+        "action_kind": action_kind.as_str(),
+        "held_visible_events": [event_json],
+        "allowed_actions": ["yield", "force_send"],
+    });
+    upsert_interrupted_action(
+        pool,
+        agent_id,
+        work_item_id,
+        channel_id,
+        thread_root_id,
+        &stream_key,
+        reason,
+        payload,
+    )
+    .await?;
+    record_agent_activity(
+        pool,
+        Some(agent_id),
+        Some(run_id),
+        "decision",
+        "Visible control event held",
+        json!({
+            "reason": reason,
+            "action_kind": action_kind.as_str(),
+            "stream_key": stream_key,
+        })
+        .to_string(),
+    )
+    .await?;
+    Ok(format!("{} held {stream_key}", action_kind.as_str()))
+}
+
+async fn parse_and_apply_buffer_control_events(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    run_id: Uuid,
+    body: &str,
+    terminal: bool,
+) -> CommandResult<(String, Vec<String>)> {
+    let (visible_body, event_jsons) = if terminal {
+        split_terminal_streaming_agent_event_lines(body)
+    } else {
+        split_complete_streaming_agent_event_lines(body)
+    };
+    let mut held_visible_events = Vec::new();
+    for event_json in event_jsons {
+        if streaming_agent_event_is_visible_side_effect(&event_json) {
+            held_visible_events.push(event_json);
+        } else {
+            handle_streaming_agent_event_json(pool, agent_id, run_id, &event_json).await?;
+        }
+    }
+    Ok((visible_body, held_visible_events))
+}
+
+async fn upsert_interrupted_action(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    work_item_id: Option<Uuid>,
+    channel_id: Uuid,
+    thread_root_id: Option<Uuid>,
+    stream_key: &str,
+    reason: &str,
+    payload: Value,
+) -> CommandResult<()> {
+    let title = match reason {
+        "not_owner" => "Public reply held because another agent owns this task",
+        _ => "Public reply held because the thread changed",
+    };
+    if let Some(existing_id) = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        select id
+        from agent_inbox_items
+        where agent_id = $1
+          and kind = 'interrupted_action'
+          and json_extract(payload, '$.stream_key') = $2
+          and state <> 'archived'
+        limit 1
+        "#,
+    )
+    .bind(agent_id)
+    .bind(stream_key)
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)?
+    {
+        sqlx::query(
+            r#"
+            update agent_inbox_items
+            set title = $2,
+                body_preview = $3,
+                payload = $4,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+            where id = $1
+            "#,
+        )
+        .bind(existing_id)
+        .bind(title)
+        .bind(reason)
+        .bind(payload.to_string())
+        .execute(pool)
+        .await
+        .map_err(to_string)?;
+        return Ok(());
+    }
+
+    sqlx::query(
+        r#"
+        insert into agent_inbox_items (
+            agent_id, channel_id, thread_root_id, kind, priority, state,
+            title, body_preview, payload, work_item_id
+        )
+        values ($1, $2, $3, 'interrupted_action', 95, 'unread', $4, $5, $6, $7)
+        "#,
+    )
+    .bind(agent_id)
+    .bind(channel_id)
+    .bind(thread_root_id)
+    .bind(title)
+    .bind(reason)
+    .bind(payload.to_string())
+    .bind(work_item_id)
+    .execute(pool)
+    .await
+    .map_err(to_string)?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn hold_streaming_public_output(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    run_id: Uuid,
+    work_item_id: Option<Uuid>,
+    channel_id: Uuid,
+    thread_root_id: Option<Uuid>,
+    stream_key: &str,
+    delta: &str,
+    terminal: bool,
+    decision: PublishDecision,
+) -> CommandResult<Uuid> {
+    let existing: Option<(String, String, String, i64, i64)> = sqlx::query_as(
+        "select body, held_visible_events, reason, base_version, current_version from agent_output_buffers where stream_key = $1",
+    )
+    .bind(stream_key)
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)?;
+    let existing_reason = existing.as_ref().map(|row| row.2.clone());
+    let existing_base_version = existing.as_ref().map(|row| row.3);
+    let existing_current_version = existing.as_ref().map(|row| row.4);
+    let reason = existing_reason
+        .as_deref()
+        .or_else(|| decision.reason())
+        .unwrap_or("stale_context");
+    let base_version = existing_base_version.unwrap_or(match decision {
+        PublishDecision::HoldStale { base_version, .. } => base_version,
+        _ => work_item_base_thread_version(pool, work_item_id)
+            .await?
+            .unwrap_or(0),
+    });
+    let current_version = existing_current_version
+        .unwrap_or(current_thread_version(pool, channel_id, thread_root_id).await?);
+
+    let (existing_body, existing_held_events) = existing
+        .map(|(body, events, _, _, _)| (body, events))
+        .unwrap_or_default();
+    let combined_body = format!("{existing_body}{delta}");
+    let (visible_body, mut held_visible_events) =
+        parse_and_apply_buffer_control_events(pool, agent_id, run_id, &combined_body, terminal)
+            .await?;
+    let mut previous_held_events =
+        serde_json::from_str::<Vec<String>>(&existing_held_events).unwrap_or_default();
+    previous_held_events.append(&mut held_visible_events);
+    let held_visible_events = previous_held_events;
+    let buffer_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        insert into agent_output_buffers (
+            stream_key, agent_id, run_id, work_item_id, channel_id, thread_root_id,
+            reason, base_version, current_version, body, held_visible_events
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        on conflict(stream_key) do update
+        set reason = excluded.reason,
+            current_version = excluded.current_version,
+            body = excluded.body,
+            held_visible_events = excluded.held_visible_events,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        "#,
+    )
+    .bind(stream_key)
+    .bind(agent_id)
+    .bind(run_id)
+    .bind(work_item_id)
+    .bind(channel_id)
+    .bind(thread_root_id)
+    .bind(reason)
+    .bind(base_version)
+    .bind(current_version)
+    .bind(&visible_body)
+    .bind(json!(held_visible_events).to_string())
+    .execute(pool)
+    .await
+    .map_err(to_string)?;
+
+    if let Some(work_item_id) = work_item_id {
+        sqlx::query(
+            r#"
+            update agent_work_items
+            set status = 'interrupted',
+                updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+            where id = $1
+              and status not in ('cancelled', 'failed', 'done', 'silent')
+            "#,
+        )
+        .bind(work_item_id)
+        .execute(pool)
+        .await
+        .map_err(to_string)?;
+        notify_ui_work_item_changed(pool, work_item_id, "work_item_interrupted").await;
+    }
+
+    let payload = json!({
+        "interrupted_action": "public_reply",
+        "reason": reason,
+        "draft_body": visible_body,
+        "base_version": base_version,
+        "current_version": current_version,
+        "stream_key": stream_key,
+        "action_kind": PublishActionKind::ReplyText.as_str(),
+        "held_visible_events": held_visible_events,
+        "allowed_actions": ["revise", "yield", "force_send"],
+    });
+    upsert_interrupted_action(
+        pool,
+        agent_id,
+        work_item_id,
+        channel_id,
+        thread_root_id,
+        stream_key,
+        reason,
+        payload,
+    )
+    .await?;
+    record_agent_activity(
+        pool,
+        Some(agent_id),
+        Some(run_id),
+        "decision",
+        "Public reply held",
+        json!({
+            "reason": reason,
+            "work_item_id": work_item_id,
+            "stream_key": stream_key,
+            "base_version": base_version,
+            "current_version": current_version,
+        })
+        .to_string(),
+    )
+    .await?;
+    Ok(buffer_id)
+}
+
+pub(crate) async fn output_buffer_exists(
+    pool: &SqlitePool,
+    stream_key: &str,
+) -> CommandResult<bool> {
+    let exists: bool = sqlx::query_scalar(
+        "select exists(select 1 from agent_output_buffers where stream_key = $1 and state = 'held')",
+    )
+    .bind(stream_key)
+    .fetch_one(pool)
+    .await
+    .map_err(to_string)?;
+    Ok(exists)
+}
+
+pub(crate) async fn resolve_interrupted_action(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    run_id: Uuid,
+    stream_key: &str,
+    action: &str,
+) -> CommandResult<String> {
+    let Some(row) = sqlx::query(
+        r#"
+        select work_item_id, channel_id, thread_root_id, body, held_visible_events
+        from agent_output_buffers
+        where stream_key = $1 and agent_id = $2 and state = 'held'
+        "#,
+    )
+    .bind(stream_key)
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)?
+    else {
+        return Err("interrupted action buffer not found".to_owned());
+    };
+    let work_item_id: Option<Uuid> = row.get("work_item_id");
+    let channel_id: Uuid = row.get("channel_id");
+    let thread_root_id: Option<Uuid> = row.get("thread_root_id");
+    let body: String = row.get("body");
+    let held_visible_events: String = row.get("held_visible_events");
+
+    match action {
+        "yield" => {
+            sqlx::query(
+                "update agent_output_buffers set state = 'yielded', updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where stream_key = $1",
+            )
+            .bind(stream_key)
+            .execute(pool)
+            .await
+            .map_err(to_string)?;
+            if let Some(work_item_id) = work_item_id {
+                sqlx::query(
+                    r#"
+                    update agent_work_items
+                    set status = 'silent',
+                        completed_at = coalesce(completed_at, strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                        updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+                    where id = $1
+                    "#,
+                )
+                .bind(work_item_id)
+                .execute(pool)
+                .await
+                .map_err(to_string)?;
+                notify_ui_work_item_changed(pool, work_item_id, "interrupted_action_yielded").await;
+            }
+        }
+        "force_send" | "send_as_is" => {
+            if !body.trim().is_empty() {
+                let msg_id = insert_agent_message_with_options(
+                    pool,
+                    agent_id,
+                    channel_id,
+                    thread_root_id,
+                    body.trim(),
+                    false,
+                    false,
+                )
+                .await?;
+                queue_agent_message_mentions(pool, msg_id).await?;
+                if let Ok(message) = load_message(pool, msg_id).await {
+                    let _ =
+                        notify_ui_message_upsert(pool, &message, "interrupted_force_send").await;
+                } else {
+                    let _ = notify_ui_refresh(pool, "interrupted_force_send").await;
+                }
+            }
+            for event_json in
+                serde_json::from_str::<Vec<String>>(&held_visible_events).unwrap_or_default()
+            {
+                handle_claimed_agent_event_json(pool, agent_id, run_id, &event_json).await?;
+            }
+            sqlx::query(
+                "update agent_output_buffers set state = 'force_sent', updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where stream_key = $1",
+            )
+            .bind(stream_key)
+            .execute(pool)
+            .await
+            .map_err(to_string)?;
+            if let Some(work_item_id) = work_item_id {
+                sqlx::query(
+                    r#"
+                    update agent_work_items
+                    set status = 'done',
+                        completed_at = coalesce(completed_at, strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                        updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+                    where id = $1
+                    "#,
+                )
+                .bind(work_item_id)
+                .execute(pool)
+                .await
+                .map_err(to_string)?;
+                notify_ui_work_item_changed(pool, work_item_id, "interrupted_action_force_sent")
+                    .await;
+            }
+        }
+        other => return Err(format!("unsupported interrupted action resolve: {other}")),
+    }
+
+    sqlx::query(
+        r#"
+        update agent_inbox_items
+        set state = 'archived',
+            archived_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where agent_id = $1
+          and kind = 'interrupted_action'
+          and json_extract(payload, '$.stream_key') = $2
+          and state <> 'archived'
+        "#,
+    )
+    .bind(agent_id)
+    .bind(stream_key)
+    .execute(pool)
+    .await
+    .map_err(to_string)?;
+    record_agent_activity(
+        pool,
+        Some(agent_id),
+        Some(run_id),
+        "decision",
+        "Interrupted action resolved",
+        json!({ "stream_key": stream_key, "action": action }).to_string(),
+    )
+    .await?;
+    Ok(format!("interrupted action {action} accepted"))
+}
