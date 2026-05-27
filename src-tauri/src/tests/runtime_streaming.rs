@@ -476,6 +476,188 @@ async fn held_visible_side_effects_use_source_surface_freshness() {
 }
 
 #[tokio::test]
+async fn side_effect_only_interruption_rejects_revise_and_preserves_events() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "reject-side-effect-revise-agent").await?;
+        let channel_id = insert_test_channel(&pool, "reject-side-effect-revise-channel").await?;
+        sqlx::query("insert into channel_members (channel_id, agent_id) values ($1, $2)")
+            .bind(channel_id)
+            .bind(agent_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let (work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        let event = json!({
+            "type": "channel_message_create",
+            "channel_id": channel_id,
+            "body": "side effect should stay held"
+        })
+        .to_string();
+
+        handle_streaming_agent_event_json(&pool, agent_id, run_id, &event).await?;
+
+        let (stream_key, body, held_events_before, state_before): (String, String, String, String) =
+            sqlx::query_as(
+                "select stream_key, body, held_visible_events, state from agent_output_buffers where run_id = $1",
+            )
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        assert_eq!(body, "");
+        assert_eq!(state_before, "held");
+        assert!(held_events_before.contains("side effect should stay held"));
+
+        let allowed_actions: String = sqlx::query_scalar(
+            "select json_extract(payload, '$.allowed_actions') from agent_inbox_items where kind = 'interrupted_action' and work_item_id = $1",
+        )
+        .bind(work_item_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(allowed_actions, r#"["yield","force_send"]"#);
+
+        let error = crate::publish_guard::resolve_interrupted_action(
+            &pool,
+            agent_id,
+            run_id,
+            &stream_key,
+            "revise",
+        )
+        .await
+        .expect_err("side-effect-only revise should be rejected");
+        assert!(error.contains("held reply body"));
+
+        let (state_after, body_after, held_events_after): (String, String, String) =
+            sqlx::query_as(
+                "select state, body, held_visible_events from agent_output_buffers where stream_key = $1",
+            )
+            .bind(&stream_key)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        assert_eq!(state_after, "held");
+        assert_eq!(body_after, "");
+        assert_eq!(held_events_after, held_events_before);
+
+        let work_status: String =
+            sqlx::query_scalar("select status from agent_work_items where id = $1")
+                .bind(work_item_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(work_status, "interrupted");
+        let open_items: i64 = sqlx::query_scalar(
+            "select count(*) from agent_inbox_items where kind = 'interrupted_action' and work_item_id = $1 and state <> 'archived'",
+        )
+        .bind(work_item_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(open_items, 1);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn side_effect_only_yield_and_force_send_still_work() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "side-effect-actions-agent").await?;
+        let channel_id = insert_test_channel(&pool, "side-effect-actions-channel").await?;
+        sqlx::query("insert into channel_members (channel_id, agent_id) values ($1, $2)")
+            .bind(channel_id)
+            .bind(agent_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        bump_thread_version(&pool, channel_id, None).await?;
+
+        let (yield_work_item_id, yield_run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        let yield_event = json!({
+            "type": "channel_message_create",
+            "channel_id": channel_id,
+            "body": "yielded side effect"
+        })
+        .to_string();
+        handle_streaming_agent_event_json(&pool, agent_id, yield_run_id, &yield_event).await?;
+        let yield_stream_key: String =
+            sqlx::query_scalar("select stream_key from agent_output_buffers where run_id = $1")
+                .bind(yield_run_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        crate::publish_guard::resolve_interrupted_action(
+            &pool,
+            agent_id,
+            yield_run_id,
+            &yield_stream_key,
+            "yield",
+        )
+        .await?;
+        let yielded_side_effects: i64 =
+            sqlx::query_scalar("select count(*) from messages where body = 'yielded side effect'")
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(yielded_side_effects, 0);
+        let yield_status: String =
+            sqlx::query_scalar("select status from agent_work_items where id = $1")
+                .bind(yield_work_item_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(yield_status, "silent");
+
+        let (_force_work_item_id, force_run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        let force_event = json!({
+            "type": "channel_message_create",
+            "channel_id": channel_id,
+            "body": "forced side effect only"
+        })
+        .to_string();
+        handle_streaming_agent_event_json(&pool, agent_id, force_run_id, &force_event).await?;
+        let force_stream_key: String =
+            sqlx::query_scalar("select stream_key from agent_output_buffers where run_id = $1")
+                .bind(force_run_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        crate::publish_guard::resolve_interrupted_action(
+            &pool,
+            agent_id,
+            force_run_id,
+            &force_stream_key,
+            "force_send",
+        )
+        .await?;
+        let forced_side_effects: i64 = sqlx::query_scalar(
+            "select count(*) from messages where body = 'forced side effect only'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(forced_side_effects, 1);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn target_surface_change_does_not_hold_cross_surface_side_effect() {
     let Some((pool, schema)) = test_pool().await else {
         return;

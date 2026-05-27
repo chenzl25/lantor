@@ -159,6 +159,49 @@ fn interrupted_action_context_exposes_payload_and_resolution_protocol() {
     assert!(context.contains("then continue with the revised visible reply"));
 }
 
+#[test]
+fn side_effect_only_interrupted_action_context_omits_revise_protocol() {
+    let stream_key = format!("{}:event-1", Uuid::new_v4());
+    let context = inbox_wake_context(
+        &[InboxWakeItem {
+            id: Uuid::new_v4(),
+            channel_id: Some(Uuid::new_v4()),
+            channel_name: Some("coordination".to_owned()),
+            channel_kind: Some("channel".to_owned()),
+            thread_root_id: Some(Uuid::new_v4()),
+            source_message_id: None,
+            task_id: None,
+            kind: "interrupted_action".to_owned(),
+            priority: 95,
+            title: "Visible control event held because the thread changed".to_owned(),
+            body_preview: "stale_context".to_owned(),
+            payload: json!({
+                "reason": "stale_context",
+                "stream_key": stream_key,
+                "action_kind": "channel_message_create",
+                "base_version": 1,
+                "current_version": 2,
+                "base_thread_version": 2,
+                "draft_body": "",
+                "allowed_actions": ["yield", "force_send"],
+                "held_visible_events": ["{\"type\":\"channel_message_create\"}"]
+            })
+            .to_string(),
+            message_created_at: None,
+            sender_name: None,
+            sender_role: None,
+        }],
+        &[],
+    );
+
+    assert!(context.contains("decision: choose one of yield, force_send."));
+    assert!(context.contains("allowed_actions: [\"yield\",\"force_send\"]"));
+    assert!(context.contains("held_visible_events_count: 1"));
+    assert!(!context.contains("choose one of revise"));
+    assert!(!context.contains("action\":\"revise\""));
+    assert!(!context.contains("then continue with the revised visible reply"));
+}
+
 #[tokio::test]
 async fn inbox_wake_creates_work_items_without_serializing_unread_items() {
     let Some((pool, schema)) = test_pool().await else {

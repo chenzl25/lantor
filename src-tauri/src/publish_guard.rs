@@ -754,6 +754,12 @@ pub(crate) async fn resolve_interrupted_action(
             }
         }
         "revise" => {
+            if body.trim().is_empty() {
+                return Err(
+                    "revise is only allowed for interrupted actions with a held reply body"
+                        .to_owned(),
+                );
+            }
             repin_work_item_base_thread_version(pool, work_item_id, current_version).await?;
             sqlx::query(
                 "update agent_output_buffers set state = 'revised', body = '', held_visible_events = '[]', updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where stream_key = $1",

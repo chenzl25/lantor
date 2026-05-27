@@ -94,9 +94,15 @@ impl InboxWakeItem {
         let Ok(payload) = serde_json::from_str::<Value>(&self.payload) else {
             return Vec::new();
         };
+        let allowed_actions = payload
+            .get("allowed_actions")
+            .and_then(Value::as_array)
+            .map(|actions| actions.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+            .unwrap_or_else(|| vec!["yield", "force_send"]);
+        let can_revise = allowed_actions.contains(&"revise");
         let mut lines = vec![
             "   interrupted_action: review the held public output before replying.".to_owned(),
-            "   decision: choose one of revise, yield, or force_send.".to_owned(),
+            format!("   decision: choose one of {}.", allowed_actions.join(", ")),
         ];
         for key in [
             "reason",
@@ -126,7 +132,9 @@ impl InboxWakeItem {
             lines.push(format!("   held_visible_events_count: {}", events.len()));
         }
         lines.push("   protocol: for yield or force_send, emit LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"<stream_key>\",\"action\":\"yield|force_send\"} and do not also post a normal reply.".to_owned());
-        lines.push("   protocol: for revise, emit LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"<stream_key>\",\"action\":\"revise\"}, then continue with the revised visible reply in this same turn.".to_owned());
+        if can_revise {
+            lines.push("   protocol: for revise, emit LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"<stream_key>\",\"action\":\"revise\"}, then continue with the revised visible reply in this same turn.".to_owned());
+        }
         lines
     }
 }
