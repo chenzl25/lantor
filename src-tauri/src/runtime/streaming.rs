@@ -97,6 +97,9 @@ async fn append_streaming_agent_message_inner(
     if stream_key.trim().is_empty() {
         return Err("stream_key is empty".to_owned());
     }
+    if let Some(silent_id) = consume_silent_streaming_agent_delta(pool, stream_key, delta).await? {
+        return Ok(silent_id);
+    }
     if output_buffer_exists(pool, stream_key).await? {
         if let Some((control_agent_id, run_id, work_item_id)) =
             load_streaming_control_context(pool, stream_key).await?
@@ -317,6 +320,24 @@ async fn append_streaming_agent_message_inner(
     Ok(message_id)
 }
 
+async fn consume_silent_streaming_agent_delta(
+    pool: &SqlitePool,
+    stream_key: &str,
+    delta: &str,
+) -> CommandResult<Option<Uuid>> {
+    let Some(reason) = silent_reply_reason(delta) else {
+        return Ok(None);
+    };
+    let Some((control_agent_id, run_id, _work_item_id)) =
+        load_streaming_control_context(pool, stream_key).await?
+    else {
+        return Ok(None);
+    };
+
+    mark_run_work_item_silent(pool, control_agent_id, run_id, &reason).await?;
+    Ok(Some(Uuid::new_v4()))
+}
+
 async fn consume_control_only_streaming_agent_delta(
     pool: &SqlitePool,
     stream_key: &str,
@@ -499,6 +520,9 @@ pub(crate) async fn streaming_message_body_is_empty(
     pool: &SqlitePool,
     stream_key: &str,
 ) -> CommandResult<bool> {
+    if output_buffer_exists(pool, stream_key).await? {
+        return Ok(false);
+    }
     let body: Option<String> =
         sqlx::query_scalar("select body from messages where stream_key = $1")
             .bind(stream_key)

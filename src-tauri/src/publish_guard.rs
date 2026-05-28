@@ -659,7 +659,11 @@ pub(crate) async fn hold_streaming_public_output(
     let (existing_body, existing_held_events) = existing
         .map(|(body, events, _, _, _)| (body, events))
         .unwrap_or_default();
-    let combined_body = format!("{existing_body}{delta}");
+    let combined_body = if !delta.is_empty() && existing_body == delta {
+        existing_body
+    } else {
+        format!("{existing_body}{delta}")
+    };
     let (visible_body, mut held_visible_events) =
         parse_and_apply_buffer_control_events(pool, agent_id, run_id, &combined_body, terminal)
             .await?;
@@ -779,6 +783,33 @@ pub(crate) async fn resolve_interrupted_action(
     stream_key: &str,
     action: &str,
 ) -> CommandResult<String> {
+    let requested_terminal_state = match action {
+        "yield" => Some("yielded"),
+        "revise" => Some("revised"),
+        "force_send" | "send_as_is" => Some("force_sent"),
+        _ => None,
+    };
+    if let Some(state) = sqlx::query_scalar::<_, String>(
+        r#"
+        select state
+        from agent_output_buffers
+        where stream_key = $1 and agent_id = $2 and state in ('yielded', 'revised', 'force_sent')
+        "#,
+    )
+    .bind(stream_key)
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)?
+    {
+        if requested_terminal_state == Some(state.as_str()) {
+            return Ok(format!("interrupted action already resolved as {state}"));
+        }
+        return Err(format!(
+            "interrupted action already resolved as {state}; cannot apply action '{action}'"
+        ));
+    }
+
     let Some(row) = sqlx::query(
         r#"
         select work_item_id, channel_id, thread_root_id, body, held_visible_events, current_version
