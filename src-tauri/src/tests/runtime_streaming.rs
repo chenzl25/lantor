@@ -324,6 +324,53 @@ async fn interrupted_action_revise_allows_revised_reply_on_same_stream_key() {
 }
 
 #[tokio::test]
+async fn streaming_placeholder_creation_does_not_bump_thread_version() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "placeholder-version-agent").await?;
+        let channel_id = insert_test_channel(&pool, "placeholder-version-channel").await?;
+        let stream_key = "placeholder-version-stream";
+
+        ensure_streaming_agent_message(&pool, agent_id, channel_id, None, stream_key).await?;
+
+        assert_eq!(
+            current_thread_version(&pool, channel_id, None).await?,
+            0,
+            "streaming placeholder creation is framework state and must not advance publish freshness"
+        );
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn system_message_does_not_bump_thread_version() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let channel_id = insert_test_channel(&pool, "system-version-channel").await?;
+
+        crate::ui_notifications::insert_system_message(&pool, channel_id, None, "patrol reminder")
+            .await?;
+
+        assert_eq!(
+            current_thread_version(&pool, channel_id, None).await?,
+            0,
+            "framework/system messages must not make an agent's active context stale"
+        );
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn interrupted_action_is_redispatched_as_new_inbox_wake() {
     let Some((pool, schema)) = test_pool().await else {
         return;
