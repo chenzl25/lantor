@@ -324,6 +324,181 @@ async fn interrupted_action_revise_allows_revised_reply_on_same_stream_key() {
 }
 
 #[tokio::test]
+async fn control_only_interrupted_action_resolve_bypasses_reply_freshness_gate() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "control-resolve-agent").await?;
+        let channel_id = insert_test_channel(&pool, "control-resolve-channel").await?;
+
+        let (_held_work_item_id, held_run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        let held_stream_key = format!("{held_run_id}:held-reply");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &held_stream_key,
+            "stale visible reply",
+        )
+        .await?;
+
+        let held_buffers: i64 = sqlx::query_scalar(
+            "select count(*) from agent_output_buffers where stream_key = $1 and state = 'held'",
+        )
+        .bind(&held_stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(held_buffers, 1);
+
+        let (_resolve_work_item_id, resolve_run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 1).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        let resolve_stream_key = format!("{resolve_run_id}:resolve-control");
+        let event = json!({
+            "type": "interrupted_action_resolve",
+            "stream_key": held_stream_key,
+            "action": "yield"
+        });
+        let body = format!("LANTOR_EVENT {event}\n");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &resolve_stream_key,
+            &body,
+        )
+        .await?;
+
+        let held_state: String =
+            sqlx::query_scalar("select state from agent_output_buffers where stream_key = $1")
+                .bind(&held_stream_key)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(
+            held_state, "yielded",
+            "the control-only resolve event should execute instead of being held behind the reply gate"
+        );
+
+        let resolve_buffers: i64 =
+            sqlx::query_scalar("select count(*) from agent_output_buffers where stream_key = $1")
+                .bind(&resolve_stream_key)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(
+            resolve_buffers, 0,
+            "a control-only resolve event must not create a second held buffer"
+        );
+
+        let resolve_messages: i64 =
+            sqlx::query_scalar("select count(*) from messages where stream_key = $1")
+                .bind(&resolve_stream_key)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(
+            resolve_messages, 0,
+            "control-only output should not create a visible streaming message"
+        );
+
+        let active_interrupted_items: i64 = sqlx::query_scalar(
+            "select count(*) from agent_inbox_items where kind = 'interrupted_action' and state <> 'archived'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(active_interrupted_items, 0);
+
+        let resolve_activity: i64 = sqlx::query_scalar(
+            "select count(*) from agent_activities where run_id = $1 and title = 'Interrupted action resolved'",
+        )
+        .bind(resolve_run_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(resolve_activity, 1);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn control_only_activity_bypasses_reply_freshness_gate() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "control-activity-agent").await?;
+        let channel_id = insert_test_channel(&pool, "control-activity-channel").await?;
+        let (_work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        let stream_key = format!("{run_id}:activity-control");
+        let event = json!({
+            "type": "activity",
+            "kind": "thinking",
+            "title": "Control-only activity",
+            "detail": "should execute even when the reply surface is stale"
+        });
+        let body = format!("LANTOR_EVENT {event}\n");
+
+        append_streaming_agent_message(&pool, agent_id, channel_id, None, &stream_key, &body)
+            .await?;
+
+        let activity_count: i64 = sqlx::query_scalar(
+            "select count(*) from agent_activities where run_id = $1 and title = 'Control-only activity'",
+        )
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(activity_count, 1);
+
+        let buffers: i64 =
+            sqlx::query_scalar("select count(*) from agent_output_buffers where stream_key = $1")
+                .bind(&stream_key)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(
+            buffers, 0,
+            "non-visible control-only events should not be held as public replies"
+        );
+
+        let messages: i64 = sqlx::query_scalar("select count(*) from messages where stream_key = $1")
+            .bind(&stream_key)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        assert_eq!(
+            messages, 0,
+            "non-visible control-only events should not create visible messages"
+        );
+
+        assert_eq!(
+            current_thread_version(&pool, channel_id, None).await?,
+            1,
+            "executing non-visible control-only events must not bump thread freshness"
+        );
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn streaming_placeholder_creation_does_not_bump_thread_version() {
     let Some((pool, schema)) = test_pool().await else {
         return;
