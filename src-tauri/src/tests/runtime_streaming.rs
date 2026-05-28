@@ -324,6 +324,144 @@ async fn interrupted_action_revise_allows_revised_reply_on_same_stream_key() {
 }
 
 #[tokio::test]
+async fn interrupted_action_is_redispatched_as_new_inbox_wake() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "redispatch-held-agent").await?;
+        let channel_id = insert_test_channel(&pool, "redispatch-held-channel").await?;
+        let (work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        let stream_key = format!("{run_id}:claude-assistant");
+
+        append_streaming_agent_message(&pool, agent_id, channel_id, None, &stream_key, "Held")
+            .await?;
+
+        let original_status: String =
+            sqlx::query_scalar("select status from agent_work_items where id = $1")
+                .bind(work_item_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(original_status, "interrupted");
+
+        let (redispatch_work_item_id, inbox_state): (Uuid, String) = sqlx::query_as(
+            r#"
+            select work_item_id, state
+            from agent_inbox_items
+            where kind = 'interrupted_action'
+              and json_extract(payload, '$.stream_key') = $1
+              and state <> 'archived'
+            "#,
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_ne!(
+            redispatch_work_item_id, work_item_id,
+            "a held output must be redispatched as a fresh inbox wake, not left attached to the interrupted work item"
+        );
+        assert_eq!(
+            inbox_state, "processing",
+            "the interrupted_action item should be claimed by the redispatch work item"
+        );
+
+        let start_commands: i64 = sqlx::query_scalar(
+            r#"
+            select count(*)
+            from supervisor_commands
+            where command_type = 'start_agent'
+              and work_item_id = $1
+              and status in ('pending', 'running')
+            "#,
+        )
+        .bind(redispatch_work_item_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            start_commands, 1,
+            "redispatched interrupted_action should wake the agent for re-decision"
+        );
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn completed_reply_repins_base_version_before_followup_visible_event() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "self-publish-agent").await?;
+        let channel_id = insert_test_channel(&pool, "self-publish-channel").await?;
+        sqlx::query("insert into channel_members (channel_id, agent_id) values ($1, $2)")
+            .bind(channel_id)
+            .bind(agent_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let (_work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        let stream_key = format!("{run_id}:assistant-reply");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "Final answer",
+        )
+        .await?;
+        finish_streaming_agent_message(&pool, &stream_key, "complete").await?;
+        assert_eq!(
+            current_thread_version(&pool, channel_id, None).await?,
+            1,
+            "completed visible reply should still advance thread freshness"
+        );
+
+        let event = json!({
+            "type": "channel_message_create",
+            "channel_id": channel_id,
+            "body": "follow-up visible side effect"
+        })
+        .to_string();
+        handle_streaming_agent_event_json(&pool, agent_id, run_id, &event).await?;
+
+        let posted_side_effects: i64 = sqlx::query_scalar(
+            "select count(*) from messages where channel_id = $1 and body = 'follow-up visible side effect'",
+        )
+        .bind(channel_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            posted_side_effects, 1,
+            "a run's own completed reply must not make its later visible output stale"
+        );
+
+        let interrupted_items: i64 = sqlx::query_scalar(
+            "select count(*) from agent_inbox_items where kind = 'interrupted_action' and state <> 'archived'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(interrupted_items, 0);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn held_visible_preserves_internal_control_events() {
     let Some((pool, schema)) = test_pool().await else {
         return;
