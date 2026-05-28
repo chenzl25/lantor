@@ -15,7 +15,8 @@ use crate::events::{
 use crate::message_store::load_message;
 use crate::publish_guard::{
     bump_thread_version, can_publish_public_output, hold_streaming_public_output,
-    output_buffer_exists, PublishActionKind, PublishDecision,
+    output_buffer_exists, repin_run_work_item_base_thread_version_for_surface, PublishActionKind,
+    PublishDecision,
 };
 use crate::ui_notifications::{
     notify_ui_message_delete, notify_ui_message_delta, notify_ui_message_upsert, notify_ui_refresh,
@@ -183,6 +184,15 @@ async fn append_streaming_agent_message_inner(
         }
         if truncated && complete_on_truncation {
             bump_thread_version(pool, channel_id, thread_root_id).await?;
+            if let Some((_, run_id, _)) = load_streaming_control_context(pool, stream_key).await? {
+                repin_run_work_item_base_thread_version_for_surface(
+                    pool,
+                    run_id,
+                    channel_id,
+                    thread_root_id,
+                )
+                .await?;
+            }
             queue_agent_message_mentions(pool, message_id).await?;
         }
         return Ok(message_id);
@@ -287,6 +297,15 @@ async fn append_streaming_agent_message_inner(
     }
     if truncated && complete_on_truncation {
         bump_thread_version(pool, channel_id, thread_root_id).await?;
+        if let Some((_, run_id, _)) = load_streaming_control_context(pool, stream_key).await? {
+            repin_run_work_item_base_thread_version_for_surface(
+                pool,
+                run_id,
+                channel_id,
+                thread_root_id,
+            )
+            .await?;
+        }
         queue_agent_message_mentions(pool, message_id).await?;
     }
     Ok(message_id)
@@ -630,6 +649,17 @@ async fn finish_streaming_agent_message_inner(
             if let Ok(message) = load_message(pool, message_id).await {
                 if delivery_state == "complete" {
                     bump_thread_version(pool, message.channel_id, message.thread_root_id).await?;
+                    if let Some((_, run_id, _)) =
+                        load_streaming_control_context(pool, stream_key).await?
+                    {
+                        repin_run_work_item_base_thread_version_for_surface(
+                            pool,
+                            run_id,
+                            message.channel_id,
+                            message.thread_root_id,
+                        )
+                        .await?;
+                    }
                 }
                 let _ = notify_ui_message_upsert(pool, &message, "stream_finish").await;
             } else {

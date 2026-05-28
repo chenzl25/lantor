@@ -26,7 +26,8 @@ use crate::message_store::{
 };
 use crate::publish_guard::{
     can_publish_public_output, control_action_kind_for_event_type, hold_visible_control_event,
-    resolve_interrupted_action, run_work_item_id, work_item_public_surface, PublishDecision,
+    repin_run_work_item_base_thread_version_for_surface, resolve_interrupted_action,
+    run_work_item_id, work_item_public_surface, PublishDecision,
 };
 use crate::runtime::streaming::mark_run_work_item_silent;
 use crate::task_messages::create_agent_task_thread;
@@ -484,6 +485,7 @@ pub(crate) async fn handle_streaming_agent_event_json(
             if !claim_agent_event(pool, run_id, json).await? {
                 return Ok(());
             }
+            let should_repin_after_accept = streaming_agent_event_is_visible_side_effect(json);
             if let Some(note) =
                 maybe_hold_visible_streaming_event(pool, agent_id, run_id, json, &event).await?
             {
@@ -501,6 +503,15 @@ pub(crate) async fn handle_streaming_agent_event_json(
             }
             match handle_agent_event(pool, agent_id, run_id, event).await {
                 Ok(note) => {
+                    if should_repin_after_accept {
+                        repin_run_work_item_base_thread_version_for_surface(
+                            pool,
+                            run_id,
+                            Uuid::nil(),
+                            None,
+                        )
+                        .await?;
+                    }
                     append_run_log(pool, run_id, format!("[stream-event] {note}\n")).await?;
                     record_agent_activity(
                         pool,

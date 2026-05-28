@@ -2,6 +2,7 @@ use serde_json::{json, Value};
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
+use crate::agent_inbox_wake::ensure_agent_inbox_wake_work_item;
 use crate::agent_routing::queue_agent_message_mentions;
 use crate::app::{to_string, CommandResult};
 use crate::events::{
@@ -199,26 +200,23 @@ async fn work_item_base_thread_version(
     let Some(work_item_id) = work_item_id else {
         return Ok(None);
     };
-    let payload: Option<String> = sqlx::query_scalar(
+    let payloads: Vec<String> = sqlx::query_scalar(
         r#"
         select i.payload
         from agent_inbox_items i
         where i.work_item_id = $1
         order by i.created_at asc
-        limit 1
         "#,
     )
     .bind(work_item_id)
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await
     .map_err(to_string)?;
-    let Some(payload) = payload else {
-        return Ok(None);
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&payload) else {
-        return Ok(None);
-    };
-    Ok(value.get("base_thread_version").and_then(Value::as_i64))
+    Ok(payloads
+        .iter()
+        .filter_map(|payload| serde_json::from_str::<Value>(payload).ok())
+        .filter_map(|value| value.get("base_thread_version").and_then(Value::as_i64))
+        .max())
 }
 
 async fn repin_work_item_base_thread_version(
@@ -243,6 +241,23 @@ async fn repin_work_item_base_thread_version(
     .await
     .map_err(to_string)?;
     Ok(())
+}
+
+pub(crate) async fn repin_run_work_item_base_thread_version_for_surface(
+    pool: &SqlitePool,
+    run_id: Uuid,
+    fallback_channel_id: Uuid,
+    fallback_thread_root_id: Option<Uuid>,
+) -> CommandResult<()> {
+    let work_item_id = run_work_item_id(pool, run_id).await?;
+    let Some(work_item_id) = work_item_id else {
+        return Ok(());
+    };
+    let (channel_id, thread_root_id) = work_item_public_surface(pool, Some(work_item_id))
+        .await?
+        .unwrap_or((fallback_channel_id, fallback_thread_root_id));
+    let current_version = current_thread_version(pool, channel_id, thread_root_id).await?;
+    repin_work_item_base_thread_version(pool, Some(work_item_id), current_version).await
 }
 
 pub(crate) async fn work_item_public_surface(
@@ -517,7 +532,7 @@ async fn parse_and_apply_buffer_control_events(
 async fn upsert_interrupted_action(
     pool: &SqlitePool,
     agent_id: Uuid,
-    work_item_id: Option<Uuid>,
+    _work_item_id: Option<Uuid>,
     channel_id: Uuid,
     thread_root_id: Option<Uuid>,
     stream_key: &str,
@@ -551,6 +566,9 @@ async fn upsert_interrupted_action(
             set title = $2,
                 body_preview = $3,
                 payload = $4,
+                work_item_id = null,
+                state = 'unread',
+                archived_at = null,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
             where id = $1
             "#,
@@ -562,6 +580,7 @@ async fn upsert_interrupted_action(
         .execute(pool)
         .await
         .map_err(to_string)?;
+        let _ = Box::pin(ensure_agent_inbox_wake_work_item(pool, agent_id)).await?;
         return Ok(());
     }
 
@@ -569,9 +588,9 @@ async fn upsert_interrupted_action(
         r#"
         insert into agent_inbox_items (
             agent_id, channel_id, thread_root_id, kind, priority, state,
-            title, body_preview, payload, work_item_id
+            title, body_preview, payload
         )
-        values ($1, $2, $3, 'interrupted_action', 95, 'unread', $4, $5, $6, $7)
+        values ($1, $2, $3, 'interrupted_action', 95, 'unread', $4, $5, $6)
         "#,
     )
     .bind(agent_id)
@@ -580,10 +599,10 @@ async fn upsert_interrupted_action(
     .bind(title)
     .bind(reason)
     .bind(payload.to_string())
-    .bind(work_item_id)
     .execute(pool)
     .await
     .map_err(to_string)?;
+    let _ = Box::pin(ensure_agent_inbox_wake_work_item(pool, agent_id)).await?;
     Ok(())
 }
 
