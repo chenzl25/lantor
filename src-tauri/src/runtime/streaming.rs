@@ -14,9 +14,9 @@ use crate::events::{
 };
 use crate::message_store::load_message;
 use crate::publish_guard::{
-    bump_thread_version, can_publish_public_output, hold_streaming_public_output,
-    output_buffer_exists, repin_run_work_item_base_thread_version_for_surface, PublishActionKind,
-    PublishDecision,
+    bump_thread_version, can_publish_public_output, consume_accumulated_control_only_output,
+    hold_streaming_public_output, output_buffer_exists,
+    repin_run_work_item_base_thread_version_for_surface, PublishActionKind, PublishDecision,
 };
 use crate::ui_notifications::{
     notify_ui_message_delete, notify_ui_message_delta, notify_ui_message_upsert, notify_ui_refresh,
@@ -104,6 +104,17 @@ async fn append_streaming_agent_message_inner(
         if let Some((control_agent_id, run_id, work_item_id)) =
             load_streaming_control_context(pool, stream_key).await?
         {
+            if let Some(control_only_id) = consume_accumulated_control_only_output(
+                pool,
+                control_agent_id,
+                run_id,
+                stream_key,
+                delta,
+            )
+            .await?
+            {
+                return Ok(control_only_id);
+            }
             return hold_streaming_public_output(
                 pool,
                 control_agent_id,

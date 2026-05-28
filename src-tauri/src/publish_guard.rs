@@ -762,6 +762,89 @@ pub(crate) async fn hold_streaming_public_output(
     Ok(buffer_id)
 }
 
+pub(crate) async fn consume_accumulated_control_only_output(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    run_id: Uuid,
+    stream_key: &str,
+    delta: &str,
+) -> CommandResult<Option<Uuid>> {
+    let Some(row) = sqlx::query(
+        "select body from agent_output_buffers where stream_key = $1 and agent_id = $2 and state = 'held'",
+    )
+    .bind(stream_key)
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)?
+    else {
+        return Ok(None);
+    };
+    let existing_body: String = row.get("body");
+    let combined_body = if !delta.is_empty() && existing_body == delta {
+        existing_body
+    } else {
+        format!("{existing_body}{delta}")
+    };
+    let (visible_body, event_jsons) = split_complete_streaming_agent_event_lines(&combined_body);
+    if event_jsons.is_empty() || !visible_body.trim().is_empty() {
+        return Ok(None);
+    }
+    if event_jsons
+        .iter()
+        .any(|json| streaming_agent_event_is_visible_side_effect(json))
+    {
+        return Ok(None);
+    }
+
+    for event_json in &event_jsons {
+        handle_streaming_agent_event_json(pool, agent_id, run_id, event_json).await?;
+    }
+
+    sqlx::query(
+        r#"
+        update agent_output_buffers
+        set state = 'yielded',
+            body = '',
+            held_visible_events = '[]',
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where stream_key = $1 and agent_id = $2 and state = 'held'
+        "#,
+    )
+    .bind(stream_key)
+    .bind(agent_id)
+    .execute(pool)
+    .await
+    .map_err(to_string)?;
+    sqlx::query(
+        r#"
+        update agent_inbox_items
+        set state = 'archived',
+            archived_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where agent_id = $1
+          and kind = 'interrupted_action'
+          and json_extract(payload, '$.stream_key') = $2
+          and state <> 'archived'
+        "#,
+    )
+    .bind(agent_id)
+    .bind(stream_key)
+    .execute(pool)
+    .await
+    .map_err(to_string)?;
+    record_agent_activity(
+        pool,
+        Some(agent_id),
+        Some(run_id),
+        "decision",
+        "Control-only held output consumed",
+        json!({ "stream_key": stream_key }).to_string(),
+    )
+    .await?;
+    Ok(Some(Uuid::new_v4()))
+}
+
 pub(crate) async fn output_buffer_exists(
     pool: &SqlitePool,
     stream_key: &str,

@@ -620,15 +620,17 @@ async fn requeue_orphan_interrupted_actions_releases_held_drafts_from_closed_wor
         let affected = requeue_orphan_interrupted_actions(&pool, agent_id)
             .await
             .map_err(|err| err.to_string())?;
-        assert_eq!(affected, 1, "only the orphaned held draft should be requeued");
+        assert_eq!(
+            affected, 1,
+            "only the orphaned held draft should be requeued"
+        );
 
-        let stale_row = sqlx::query(
-            "select state, work_item_id from agent_inbox_items where id = $1",
-        )
-        .bind(stale_inbox_id)
-        .fetch_one(&pool)
-        .await
-        .map_err(|err| err.to_string())?;
+        let stale_row =
+            sqlx::query("select state, work_item_id from agent_inbox_items where id = $1")
+                .bind(stale_inbox_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
         assert_eq!(stale_row.get::<String, _>("state"), "unread");
         assert!(
             stale_row.get::<Option<Uuid>, _>("work_item_id").is_none(),
