@@ -104,6 +104,12 @@ async fn append_streaming_agent_message_inner(
         if let Some((control_agent_id, run_id, work_item_id)) =
             load_streaming_control_context(pool, stream_key).await?
         {
+            if let Some(silent_id) =
+                consume_accumulated_silent_output(pool, control_agent_id, run_id, stream_key, delta)
+                    .await?
+            {
+                return Ok(silent_id);
+            }
             if let Some(control_only_id) = consume_accumulated_control_only_output(
                 pool,
                 control_agent_id,
@@ -346,6 +352,79 @@ async fn consume_silent_streaming_agent_delta(
     };
 
     mark_run_work_item_silent(pool, control_agent_id, run_id, &reason).await?;
+    Ok(Some(Uuid::new_v4()))
+}
+
+async fn consume_accumulated_silent_output(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    run_id: Uuid,
+    stream_key: &str,
+    delta: &str,
+) -> CommandResult<Option<Uuid>> {
+    let Some(row) = sqlx::query(
+        "select body from agent_output_buffers where stream_key = $1 and agent_id = $2 and state = 'held'",
+    )
+    .bind(stream_key)
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)?
+    else {
+        return Ok(None);
+    };
+    let existing_body: String = row.get("body");
+    let combined_body = if !delta.is_empty() && existing_body == delta {
+        existing_body
+    } else {
+        format!("{existing_body}{delta}")
+    };
+    let Some(reason) = silent_reply_reason(&combined_body) else {
+        return Ok(None);
+    };
+
+    mark_run_work_item_silent(pool, agent_id, run_id, &reason).await?;
+    sqlx::query(
+        r#"
+        update agent_output_buffers
+        set state = 'yielded',
+            body = '',
+            held_visible_events = '[]',
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where stream_key = $1 and agent_id = $2 and state = 'held'
+        "#,
+    )
+    .bind(stream_key)
+    .bind(agent_id)
+    .execute(pool)
+    .await
+    .map_err(to_string)?;
+    sqlx::query(
+        r#"
+        update agent_inbox_items
+        set state = 'archived',
+            archived_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where agent_id = $1
+          and kind = 'interrupted_action'
+          and json_extract(payload, '$.stream_key') = $2
+          and state <> 'archived'
+        "#,
+    )
+    .bind(agent_id)
+    .bind(stream_key)
+    .execute(pool)
+    .await
+    .map_err(to_string)?;
+    record_agent_activity(
+        pool,
+        Some(agent_id),
+        Some(run_id),
+        "decision",
+        "Silent held output consumed",
+        json!({ "stream_key": stream_key }).to_string(),
+    )
+    .await?;
     Ok(Some(Uuid::new_v4()))
 }
 
