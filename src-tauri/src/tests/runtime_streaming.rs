@@ -1549,6 +1549,84 @@ async fn stale_silent_reply_marks_work_silent_without_publish_gate_hold() {
 }
 
 #[tokio::test]
+async fn split_stale_silent_reply_marks_work_silent_without_publish_gate_hold() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "split-stale-silent-agent").await?;
+        let channel_id = insert_test_channel(&pool, "split-stale-silent-channel").await?;
+        let (work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        let stream_key = format!("{run_id}:split-silent");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "LANTOR_SILENT_R",
+        )
+        .await?;
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "EPLY: no active held buffers remain",
+        )
+        .await?;
+
+        let message_count: i64 =
+            sqlx::query_scalar("select count(*) from messages where stream_key = $1")
+                .bind(&stream_key)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(message_count, 0);
+
+        let held_count: i64 = sqlx::query_scalar(
+            "select count(*) from agent_output_buffers where stream_key = $1 and state = 'held'",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            held_count, 0,
+            "split silent sentinel is internal control and must not remain held"
+        );
+
+        let work_status: String =
+            sqlx::query_scalar("select status from agent_work_items where id = $1")
+                .bind(work_item_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(work_status, "silent");
+
+        let open_interrupted: i64 = sqlx::query_scalar(
+            "select count(*) from agent_inbox_items where kind = 'interrupted_action' and json_extract(payload, '$.stream_key') = $1 and state <> 'archived'",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            open_interrupted, 0,
+            "split silent sentinel must not leave an active interrupted_action"
+        );
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn held_buffer_is_not_empty_for_codex_completed_fallback() {
     let Some((pool, schema)) = test_pool().await else {
         return;
