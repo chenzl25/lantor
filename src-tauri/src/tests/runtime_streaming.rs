@@ -434,6 +434,108 @@ async fn control_only_interrupted_action_resolve_bypasses_reply_freshness_gate()
 }
 
 #[tokio::test]
+async fn split_control_only_interrupted_action_resolve_bypasses_reply_freshness_gate() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "split-control-resolve-agent").await?;
+        let channel_id = insert_test_channel(&pool, "split-control-resolve-channel").await?;
+
+        let (_held_work_item_id, held_run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        let held_stream_key = format!("{held_run_id}:held-reply");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &held_stream_key,
+            "stale visible reply",
+        )
+        .await?;
+
+        let (_resolve_work_item_id, resolve_run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 1).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        let resolve_stream_key = format!("{resolve_run_id}:split-resolve-control");
+        let first_delta = "LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",";
+        let second_delta =
+            format!("\"stream_key\":\"{held_stream_key}\",\"action\":\"yield\"}}\n");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &resolve_stream_key,
+            first_delta,
+        )
+        .await?;
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &resolve_stream_key,
+            &second_delta,
+        )
+        .await?;
+
+        let held_state: String =
+            sqlx::query_scalar("select state from agent_output_buffers where stream_key = $1")
+                .bind(&held_stream_key)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(
+            held_state, "yielded",
+            "the split control-only resolve event should execute once its JSON is complete"
+        );
+
+        let resolve_held_buffers: i64 = sqlx::query_scalar(
+            "select count(*) from agent_output_buffers where stream_key = $1 and state = 'held'",
+        )
+        .bind(&resolve_stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            resolve_held_buffers, 0,
+            "a split control-only resolve event must not leave its own public held buffer"
+        );
+
+        let active_interrupted_items: i64 = sqlx::query_scalar(
+            "select count(*) from agent_inbox_items where kind = 'interrupted_action' and state <> 'archived'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            active_interrupted_items, 0,
+            "split control-only output should not leave a follow-up interrupted_action"
+        );
+
+        let resolve_messages: i64 =
+            sqlx::query_scalar("select count(*) from messages where stream_key = $1")
+                .bind(&resolve_stream_key)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(
+            resolve_messages, 0,
+            "split control-only output should not create a visible streaming message"
+        );
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn control_only_activity_bypasses_reply_freshness_gate() {
     let Some((pool, schema)) = test_pool().await else {
         return;
