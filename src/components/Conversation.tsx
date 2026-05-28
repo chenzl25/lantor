@@ -614,9 +614,31 @@ export function Conversation({
 
   useEffect(() => {
     if (!focusedMessageId) return;
-    const element = messageListRef.current?.querySelector<HTMLElement>(`[data-message-id="${focusedMessageId}"]`);
-    element?.scrollIntoView({ block: "center" });
-  }, [channel?.id, focusedMessageId]);
+    let frameId = 0;
+    let attemptsRemaining = 6;
+    function scrollFocusedMessage() {
+      const element = messageListRef.current?.querySelector<HTMLElement>(`[data-message-id="${focusedMessageId}"]`);
+      if (element) {
+        element.scrollIntoView({ block: "center" });
+        return;
+      }
+      if (attemptsRemaining <= 0) return;
+      attemptsRemaining -= 1;
+      frameId = window.requestAnimationFrame(scrollFocusedMessage);
+    }
+    scrollFocusedMessage();
+    return () => {
+      if (frameId) window.cancelAnimationFrame(frameId);
+    };
+  }, [
+    channel?.id,
+    focusedMessageId,
+    messageListProgressVersion,
+    rootMessages.length,
+    lastRootMessage?.id,
+    lastRootMessage?.updated_at,
+    lastRootMessage?.delivery_state,
+  ]);
 
   return (
     <section className="conversation">
