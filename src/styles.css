@@ -270,6 +270,8 @@ button,
     inset 0 1px 0 rgba(255, 255, 255, 0.46),
     0 -1px 2px rgba(32, 36, 44, 0.035);
   --surface-menu-overlay: var(--panel);
+  --modal-mobile-backdrop-bg: rgba(17, 24, 39, 0.55);
+  --modal-mobile-card-border: rgba(15, 23, 42, 0.18);
   --activity-feed-panel-bg: rgba(247, 248, 250, 0.98);
   --activity-feed-panel-border: rgba(20, 23, 31, 0.14);
   --activity-feed-panel-shadow: 0 32px 86px rgba(15, 23, 42, 0.24);
@@ -10175,11 +10177,11 @@ body.resizing-row * {
      WKWebView even though React state updates instantly. Desktop keeps the
      frosted look. */
   .modal-backdrop {
-    background: rgba(17, 24, 39, 0.55);
+    background: var(--modal-mobile-backdrop-bg);
     backdrop-filter: none;
   }
 
   .modal-card {
-    border-color: rgba(15, 23, 42, 0.18);
+    border-color: var(--modal-mobile-card-border);
   }
 }
