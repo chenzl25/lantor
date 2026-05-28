@@ -684,6 +684,166 @@ async fn completed_reply_repins_base_version_before_followup_visible_event() {
 }
 
 #[tokio::test]
+async fn same_run_multiple_visible_outputs_repin_across_rapid_version_bumps() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "rapid-self-publish-agent").await?;
+        let channel_id = insert_test_channel(&pool, "rapid-self-publish-channel").await?;
+        sqlx::query("insert into channel_members (channel_id, agent_id) values ($1, $2)")
+            .bind(channel_id)
+            .bind(agent_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let (_work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        let stream_key = format!("{run_id}:assistant-reply");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "primary visible reply",
+        )
+        .await?;
+        finish_streaming_agent_message(&pool, &stream_key, "complete").await?;
+
+        for index in 0..5 {
+            let event = json!({
+                "type": "channel_message_create",
+                "channel_id": channel_id,
+                "body": format!("self visible side effect {index}")
+            })
+            .to_string();
+            handle_streaming_agent_event_json(&pool, agent_id, run_id, &event).await?;
+        }
+
+        assert_eq!(
+            current_thread_version(&pool, channel_id, None).await?,
+            6,
+            "all six visible outputs should advance freshness without making the same run stale"
+        );
+
+        let self_visible_messages: i64 = sqlx::query_scalar(
+            "select count(*) from messages where channel_id = $1 and (body = 'primary visible reply' or body like 'self visible side effect %')",
+        )
+        .bind(channel_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(self_visible_messages, 6);
+
+        let buffers: i64 =
+            sqlx::query_scalar("select count(*) from agent_output_buffers where run_id = $1")
+                .bind(run_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(
+            buffers, 0,
+            "a run's own rapid visible outputs must not recursively hold later output"
+        );
+
+        let interrupted_items: i64 = sqlx::query_scalar(
+            "select count(*) from agent_inbox_items where kind = 'interrupted_action' and state <> 'archived'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(interrupted_items, 0);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn control_only_multi_event_delta_bypasses_reply_freshness_gate() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "control-multi-agent").await?;
+        let channel_id = insert_test_channel(&pool, "control-multi-channel").await?;
+        let (_work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        for _ in 0..5 {
+            bump_thread_version(&pool, channel_id, None).await?;
+        }
+        let stream_key = format!("{run_id}:multi-control");
+        let activity_one = json!({
+            "type": "activity",
+            "kind": "thinking",
+            "title": "Multi control one",
+            "detail": "first event"
+        });
+        let usage = json!({
+            "type": "usage",
+            "input_tokens": 100,
+            "output_tokens": 25,
+            "cost_micros": 7
+        });
+        let activity_two = json!({
+            "type": "activity",
+            "kind": "thinking",
+            "title": "Multi control two",
+            "detail": "third event"
+        });
+        let body = format!("LANTOR_EVENT {activity_one}LANTOR_EVENT {usage}LANTOR_EVENT {activity_two}\n");
+
+        append_streaming_agent_message(&pool, agent_id, channel_id, None, &stream_key, &body)
+            .await?;
+
+        let activity_count: i64 = sqlx::query_scalar(
+            "select count(*) from agent_activities where run_id = $1 and title in ('Multi control one', 'Multi control two', 'Usage recorded')",
+        )
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            activity_count, 3,
+            "all non-visible control events in the stale delta should execute"
+        );
+
+        let usage_row = sqlx::query(
+            "select input_tokens, output_tokens, cost_micros from agent_runs where id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(usage_row.get::<i64, _>("input_tokens"), 100);
+        assert_eq!(usage_row.get::<i64, _>("output_tokens"), 25);
+        assert_eq!(usage_row.get::<i64, _>("cost_micros"), 7);
+
+        let buffers: i64 =
+            sqlx::query_scalar("select count(*) from agent_output_buffers where stream_key = $1")
+                .bind(&stream_key)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(buffers, 0);
+
+        let messages: i64 = sqlx::query_scalar("select count(*) from messages where stream_key = $1")
+            .bind(&stream_key)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        assert_eq!(messages, 0);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn held_visible_preserves_internal_control_events() {
     let Some((pool, schema)) = test_pool().await else {
         return;
@@ -695,7 +855,7 @@ async fn held_visible_preserves_internal_control_events() {
             insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
         bump_thread_version(&pool, channel_id, None).await?;
         let stream_key = format!("{run_id}:item-1");
-        let body = "Visible text\nLANTOR_EVENT {\"type\":\"activity\",\"title\":\"Buffered internal\",\"detail\":\"kept\"}";
+        let body = "Visible before LANTOR_EVENT {\"type\":\"activity\",\"title\":\"Buffered internal\",\"detail\":\"kept\"}LANTOR_EVENT {\"type\":\"usage\",\"input_tokens\":8,\"output_tokens\":3,\"cost_micros\":2} visible after";
 
         append_streaming_agent_message(&pool, agent_id, channel_id, None, &stream_key, body)
             .await?;
@@ -719,13 +879,24 @@ async fn held_visible_preserves_internal_control_events() {
         .map_err(|err| err.to_string())?;
         assert_eq!(activity_count, 1);
 
+        let usage_row = sqlx::query(
+            "select input_tokens, output_tokens, cost_micros from agent_runs where id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(usage_row.get::<i64, _>("input_tokens"), 8);
+        assert_eq!(usage_row.get::<i64, _>("output_tokens"), 3);
+        assert_eq!(usage_row.get::<i64, _>("cost_micros"), 2);
+
         let draft_body: String = sqlx::query_scalar(
             "select json_extract(payload, '$.draft_body') from agent_inbox_items where kind = 'interrupted_action' order by created_at desc limit 1",
         )
         .fetch_one(&pool)
         .await
         .map_err(|err| err.to_string())?;
-        assert_eq!(draft_body, "Visible text");
+        assert_eq!(draft_body, "Visible before  visible after");
         Ok(())
     }
     .await;
