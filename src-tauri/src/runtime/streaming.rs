@@ -130,6 +130,12 @@ async fn append_streaming_agent_message_inner(
         .await;
     }
 
+    if let Some(control_only_id) =
+        consume_control_only_streaming_agent_delta(pool, stream_key, delta).await?
+    {
+        return Ok(control_only_id);
+    }
+
     if let Some(row) = sqlx::query(
         "select id, delivery_state, length(body) as body_len from messages where stream_key = $1",
     )
@@ -309,6 +315,51 @@ async fn append_streaming_agent_message_inner(
         queue_agent_message_mentions(pool, message_id).await?;
     }
     Ok(message_id)
+}
+
+async fn consume_control_only_streaming_agent_delta(
+    pool: &SqlitePool,
+    stream_key: &str,
+    delta: &str,
+) -> CommandResult<Option<Uuid>> {
+    let (visible_body, event_jsons) = split_complete_streaming_agent_event_lines(delta);
+    if !visible_body.is_empty() || event_jsons.is_empty() {
+        return Ok(None);
+    }
+    if event_jsons
+        .iter()
+        .any(|json| crate::events::control::streaming_agent_event_is_visible_side_effect(json))
+    {
+        return Ok(None);
+    }
+    let Some((control_agent_id, run_id, Some(work_item_id))) =
+        load_streaming_control_context(pool, stream_key).await?
+    else {
+        return Ok(None);
+    };
+    let Some((channel_id, thread_root_id)) =
+        crate::publish_guard::work_item_public_surface(pool, Some(work_item_id)).await?
+    else {
+        return Ok(None);
+    };
+    let decision = can_publish_public_output(
+        pool,
+        control_agent_id,
+        channel_id,
+        thread_root_id,
+        Some(work_item_id),
+        PublishActionKind::ReplyText,
+    )
+    .await?;
+    if matches!(decision, PublishDecision::Allow) {
+        return Ok(None);
+    }
+
+    for json in event_jsons {
+        handle_streaming_agent_event_json(pool, control_agent_id, run_id, &json).await?;
+    }
+
+    Ok(Some(Uuid::new_v4()))
 }
 
 pub(crate) async fn ensure_streaming_agent_message(
