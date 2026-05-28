@@ -509,8 +509,7 @@ async fn load_unresolved_held_reply_hints(
             let channel_kind: Option<String> = row.get("channel_kind");
             let thread_root_id: Option<Uuid> = row.get("thread_root_id");
             let payload: String = row.get("payload");
-            let payload_value: Value =
-                serde_json::from_str(&payload).unwrap_or_else(|_| Value::Null);
+            let payload_value: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
             let stream_key = payload_value
                 .get("stream_key")
                 .and_then(Value::as_str)
