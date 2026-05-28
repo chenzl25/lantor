@@ -612,14 +612,21 @@ export function Conversation({
     lastRootMessage?.delivery_state,
   ]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!focusedMessageId) return;
     let frameId = 0;
+    let settleFrameId = 0;
     let attemptsRemaining = 6;
     function scrollFocusedMessage() {
-      const element = messageListRef.current?.querySelector<HTMLElement>(`[data-message-id="${focusedMessageId}"]`);
+      const list = messageListRef.current;
+      const element = list?.querySelector<HTMLElement>(`[data-message-id="${focusedMessageId}"]`);
       if (element) {
+        stopFollowingMessages(list);
         element.scrollIntoView({ block: "center" });
+        settleFrameId = window.requestAnimationFrame(() => {
+          const currentList = messageListRef.current;
+          if (currentList) rememberMessageListMetrics(currentList);
+        });
         return;
       }
       if (attemptsRemaining <= 0) return;
@@ -629,6 +636,7 @@ export function Conversation({
     scrollFocusedMessage();
     return () => {
       if (frameId) window.cancelAnimationFrame(frameId);
+      if (settleFrameId) window.cancelAnimationFrame(settleFrameId);
     };
   }, [
     channel?.id,
