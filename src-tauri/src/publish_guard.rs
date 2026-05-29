@@ -9,8 +9,8 @@ use crate::events::{
     activity::record_agent_activity,
     control::{
         handle_claimed_agent_event_json, handle_streaming_agent_event_json,
-        split_complete_streaming_agent_event_lines, split_terminal_streaming_agent_event_lines,
-        streaming_agent_event_is_visible_side_effect,
+        looks_like_internal_control_prefix_fragment, split_complete_streaming_agent_event_lines,
+        split_terminal_streaming_agent_event_lines, streaming_agent_event_is_visible_side_effect,
     },
 };
 use crate::message_store::{insert_agent_message_with_options, load_message};
@@ -747,6 +747,7 @@ pub(crate) async fn hold_streaming_public_output(
     let (visible_body, mut held_visible_events) =
         parse_and_apply_buffer_control_events(pool, agent_id, run_id, &combined_body, terminal)
             .await?;
+    let (draft_body, _) = split_terminal_streaming_agent_event_lines(&visible_body);
     let mut previous_held_events =
         serde_json::from_str::<Vec<String>>(&existing_held_events).unwrap_or_default();
     previous_held_events.append(&mut held_visible_events);
@@ -782,11 +783,62 @@ pub(crate) async fn hold_streaming_public_output(
     .await
     .map_err(to_string)?;
 
-    let kind = InterruptedActionKind::from_buffer(&visible_body, held_visible_events.len());
+    let is_internal_control_fragment = looks_like_internal_control_prefix_fragment(&visible_body)
+        || (draft_body.trim().is_empty()
+            && looks_like_internal_control_prefix_fragment(&combined_body));
+    if is_internal_control_fragment && held_visible_events.is_empty() {
+        if terminal {
+            sqlx::query(
+                r#"
+                update agent_output_buffers
+                set state = 'yielded',
+                    body = '',
+                    held_visible_events = '[]',
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+                where stream_key = $1 and agent_id = $2 and state = 'held'
+                "#,
+            )
+            .bind(&buffer_stream_key)
+            .bind(agent_id)
+            .execute(pool)
+            .await
+            .map_err(to_string)?;
+            record_agent_activity(
+                pool,
+                Some(agent_id),
+                Some(run_id),
+                "decision",
+                "Incomplete control fragment discarded",
+                json!({
+                    "stream_key": buffer_stream_key,
+                    "body_len": visible_body.chars().count(),
+                })
+                .to_string(),
+            )
+            .await?;
+        } else if !had_existing_buffer {
+            record_agent_activity(
+                pool,
+                Some(agent_id),
+                Some(run_id),
+                "decision",
+                "Incomplete control fragment buffered",
+                json!({
+                    "stream_key": buffer_stream_key,
+                    "body_len": visible_body.chars().count(),
+                })
+                .to_string(),
+            )
+            .await?;
+        }
+        return Ok(buffer_id);
+    }
+
+    let kind = InterruptedActionKind::from_buffer(&draft_body, held_visible_events.len());
     let payload = json!({
         "interrupted_action": kind.as_str(),
         "reason": reason,
-        "draft_body": visible_body,
+        "draft_body": draft_body,
         "base_version": base_version,
         "current_version": current_version,
         "base_thread_version": current_version,

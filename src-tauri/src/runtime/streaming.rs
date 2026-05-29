@@ -8,8 +8,8 @@ use crate::events::{
     activity::record_agent_activity,
     control::{
         control_event_hides_empty_streaming_reply, handle_streaming_agent_event_json,
-        silent_reply_reason, split_complete_streaming_agent_event_lines,
-        split_terminal_streaming_agent_event_lines,
+        looks_like_internal_control_prefix_fragment, silent_reply_reason,
+        split_complete_streaming_agent_event_lines, split_terminal_streaming_agent_event_lines,
     },
 };
 use crate::message_store::load_message;
@@ -101,7 +101,7 @@ async fn append_streaming_agent_message_inner(
         return Ok(silent_id);
     }
     if output_buffer_exists(pool, stream_key).await? {
-        if let Some((control_agent_id, run_id, work_item_id)) =
+        if let Some((control_agent_id, run_id, Some(work_item_id))) =
             load_streaming_control_context(pool, stream_key).await?
         {
             if let Some(silent_id) =
@@ -125,7 +125,7 @@ async fn append_streaming_agent_message_inner(
                 pool,
                 control_agent_id,
                 run_id,
-                work_item_id,
+                Some(work_item_id),
                 channel_id,
                 thread_root_id,
                 stream_key,
@@ -156,21 +156,44 @@ async fn append_streaming_agent_message_inner(
         return Ok(control_only_id);
     }
 
-    if let Some(row) = sqlx::query(
-        "select id, delivery_state, length(body) as body_len from messages where stream_key = $1",
-    )
-    .bind(stream_key)
-    .fetch_optional(pool)
-    .await
-    .map_err(to_string)?
+    if let Some(row) =
+        sqlx::query("select id, delivery_state, body from messages where stream_key = $1")
+            .bind(stream_key)
+            .fetch_optional(pool)
+            .await
+            .map_err(to_string)?
     {
         let message_id: Uuid = row.get("id");
         let delivery_state: String = row.get("delivery_state");
         if delivery_state != "streaming" {
             return Ok(message_id);
         }
-        let body_len: i32 = row.get("body_len");
-        let (append_delta, truncated) = capped_stream_delta(delta, body_len.max(0) as usize);
+        let body: String = row.get("body");
+        let body_len = body.chars().count();
+        if let Some((control_agent_id, run_id, work_item_id)) =
+            load_streaming_control_context(pool, stream_key).await?
+        {
+            let combined_body = format!("{body}{delta}");
+            if looks_like_internal_control_prefix_fragment(&combined_body) {
+                return hold_streaming_public_output(
+                    pool,
+                    control_agent_id,
+                    run_id,
+                    work_item_id,
+                    channel_id,
+                    thread_root_id,
+                    stream_key,
+                    delta,
+                    false,
+                    PublishDecision::HoldStale {
+                        base_version: 0,
+                        current_version: 0,
+                    },
+                )
+                .await;
+            }
+        }
+        let (append_delta, truncated) = capped_stream_delta(delta, body_len);
         if append_delta.is_empty() && truncated {
             if complete_on_truncation {
                 finish_streaming_agent_message(pool, stream_key, "complete").await?;
@@ -197,9 +220,20 @@ async fn append_streaming_agent_message_inner(
             "stream_delta",
         )
         .await;
-        if let Some((control_agent_id, run_id, _)) =
+        if let Some((control_agent_id, run_id, work_item_id)) =
             load_streaming_control_context(pool, stream_key).await?
         {
+            if maybe_hide_silent_streaming_reply(
+                pool,
+                control_agent_id,
+                run_id,
+                work_item_id,
+                stream_key,
+            )
+            .await?
+            {
+                return Ok(message_id);
+            }
             let _ = consume_complete_streaming_agent_control_lines(
                 pool,
                 control_agent_id,
@@ -236,6 +270,24 @@ async fn append_streaming_agent_message_inner(
     if let Some((control_agent_id, run_id, work_item_id)) =
         load_streaming_control_context(pool, stream_key).await?
     {
+        if work_item_id.is_some() && looks_like_internal_control_prefix_fragment(delta) {
+            return hold_streaming_public_output(
+                pool,
+                control_agent_id,
+                run_id,
+                work_item_id,
+                channel_id,
+                thread_root_id,
+                stream_key,
+                delta,
+                false,
+                PublishDecision::HoldStale {
+                    base_version: 0,
+                    current_version: 0,
+                },
+            )
+            .await;
+        }
         let decision = can_publish_public_output(
             pool,
             control_agent_id,

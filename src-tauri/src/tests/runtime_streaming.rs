@@ -648,6 +648,225 @@ async fn system_message_does_not_bump_thread_version() {
 }
 
 #[tokio::test]
+async fn incomplete_control_only_fragment_does_not_create_interrupted_action() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "incomplete-control-agent").await?;
+        let channel_id = insert_test_channel(&pool, "incomplete-control-channel").await?;
+        let (_work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        let stream_key = format!("{run_id}:incomplete-control");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "LANTOR_EVENT {\"type\":\"activity\",\"kind\":\"tools\",\"title\":\"Looking",
+        )
+        .await?;
+
+        let held_count: i64 = sqlx::query_scalar(
+            "select count(*) from agent_output_buffers where stream_key = $1 and state = 'held'",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            held_count, 1,
+            "incomplete control fragments should be accumulated for the next delta"
+        );
+
+        let active_interrupted: i64 = sqlx::query_scalar(
+            "select count(*) from agent_inbox_items where kind = 'interrupted_action' and json_extract(payload, '$.stream_key') = $1 and state <> 'archived'",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            active_interrupted, 0,
+            "an incomplete internal control fragment must not be fed back to the agent as a held public draft"
+        );
+
+        let buffered_activity_count: i64 = sqlx::query_scalar(
+            "select count(*) from agent_activities where run_id = $1 and title = 'Incomplete control fragment buffered'",
+        )
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            buffered_activity_count, 1,
+            "buffering incomplete internal control should be visible in the activity trace"
+        );
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            " context\"}\n",
+        )
+        .await?;
+
+        let remaining_held: i64 = sqlx::query_scalar(
+            "select count(*) from agent_output_buffers where stream_key = $1 and state = 'held'",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            remaining_held, 0,
+            "once the control JSON is complete it should be consumed, not held"
+        );
+
+        let activity_count: i64 = sqlx::query_scalar(
+            "select count(*) from agent_activities where run_id = $1 and title = 'Looking context'",
+        )
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(activity_count, 1);
+
+        let open_interrupted_after_complete: i64 = sqlx::query_scalar(
+            "select count(*) from agent_inbox_items where kind = 'interrupted_action' and state <> 'archived'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(open_interrupted_after_complete, 0);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn short_control_marker_prefix_does_not_create_interrupted_action() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "short-control-prefix-agent").await?;
+        let channel_id = insert_test_channel(&pool, "short-control-prefix-channel").await?;
+        let (_work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        let stream_key = format!("{run_id}:short-control-prefix");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "LANTOR",
+        )
+        .await?;
+
+        let held_count: i64 = sqlx::query_scalar(
+            "select count(*) from agent_output_buffers where stream_key = $1 and state = 'held'",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(held_count, 1);
+
+        let active_interrupted: i64 = sqlx::query_scalar(
+            "select count(*) from agent_inbox_items where kind = 'interrupted_action' and json_extract(payload, '$.stream_key') = $1 and state <> 'archived'",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            active_interrupted, 0,
+            "a short LANTOR sentinel prefix must not become a public draft"
+        );
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn terminal_incomplete_control_only_fragment_yields_without_interruption() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "terminal-incomplete-control-agent").await?;
+        let channel_id = insert_test_channel(&pool, "terminal-incomplete-control-channel").await?;
+        let (_work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        let stream_key = format!("{run_id}:terminal-incomplete-control");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"x\",\"action\"",
+        )
+        .await?;
+        finish_streaming_agent_message(&pool, &stream_key, "complete").await?;
+
+        let state: String =
+            sqlx::query_scalar("select state from agent_output_buffers where stream_key = $1")
+                .bind(&stream_key)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(
+            state, "yielded",
+            "terminal incomplete internal control fragments should be discarded, not surfaced"
+        );
+
+        let active_interrupted: i64 = sqlx::query_scalar(
+            "select count(*) from agent_inbox_items where kind = 'interrupted_action' and json_extract(payload, '$.stream_key') = $1 and state <> 'archived'",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            active_interrupted, 0,
+            "terminal incomplete internal control fragments must not create interrupted_action feedback"
+        );
+
+        let discarded_activity_count: i64 = sqlx::query_scalar(
+            "select count(*) from agent_activities where run_id = $1 and title = 'Incomplete control fragment discarded'",
+        )
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            discarded_activity_count, 1,
+            "discarding terminal incomplete internal control should be visible in the activity trace"
+        );
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn interrupted_action_is_redispatched_as_new_inbox_wake() {
     let Some((pool, schema)) = test_pool().await else {
         return;
@@ -1619,6 +1838,71 @@ async fn split_stale_silent_reply_marks_work_silent_without_publish_gate_hold() 
             open_interrupted, 0,
             "split silent sentinel must not leave an active interrupted_action"
         );
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn split_allowed_silent_reply_never_creates_visible_message() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "split-allowed-silent-agent").await?;
+        let channel_id = insert_test_channel(&pool, "split-allowed-silent-channel").await?;
+        let (work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        let stream_key = format!("{run_id}:split-allowed-silent");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "LANTOR_SILENT_R",
+        )
+        .await?;
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "EPLY: held draft no longer needs a reply",
+        )
+        .await?;
+
+        let message_count: i64 =
+            sqlx::query_scalar("select count(*) from messages where stream_key = $1")
+                .bind(&stream_key)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(
+            message_count, 0,
+            "split silent sentinel must never leak as a visible message"
+        );
+
+        let held_count: i64 = sqlx::query_scalar(
+            "select count(*) from agent_output_buffers where stream_key = $1 and state = 'held'",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(held_count, 0);
+
+        let work_status: String =
+            sqlx::query_scalar("select status from agent_work_items where id = $1")
+                .bind(work_item_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(work_status, "silent");
         Ok(())
     }
     .await;
