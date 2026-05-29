@@ -1846,6 +1846,65 @@ async fn split_stale_silent_reply_marks_work_silent_without_publish_gate_hold() 
 }
 
 #[tokio::test]
+async fn yielded_control_stream_ignores_late_suffix_deltas() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "yielded-late-suffix-agent").await?;
+        let channel_id = insert_test_channel(&pool, "yielded-late-suffix-channel").await?;
+        let (work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        let stream_key = format!("{run_id}:late-silent-suffix");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "LANTOR_SILENT_R",
+        )
+        .await?;
+        append_streaming_agent_message(&pool, agent_id, channel_id, None, &stream_key, "EPLY")
+            .await?;
+        let status: String =
+            sqlx::query_scalar("select status from agent_work_items where id = $1")
+                .bind(work_item_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(status, "silent");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            ": duplicate follow-up already answered",
+        )
+        .await?;
+        finish_streaming_agent_message(&pool, &stream_key, "complete").await?;
+
+        let visible_messages: i64 =
+            sqlx::query_scalar("select count(*) from messages where stream_key = $1")
+                .bind(&stream_key)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(
+            visible_messages, 0,
+            "late suffix after yielded silent stream must stay hidden"
+        );
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn fresh_visible_reply_starting_with_l_is_released_from_prefix_buffer() {
     let Some((pool, schema)) = test_pool().await else {
         return;

@@ -97,6 +97,12 @@ async fn append_streaming_agent_message_inner(
     if stream_key.trim().is_empty() {
         return Err("stream_key is empty".to_owned());
     }
+    if terminal_output_buffer_state(pool, stream_key)
+        .await?
+        .is_some()
+    {
+        return Ok(Uuid::new_v4());
+    }
     if let Some(silent_id) = consume_silent_streaming_agent_delta(pool, stream_key, delta).await? {
         return Ok(silent_id);
     }
@@ -442,6 +448,19 @@ async fn append_streaming_agent_message_inner(
     Ok(message_id)
 }
 
+async fn terminal_output_buffer_state(
+    pool: &SqlitePool,
+    stream_key: &str,
+) -> CommandResult<Option<String>> {
+    sqlx::query_scalar(
+        "select state from agent_output_buffers where stream_key = $1 and state in ('yielded', 'force_sent')",
+    )
+    .bind(stream_key)
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)
+}
+
 async fn consume_silent_streaming_agent_delta(
     pool: &SqlitePool,
     stream_key: &str,
@@ -591,6 +610,12 @@ pub(crate) async fn ensure_streaming_agent_message(
     if output_buffer_exists(pool, stream_key).await? {
         return Ok(Uuid::new_v4());
     }
+    if terminal_output_buffer_state(pool, stream_key)
+        .await?
+        .is_some()
+    {
+        return Ok(Uuid::new_v4());
+    }
 
     if let Some(existing) = sqlx::query_scalar("select id from messages where stream_key = $1")
         .bind(stream_key)
@@ -716,6 +741,12 @@ pub(crate) async fn streaming_message_body_is_empty(
     stream_key: &str,
 ) -> CommandResult<bool> {
     if output_buffer_exists(pool, stream_key).await? {
+        return Ok(false);
+    }
+    if terminal_output_buffer_state(pool, stream_key)
+        .await?
+        .is_some()
+    {
         return Ok(false);
     }
     let body: Option<String> =
@@ -873,6 +904,21 @@ async fn finish_streaming_agent_message_inner(
                 )
                 .await?;
             }
+        }
+        return Ok(());
+    }
+    if terminal_output_buffer_state(pool, stream_key)
+        .await?
+        .is_some()
+    {
+        let message_id: Option<Uuid> =
+            sqlx::query_scalar("select id from messages where stream_key = $1 and body = ''")
+                .bind(stream_key)
+                .fetch_optional(pool)
+                .await
+                .map_err(to_string)?;
+        if let Some(message_id) = message_id {
+            delete_streaming_agent_message(pool, message_id, "terminal_control_stream").await?;
         }
         return Ok(());
     }
