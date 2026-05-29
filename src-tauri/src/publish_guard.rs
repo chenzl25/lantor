@@ -79,7 +79,7 @@ impl InterruptedActionKind {
 
     pub(crate) fn allowed_actions(self) -> &'static [&'static str] {
         match self {
-            Self::PublicReply => &["revise", "yield", "force_send"],
+            Self::PublicReply => &["revise", "force_send"],
             Self::VisibleControlEvent => &["yield", "force_send"],
         }
     }
@@ -803,6 +803,28 @@ pub(crate) async fn hold_streaming_public_output(
             .execute(pool)
             .await
             .map_err(to_string)?;
+            sqlx::query(
+                r#"
+                update agent_work_items
+                set status = 'silent',
+                    completed_at = coalesce(completed_at, strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+                where id = $1
+                  and status in ('queued', 'running', 'interrupted')
+                "#,
+            )
+            .bind(work_item_id)
+            .execute(pool)
+            .await
+            .map_err(to_string)?;
+            if let Some(work_item_id) = work_item_id {
+                notify_ui_work_item_changed(
+                    pool,
+                    work_item_id,
+                    "incomplete_control_fragment_discarded",
+                )
+                .await;
+            }
             record_agent_activity(
                 pool,
                 Some(agent_id),

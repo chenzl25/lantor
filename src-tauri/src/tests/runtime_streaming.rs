@@ -363,7 +363,7 @@ async fn control_only_interrupted_action_resolve_bypasses_reply_freshness_gate()
         let event = json!({
             "type": "interrupted_action_resolve",
             "stream_key": held_stream_key,
-            "action": "yield"
+            "action": "force_send"
         });
         let body = format!("LANTOR_EVENT {event}\n");
 
@@ -384,7 +384,7 @@ async fn control_only_interrupted_action_resolve_bypasses_reply_freshness_gate()
                 .await
                 .map_err(|err| err.to_string())?;
         assert_eq!(
-            held_state, "yielded",
+            held_state, "force_sent",
             "the control-only resolve event should execute instead of being held behind the reply gate"
         );
 
@@ -463,7 +463,7 @@ async fn split_control_only_interrupted_action_resolve_bypasses_reply_freshness_
         let resolve_stream_key = format!("{resolve_run_id}:split-resolve-control");
         let first_delta = "LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",";
         let second_delta =
-            format!("\"stream_key\":\"{held_stream_key}\",\"action\":\"yield\"}}\n");
+            format!("\"stream_key\":\"{held_stream_key}\",\"action\":\"force_send\"}}\n");
 
         append_streaming_agent_message(
             &pool,
@@ -491,7 +491,7 @@ async fn split_control_only_interrupted_action_resolve_bypasses_reply_freshness_
                 .await
                 .map_err(|err| err.to_string())?;
         assert_eq!(
-            held_state, "yielded",
+            held_state, "force_sent",
             "the split control-only resolve event should execute once its JSON is complete"
         );
 
@@ -809,7 +809,7 @@ async fn terminal_incomplete_control_only_fragment_yields_without_interruption()
     let result: Result<(), String> = async {
         let agent_id = insert_test_agent(&pool, "terminal-incomplete-control-agent").await?;
         let channel_id = insert_test_channel(&pool, "terminal-incomplete-control-channel").await?;
-        let (_work_item_id, run_id) =
+        let (work_item_id, run_id) =
             insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
         bump_thread_version(&pool, channel_id, None).await?;
         let stream_key = format!("{run_id}:terminal-incomplete-control");
@@ -858,6 +858,17 @@ async fn terminal_incomplete_control_only_fragment_yields_without_interruption()
         assert_eq!(
             discarded_activity_count, 1,
             "discarding terminal incomplete internal control should be visible in the activity trace"
+        );
+
+        let work_status: String =
+            sqlx::query_scalar("select status from agent_work_items where id = $1")
+                .bind(work_item_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(
+            work_status, "silent",
+            "discarded control-only fragments should not leave the work item interrupted forever"
         );
         Ok(())
     }
@@ -1648,7 +1659,7 @@ async fn repeated_interrupted_action_resolve_is_a_noop_after_first_resolution() 
             agent_id,
             run_id,
             &stream_key,
-            "yield",
+            "force_send",
         )
         .await?;
         let second_result = crate::publish_guard::resolve_interrupted_action(
@@ -1656,7 +1667,7 @@ async fn repeated_interrupted_action_resolve_is_a_noop_after_first_resolution() 
             agent_id,
             run_id,
             &stream_key,
-            "yield",
+            "force_send",
         )
         .await;
         assert!(
@@ -1669,13 +1680,13 @@ async fn repeated_interrupted_action_resolve_is_a_noop_after_first_resolution() 
             agent_id,
             run_id,
             &stream_key,
-            "force_send",
+            "revise",
         )
         .await;
         assert!(
             conflicting_result
                 .as_ref()
-                .is_err_and(|err| err.contains("already resolved as yielded")),
+                .is_err_and(|err| err.contains("already resolved as force_sent")),
             "a conflicting second resolve should be rejected instead of silently changing state: {conflicting_result:?}"
         );
 
@@ -1685,7 +1696,7 @@ async fn repeated_interrupted_action_resolve_is_a_noop_after_first_resolution() 
                 .fetch_one(&pool)
                 .await
                 .map_err(|err| err.to_string())?;
-        assert_eq!(buffer_state, "yielded");
+        assert_eq!(buffer_state, "force_sent");
 
         let open_items: i64 = sqlx::query_scalar(
             "select count(*) from agent_inbox_items where kind = 'interrupted_action' and json_extract(payload, '$.stream_key') = $1 and state <> 'archived'",
@@ -2647,6 +2658,92 @@ async fn streaming_intermediate_reply_is_deleted_when_run_continues() {
             .await
             .map_err(|err| err.to_string())?;
         assert_eq!(remaining, 0);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn public_reply_buffer_rejects_yield_and_stays_visible_recoverable() {
+    // A held public reply already contains user-facing draft text. `yield`
+    // silently discards that draft and makes the agent appear to have never
+    // responded, so public replies must be resolved by revise or force_send.
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "public-yield-reject-agent").await?;
+        let channel_id = insert_test_channel(&pool, "public-yield-reject-channel").await?;
+        let (work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+
+        let stream_key = format!("{run_id}:public-yield");
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "visible draft that must not disappear",
+        )
+        .await?;
+        finish_streaming_agent_message(&pool, &stream_key, "complete").await?;
+
+        let (interrupted_kind, allowed_actions): (String, String) = sqlx::query_as(
+            "select json_extract(payload, '$.interrupted_action'), json_extract(payload, '$.allowed_actions') from agent_inbox_items where kind = 'interrupted_action' and json_extract(payload, '$.stream_key') = $1",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(interrupted_kind, "public_reply");
+        assert_eq!(
+            allowed_actions, r#"["revise","force_send"]"#,
+            "public reply interruptions must not advertise yield"
+        );
+
+        let resolve_result = crate::publish_guard::resolve_interrupted_action(
+            &pool,
+            agent_id,
+            run_id,
+            &stream_key,
+            "yield",
+        )
+        .await;
+        assert!(
+            resolve_result.is_err(),
+            "yield on a public reply buffer must be rejected, got: {resolve_result:?}"
+        );
+
+        let (state_after, body_after): (String, String) = sqlx::query_as(
+            "select state, body from agent_output_buffers where stream_key = $1",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(state_after, "held");
+        assert_eq!(body_after, "visible draft that must not disappear");
+
+        let work_status: String =
+            sqlx::query_scalar("select status from agent_work_items where id = $1")
+                .bind(work_item_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(work_status, "interrupted");
+
+        let open_items: i64 = sqlx::query_scalar(
+            "select count(*) from agent_inbox_items where kind = 'interrupted_action' and json_extract(payload, '$.stream_key') = $1 and state <> 'archived'",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(open_items, 1);
         Ok(())
     }
     .await;

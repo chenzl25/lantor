@@ -145,11 +145,17 @@ impl InboxWakeItem {
         if let Some(events) = payload.get("held_visible_events").and_then(Value::as_array) {
             lines.push(format!("   held_visible_events_count: {}", events.len()));
         }
-        lines.push("   protocol: for yield or force_send, emit LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"<stream_key>\",\"action\":\"yield|force_send\"} and do not also post a normal reply.".to_owned());
         if can_revise {
             lines.push("   protocol: for revise, emit LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"<stream_key>\",\"action\":\"revise\"}, then continue with the revised visible reply in this same turn.".to_owned());
-        } else {
-            lines.push("   protocol: revise is not allowed for this interruption (no draft reply to rewrite); choose yield or force_send.".to_owned());
+        }
+        if allowed_actions.iter().any(|action| action == "force_send") {
+            lines.push("   protocol: for force_send, emit LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"<stream_key>\",\"action\":\"force_send\"} and do not also post a normal reply.".to_owned());
+        }
+        if allowed_actions.iter().any(|action| action == "yield") {
+            lines.push("   protocol: for yield, emit LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"<stream_key>\",\"action\":\"yield\"} and do not also post a normal reply.".to_owned());
+        }
+        if !can_revise {
+            lines.push("   protocol: revise is not allowed for this interruption (no draft reply to rewrite); choose one of the listed allowed_actions.".to_owned());
         }
         lines
     }
@@ -739,7 +745,7 @@ pub(crate) fn inbox_wake_context(
         );
         for hint in &off_surface {
             let allowed = if hint.allowed_actions.is_empty() {
-                "revise, yield, force_send".to_owned()
+                "revise, force_send".to_owned()
             } else {
                 hint.allowed_actions.join(", ")
             };
@@ -749,7 +755,7 @@ pub(crate) fn inbox_wake_context(
             ));
         }
         lines.push(
-            "Resolve each with LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"<stream_key>\",\"action\":\"yield|force_send|revise\"} (choose only from that item's allowed_actions). Inspect the full draft with inbox-list/inbox-read first if needed."
+            "Resolve each with LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"<stream_key>\",\"action\":\"<allowed_action>\"} (choose only from that item's allowed_actions). Inspect the full draft with inbox-list/inbox-read first if needed."
                 .to_owned(),
         );
     }
@@ -873,6 +879,13 @@ pub(crate) async fn sync_inbox_for_work_item(
         "done" | "failed" | "cancelled" | "silent" => "archived",
         _ => "processing",
     };
+    // If this work item is closing while it still owns an unresolved
+    // interrupted_action, requeue that inbox item before the generic archive
+    // update below hides it. Otherwise an agent can ignore a held draft and
+    // make the user's reply disappear from future wake-ups.
+    if !matches!(status.as_str(), "queued" | "running" | "cancelling") {
+        let _ = requeue_orphan_interrupted_actions(pool, agent_id).await?;
+    }
     sqlx::query(
         r#"
         update agent_inbox_items
@@ -887,10 +900,8 @@ pub(crate) async fn sync_inbox_for_work_item(
     .execute(pool)
     .await
     .map_err(to_string)?;
-    // If this work_item is closing/idle, any interrupted_action inbox items it was
-    // holding need to be released back to 'unread' so the next wake can pick them up.
-    // Otherwise an agent that ignored the held draft this turn would never be re-prompted
-    // about it, and the user's reply stays hidden forever.
+    // Safety net for any unresolved interrupted_action items linked elsewhere
+    // that became orphaned while this work item was closing.
     if !matches!(status.as_str(), "queued" | "running" | "cancelling") {
         let _ = requeue_orphan_interrupted_actions(pool, agent_id).await?;
     }
