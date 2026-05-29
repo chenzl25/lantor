@@ -752,6 +752,56 @@ async fn incomplete_control_only_fragment_does_not_create_interrupted_action() {
 }
 
 #[tokio::test]
+async fn short_control_marker_prefix_does_not_create_interrupted_action() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "short-control-prefix-agent").await?;
+        let channel_id = insert_test_channel(&pool, "short-control-prefix-channel").await?;
+        let (_work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        let stream_key = format!("{run_id}:short-control-prefix");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "LANTOR",
+        )
+        .await?;
+
+        let held_count: i64 = sqlx::query_scalar(
+            "select count(*) from agent_output_buffers where stream_key = $1 and state = 'held'",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(held_count, 1);
+
+        let active_interrupted: i64 = sqlx::query_scalar(
+            "select count(*) from agent_inbox_items where kind = 'interrupted_action' and json_extract(payload, '$.stream_key') = $1 and state <> 'archived'",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            active_interrupted, 0,
+            "a short LANTOR sentinel prefix must not become a public draft"
+        );
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn terminal_incomplete_control_only_fragment_yields_without_interruption() {
     let Some((pool, schema)) = test_pool().await else {
         return;
@@ -1788,6 +1838,71 @@ async fn split_stale_silent_reply_marks_work_silent_without_publish_gate_hold() 
             open_interrupted, 0,
             "split silent sentinel must not leave an active interrupted_action"
         );
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn split_allowed_silent_reply_never_creates_visible_message() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "split-allowed-silent-agent").await?;
+        let channel_id = insert_test_channel(&pool, "split-allowed-silent-channel").await?;
+        let (work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        let stream_key = format!("{run_id}:split-allowed-silent");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "LANTOR_SILENT_R",
+        )
+        .await?;
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "EPLY: held draft no longer needs a reply",
+        )
+        .await?;
+
+        let message_count: i64 =
+            sqlx::query_scalar("select count(*) from messages where stream_key = $1")
+                .bind(&stream_key)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(
+            message_count, 0,
+            "split silent sentinel must never leak as a visible message"
+        );
+
+        let held_count: i64 = sqlx::query_scalar(
+            "select count(*) from agent_output_buffers where stream_key = $1 and state = 'held'",
+        )
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(held_count, 0);
+
+        let work_status: String =
+            sqlx::query_scalar("select status from agent_work_items where id = $1")
+                .bind(work_item_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(work_status, "silent");
         Ok(())
     }
     .await;

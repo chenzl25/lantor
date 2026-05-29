@@ -297,6 +297,27 @@ pub(crate) async fn replay_agent_events_from_run_log_if_needed(
     Ok(replayed)
 }
 
+pub(crate) fn looks_like_internal_control_prefix_fragment(body: &str) -> bool {
+    let trimmed = body.trim();
+    if trimmed.len() < 4 {
+        return false;
+    }
+    if AGENT_EVENT_PREFIX.starts_with(trimmed) {
+        return true;
+    }
+    if trimmed.len() < SILENT_REPLY_PREFIX.len() && SILENT_REPLY_PREFIX.starts_with(trimmed) {
+        return true;
+    }
+    if let Some(rest) = trimmed.strip_prefix(AGENT_EVENT_PREFIX) {
+        if !rest.is_empty() && !rest.chars().next().is_some_and(char::is_whitespace) {
+            return false;
+        }
+        let payload = rest.trim_start();
+        return payload.is_empty() || complete_json_object_end(payload).is_none();
+    }
+    false
+}
+
 pub(crate) fn extract_agent_event_json(line: &str) -> Option<&str> {
     extract_agent_event_json_with_remainder(line).map(|(json, _)| json)
 }
@@ -1422,8 +1443,9 @@ mod relocated_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        silent_reply_reason, split_complete_streaming_agent_event_lines,
-        split_streaming_agent_event_lines, split_terminal_streaming_agent_event_lines,
+        looks_like_internal_control_prefix_fragment, silent_reply_reason,
+        split_complete_streaming_agent_event_lines, split_streaming_agent_event_lines,
+        split_terminal_streaming_agent_event_lines,
     };
 
     #[test]
@@ -1554,5 +1576,27 @@ mod tests {
             Some(String::new())
         );
         assert_eq!(silent_reply_reason("LANTOR_SILENT_REPLYING"), None);
+    }
+
+    #[test]
+    fn detects_only_internal_control_prefix_fragments() {
+        assert!(looks_like_internal_control_prefix_fragment("LANT"));
+        assert!(looks_like_internal_control_prefix_fragment("LANTOR"));
+        assert!(looks_like_internal_control_prefix_fragment(
+            "LANTOR_EVENT {\"type\""
+        ));
+        assert!(looks_like_internal_control_prefix_fragment(
+            "LANTOR_SILENT_R"
+        ));
+
+        assert!(!looks_like_internal_control_prefix_fragment(
+            "LANTOR_EVENT {\"type\":\"activity\"}"
+        ));
+        assert!(!looks_like_internal_control_prefix_fragment(
+            "LANTOR_SILENT_REPLY: no reply needed"
+        ));
+        assert!(!looks_like_internal_control_prefix_fragment(
+            "I am explaining LANTOR_EVENT behavior"
+        ));
     }
 }

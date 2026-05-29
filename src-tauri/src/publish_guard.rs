@@ -9,8 +9,8 @@ use crate::events::{
     activity::record_agent_activity,
     control::{
         handle_claimed_agent_event_json, handle_streaming_agent_event_json,
-        split_complete_streaming_agent_event_lines, split_terminal_streaming_agent_event_lines,
-        streaming_agent_event_is_visible_side_effect,
+        looks_like_internal_control_prefix_fragment, split_complete_streaming_agent_event_lines,
+        split_terminal_streaming_agent_event_lines, streaming_agent_event_is_visible_side_effect,
     },
 };
 use crate::message_store::{insert_agent_message_with_options, load_message};
@@ -783,8 +783,9 @@ pub(crate) async fn hold_streaming_public_output(
     .await
     .map_err(to_string)?;
 
-    let is_internal_control_fragment =
-        combined_body.contains("LANTOR_EVENT") && draft_body.trim().is_empty();
+    let is_internal_control_fragment = looks_like_internal_control_prefix_fragment(&visible_body)
+        || (draft_body.trim().is_empty()
+            && looks_like_internal_control_prefix_fragment(&combined_body));
     if is_internal_control_fragment && held_visible_events.is_empty() {
         if terminal {
             sqlx::query(
