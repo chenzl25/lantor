@@ -92,8 +92,18 @@ pub(crate) async fn mark_orphaned_agent_runs(pool: &SqlitePool) -> CommandResult
     sqlx::query(
         r#"
         update agent_work_items
-        set status = 'failed',
-            completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
+        set status = case
+                when source_kind = 'inbox_wake' and inbox_item_id is not null then 'queued'
+                else 'failed'
+            end,
+            run_id = case
+                when source_kind = 'inbox_wake' and inbox_item_id is not null then null
+                else run_id
+            end,
+            completed_at = case
+                when source_kind = 'inbox_wake' and inbox_item_id is not null then null
+                else strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+            end,
             updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
         where status = 'running'
         "#,
@@ -791,11 +801,11 @@ async fn load_channel_agent_roster(
 mod tests {
     use std::fs as std_fs;
 
-    use sqlx::SqlitePool;
+    use sqlx::{Row, SqlitePool};
     use uuid::Uuid;
 
     use super::{
-        claim_next_supervisor_command, load_channel_agent_roster,
+        claim_next_supervisor_command, load_channel_agent_roster, mark_orphaned_agent_runs,
         recover_supervisor_commands_at_startup,
     };
     use crate::db::{db_connect_with_url, migrate};
@@ -875,6 +885,133 @@ mod tests {
 
             assert_eq!(running_status, "pending");
             assert_eq!(terminal_status, "done");
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn startup_recovery_requeues_orphaned_running_inbox_work_items() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let agent_id = insert_test_agent(&pool, "orphan-admin").await?;
+            let channel_id = insert_test_channel(&pool, "orphan-thread").await?;
+            sqlx::query("update agents set status = 'running' where id = $1")
+                .bind(agent_id)
+                .execute(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+            sqlx::query(
+                r#"
+                insert into runtime_sessions (agent_id, runtime, provider_thread_id, status)
+                values ($1, 'codex', 'orphan-session', 'idle')
+                "#,
+            )
+            .bind(agent_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+
+            let inbox_id: Uuid = sqlx::query_scalar(
+                r#"
+                insert into agent_inbox_items (agent_id, channel_id, kind, priority, state, title, body_preview, payload)
+                values ($1, $2, 'interrupted_action', 95, 'unread', 'Public reply held because the thread changed', 'stale_context', '{}')
+                returning id
+                "#,
+            )
+            .bind(agent_id)
+            .bind(channel_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            let running_work_id: Uuid = sqlx::query_scalar(
+                r#"
+                insert into agent_work_items (agent_id, channel_id, inbox_item_id, source_kind, title, context, status)
+                values ($1, $2, $3, 'inbox_wake', 'Process inbox: stale hold', 'context', 'running')
+                returning id
+                "#,
+            )
+            .bind(agent_id)
+            .bind(channel_id)
+            .bind(inbox_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            let queued_work_id: Uuid = sqlx::query_scalar(
+                r#"
+                insert into agent_work_items (agent_id, channel_id, inbox_item_id, source_kind, title, context, status)
+                values ($1, $2, $3, 'inbox_wake', 'Process inbox: stale hold follow-up', 'context', 'queued')
+                returning id
+                "#,
+            )
+            .bind(agent_id)
+            .bind(channel_id)
+            .bind(inbox_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            let run_id: Uuid = sqlx::query_scalar(
+                r#"
+                insert into agent_runs (agent_id, work_item_id, command, working_directory, status, pid, log)
+                values ($1, $2, 'codex app-server --listen stdio://', '', 'running', 63157, 'orphan run')
+                returning id
+                "#,
+            )
+            .bind(agent_id)
+            .bind(running_work_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            sqlx::query("update agent_work_items set run_id = $2 where id = $1")
+                .bind(running_work_id)
+                .bind(run_id)
+                .execute(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+
+            mark_orphaned_agent_runs(&pool).await?;
+
+            let run_row = sqlx::query("select status, stopped_at from agent_runs where id = $1")
+                .bind(run_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+            assert_eq!(run_row.get::<String, _>("status"), "unknown");
+            assert!(run_row.get::<Option<String>, _>("stopped_at").is_some());
+
+            let agent_status: String = sqlx::query_scalar("select status from agents where id = $1")
+                .bind(agent_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+            assert_eq!(agent_status, "idle");
+
+            let running_status: String =
+                sqlx::query_scalar("select status from agent_work_items where id = $1")
+                    .bind(running_work_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            let queued_status: String =
+                sqlx::query_scalar("select status from agent_work_items where id = $1")
+                    .bind(queued_work_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            assert_eq!(running_status, "queued");
+            assert_eq!(queued_status, "queued");
+
+            let inbox_state: String =
+                sqlx::query_scalar("select state from agent_inbox_items where id = $1")
+                    .bind(inbox_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            assert_eq!(inbox_state, "unread");
             Ok(())
         }
         .await;
