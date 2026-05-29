@@ -606,6 +606,45 @@ async fn upsert_interrupted_action(
     Ok(())
 }
 
+fn interrupted_action_title(reason: &str) -> &'static str {
+    match reason {
+        "not_owner" => "Public reply held because another agent owns this task",
+        _ => "Public reply held because the thread changed",
+    }
+}
+
+async fn refresh_interrupted_action_payload_without_wake(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    stream_key: &str,
+    reason: &str,
+    payload: Value,
+) -> CommandResult<bool> {
+    let affected = sqlx::query(
+        r#"
+        update agent_inbox_items
+        set title = $3,
+            body_preview = $4,
+            payload = $5,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where agent_id = $1
+          and kind = 'interrupted_action'
+          and json_extract(payload, '$.stream_key') = $2
+          and state <> 'archived'
+        "#,
+    )
+    .bind(agent_id)
+    .bind(stream_key)
+    .bind(interrupted_action_title(reason))
+    .bind(reason)
+    .bind(payload.to_string())
+    .execute(pool)
+    .await
+    .map_err(to_string)?
+    .rows_affected();
+    Ok(affected > 0)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn hold_streaming_public_output(
     pool: &SqlitePool,
@@ -640,6 +679,7 @@ pub(crate) async fn hold_streaming_public_output(
     .fetch_optional(pool)
     .await
     .map_err(to_string)?;
+    let had_existing_buffer = existing.is_some();
     let existing_reason = existing.as_ref().map(|row| row.2.clone());
     let existing_base_version = existing.as_ref().map(|row| row.3);
     let existing_current_version = existing.as_ref().map(|row| row.4);
@@ -702,6 +742,33 @@ pub(crate) async fn hold_streaming_public_output(
     .await
     .map_err(to_string)?;
 
+    let kind = InterruptedActionKind::from_buffer(&visible_body, held_visible_events.len());
+    let payload = json!({
+        "interrupted_action": kind.as_str(),
+        "reason": reason,
+        "draft_body": visible_body,
+        "base_version": base_version,
+        "current_version": current_version,
+        "base_thread_version": current_version,
+        "stream_key": buffer_stream_key,
+        "action_kind": PublishActionKind::ReplyText.as_str(),
+        "held_visible_events": held_visible_events,
+        "allowed_actions": kind.allowed_actions(),
+    });
+
+    if had_existing_buffer
+        && refresh_interrupted_action_payload_without_wake(
+            pool,
+            agent_id,
+            &buffer_stream_key,
+            reason,
+            payload.clone(),
+        )
+        .await?
+    {
+        return Ok(buffer_id);
+    }
+
     if let Some(work_item_id) = work_item_id {
         sqlx::query(
             r#"
@@ -719,19 +786,6 @@ pub(crate) async fn hold_streaming_public_output(
         notify_ui_work_item_changed(pool, work_item_id, "work_item_interrupted").await;
     }
 
-    let kind = InterruptedActionKind::from_buffer(&visible_body, held_visible_events.len());
-    let payload = json!({
-        "interrupted_action": kind.as_str(),
-        "reason": reason,
-        "draft_body": visible_body,
-        "base_version": base_version,
-        "current_version": current_version,
-        "base_thread_version": current_version,
-        "stream_key": buffer_stream_key,
-        "action_kind": PublishActionKind::ReplyText.as_str(),
-        "held_visible_events": held_visible_events,
-        "allowed_actions": kind.allowed_actions(),
-    });
     upsert_interrupted_action(
         pool,
         agent_id,
