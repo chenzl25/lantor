@@ -1054,6 +1054,7 @@ pub(crate) async fn resolve_interrupted_action(
     .map_err(to_string)?
     {
         if requested_terminal_state == Some(state.as_str()) {
+            archive_interrupted_actions_for_stream(pool, agent_id, stream_key).await?;
             return Ok(format!("interrupted action already resolved as {state}"));
         }
         return Err(format!(
@@ -1225,6 +1226,24 @@ pub(crate) async fn resolve_interrupted_action(
         other => return Err(format!("unsupported interrupted action resolve: {other}")),
     }
 
+    archive_interrupted_actions_for_stream(pool, agent_id, stream_key).await?;
+    record_agent_activity(
+        pool,
+        Some(agent_id),
+        Some(run_id),
+        "decision",
+        "Interrupted action resolved",
+        json!({ "stream_key": stream_key, "action": action }).to_string(),
+    )
+    .await?;
+    Ok(format!("interrupted action {action} accepted"))
+}
+
+async fn archive_interrupted_actions_for_stream(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    stream_key: &str,
+) -> CommandResult<()> {
     sqlx::query(
         r#"
         update agent_inbox_items
@@ -1242,14 +1261,5 @@ pub(crate) async fn resolve_interrupted_action(
     .execute(pool)
     .await
     .map_err(to_string)?;
-    record_agent_activity(
-        pool,
-        Some(agent_id),
-        Some(run_id),
-        "decision",
-        "Interrupted action resolved",
-        json!({ "stream_key": stream_key, "action": action }).to_string(),
-    )
-    .await?;
-    Ok(format!("interrupted action {action} accepted"))
+    Ok(())
 }

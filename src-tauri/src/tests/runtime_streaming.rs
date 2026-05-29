@@ -1792,6 +1792,88 @@ async fn repeated_interrupted_action_resolve_is_a_noop_after_first_resolution() 
 }
 
 #[tokio::test]
+async fn repeated_resolve_archives_matching_interrupted_action_after_terminal_buffer() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "repeat-resolve-archive-agent").await?;
+        let channel_id = insert_test_channel(&pool, "repeat-resolve-archive-channel").await?;
+        let (_work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        let stream_key = format!("{run_id}:repeat-resolve-archive");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "stale visible reply",
+        )
+        .await?;
+        finish_streaming_agent_message(&pool, &stream_key, "complete").await?;
+
+        crate::publish_guard::resolve_interrupted_action(
+            &pool,
+            agent_id,
+            run_id,
+            &stream_key,
+            "force_send",
+        )
+        .await?;
+
+        let late_interrupted_id: Uuid = sqlx::query_scalar(
+            r#"
+            insert into agent_inbox_items (
+                agent_id, channel_id, kind, priority, state, title, body_preview, payload
+            )
+            values ($1, $2, 'interrupted_action', 95, 'processing',
+                    'Public reply held because the thread changed', 'stale_context', $3)
+            returning id
+            "#,
+        )
+        .bind(agent_id)
+        .bind(channel_id)
+        .bind(
+            json!({
+                "stream_key": stream_key,
+                "allowed_actions": ["force_send"],
+            })
+            .to_string(),
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+
+        crate::publish_guard::resolve_interrupted_action(
+            &pool,
+            agent_id,
+            run_id,
+            &stream_key,
+            "force_send",
+        )
+        .await?;
+
+        let late_state: String =
+            sqlx::query_scalar("select state from agent_inbox_items where id = $1")
+                .bind(late_interrupted_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(
+            late_state, "archived",
+            "an idempotent resolve must still clear matching active interrupted_action rows"
+        );
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn stale_silent_reply_marks_work_silent_without_publish_gate_hold() {
     let Some((pool, schema)) = test_pool().await else {
         return;
