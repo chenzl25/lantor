@@ -1821,6 +1821,120 @@ async fn repeated_append_to_existing_held_buffer_does_not_rewake() {
 }
 
 #[tokio::test]
+async fn archived_interrupted_action_for_held_buffer_is_reused_without_new_hold_event() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "held-archived-reuse-agent").await?;
+        let channel_id = insert_test_channel(&pool, "held-archived-reuse-channel").await?;
+        let (_work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        let stream_key = format!("{run_id}:held-archived-reuse");
+
+        append_streaming_agent_message(&pool, agent_id, channel_id, None, &stream_key, "first")
+            .await?;
+
+        let first_interrupted_id: uuid::Uuid = sqlx::query_scalar(
+            r#"
+            select id
+            from agent_inbox_items
+            where agent_id = $1
+              and kind = 'interrupted_action'
+              and json_extract(payload, '$.stream_key') = $2
+            "#,
+        )
+        .bind(agent_id)
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+
+        sqlx::query(
+            r#"
+            update agent_inbox_items
+            set state = 'archived',
+                archived_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+            where id = $1
+            "#,
+        )
+        .bind(first_interrupted_id)
+        .execute(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+
+        append_streaming_agent_message(&pool, agent_id, channel_id, None, &stream_key, "-second")
+            .await?;
+
+        let interrupted_count: i64 = sqlx::query_scalar(
+            r#"
+            select count(*)
+            from agent_inbox_items
+            where agent_id = $1
+              and kind = 'interrupted_action'
+              and json_extract(payload, '$.stream_key') = $2
+            "#,
+        )
+        .bind(agent_id)
+        .bind(&stream_key)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            interrupted_count, 1,
+            "a held stream should reuse its interrupted_action even if the prior wake archived it"
+        );
+
+        let (interrupted_id, interrupted_state, draft_body): (uuid::Uuid, String, String) =
+            sqlx::query_as(
+                r#"
+                select id, state, json_extract(payload, '$.draft_body')
+                from agent_inbox_items
+                where agent_id = $1
+                  and kind = 'interrupted_action'
+                  and json_extract(payload, '$.stream_key') = $2
+                "#,
+            )
+            .bind(agent_id)
+            .bind(&stream_key)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        assert_eq!(interrupted_id, first_interrupted_id);
+        assert!(
+            matches!(interrupted_state.as_str(), "unread" | "processing"),
+            "the archived interrupted_action should be reopened for processing, got {interrupted_state}"
+        );
+        assert_eq!(draft_body, "first-second");
+
+        let held_activity_count: i64 = sqlx::query_scalar(
+            r#"
+            select count(*)
+            from agent_activities
+            where agent_id = $1
+              and run_id = $2
+              and title = 'Public reply held'
+            "#,
+        )
+        .bind(agent_id)
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(
+            held_activity_count, 1,
+            "re-surfacing an already-held stream should not record a second hold decision"
+        );
+
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn held_buffer_still_appends_distinct_suffix_delta() {
     let Some((pool, schema)) = test_pool().await else {
         return;

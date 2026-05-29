@@ -613,14 +613,14 @@ fn interrupted_action_title(reason: &str) -> &'static str {
     }
 }
 
-async fn refresh_interrupted_action_payload_without_wake(
+async fn refresh_interrupted_action_payload_for_existing_buffer(
     pool: &SqlitePool,
     agent_id: Uuid,
     stream_key: &str,
     reason: &str,
     payload: Value,
 ) -> CommandResult<bool> {
-    let affected = sqlx::query(
+    let active_affected = sqlx::query(
         r#"
         update agent_inbox_items
         set title = $3,
@@ -642,7 +642,47 @@ async fn refresh_interrupted_action_payload_without_wake(
     .await
     .map_err(to_string)?
     .rows_affected();
-    Ok(affected > 0)
+    if active_affected > 0 {
+        return Ok(true);
+    }
+
+    let archived_affected = sqlx::query(
+        r#"
+        update agent_inbox_items
+        set title = $3,
+            body_preview = $4,
+            payload = $5,
+            state = 'unread',
+            work_item_id = null,
+            archived_at = null,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where id = (
+            select id
+            from agent_inbox_items
+            where agent_id = $1
+              and kind = 'interrupted_action'
+              and json_extract(payload, '$.stream_key') = $2
+              and state = 'archived'
+            order by updated_at desc
+            limit 1
+        )
+        "#,
+    )
+    .bind(agent_id)
+    .bind(stream_key)
+    .bind(interrupted_action_title(reason))
+    .bind(reason)
+    .bind(payload.to_string())
+    .execute(pool)
+    .await
+    .map_err(to_string)?
+    .rows_affected();
+    if archived_affected > 0 {
+        let _ = Box::pin(ensure_agent_inbox_wake_work_item(pool, agent_id)).await?;
+        return Ok(true);
+    }
+
+    Ok(false)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -757,7 +797,7 @@ pub(crate) async fn hold_streaming_public_output(
     });
 
     if had_existing_buffer
-        && refresh_interrupted_action_payload_without_wake(
+        && refresh_interrupted_action_payload_for_existing_buffer(
             pool,
             agent_id,
             &buffer_stream_key,
