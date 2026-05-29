@@ -299,7 +299,7 @@ pub(crate) async fn replay_agent_events_from_run_log_if_needed(
 
 pub(crate) fn looks_like_internal_control_prefix_fragment(body: &str) -> bool {
     let trimmed = body.trim();
-    if trimmed.len() < 4 {
+    if trimmed.is_empty() {
         return false;
     }
     if AGENT_EVENT_PREFIX.starts_with(trimmed) {
@@ -1580,6 +1580,7 @@ mod tests {
 
     #[test]
     fn detects_only_internal_control_prefix_fragments() {
+        assert!(looks_like_internal_control_prefix_fragment("L"));
         assert!(looks_like_internal_control_prefix_fragment("LANT"));
         assert!(looks_like_internal_control_prefix_fragment("LANTOR"));
         assert!(looks_like_internal_control_prefix_fragment(

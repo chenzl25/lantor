@@ -121,6 +121,63 @@ async fn append_streaming_agent_message_inner(
             {
                 return Ok(control_only_id);
             }
+            let row = sqlx::query("select body from agent_output_buffers where stream_key = $1")
+                .bind(stream_key)
+                .fetch_optional(pool)
+                .await
+                .map_err(to_string)?;
+            let existing_body = row
+                .map(|row| row.get::<String, _>("body"))
+                .unwrap_or_default();
+            let combined_body = if !delta.is_empty() && existing_body == delta {
+                existing_body
+            } else {
+                format!("{existing_body}{delta}")
+            };
+            if looks_like_internal_control_prefix_fragment(&combined_body) {
+                return hold_streaming_public_output(
+                    pool,
+                    control_agent_id,
+                    run_id,
+                    Some(work_item_id),
+                    channel_id,
+                    thread_root_id,
+                    stream_key,
+                    delta,
+                    false,
+                    PublishDecision::HoldStale {
+                        base_version: 0,
+                        current_version: 0,
+                    },
+                )
+                .await;
+            }
+            let decision = can_publish_public_output(
+                pool,
+                control_agent_id,
+                channel_id,
+                thread_root_id,
+                Some(work_item_id),
+                PublishActionKind::ReplyText,
+            )
+            .await?;
+            if matches!(decision, PublishDecision::Allow) {
+                sqlx::query("delete from agent_output_buffers where stream_key = $1")
+                    .bind(stream_key)
+                    .execute(pool)
+                    .await
+                    .map_err(to_string)?;
+                return Box::pin(append_streaming_agent_message_inner(
+                    pool,
+                    control_agent_id,
+                    channel_id,
+                    thread_root_id,
+                    stream_key,
+                    &combined_body,
+                    complete_on_truncation,
+                ))
+                .await;
+            }
             return hold_streaming_public_output(
                 pool,
                 control_agent_id,
@@ -131,10 +188,7 @@ async fn append_streaming_agent_message_inner(
                 stream_key,
                 delta,
                 false,
-                PublishDecision::HoldStale {
-                    base_version: 0,
-                    current_version: 0,
-                },
+                decision,
             )
             .await;
         }
@@ -175,6 +229,8 @@ async fn append_streaming_agent_message_inner(
         {
             let combined_body = format!("{body}{delta}");
             if looks_like_internal_control_prefix_fragment(&combined_body) {
+                delete_streaming_agent_message(pool, message_id, "incomplete_control_fragment")
+                    .await?;
                 return hold_streaming_public_output(
                     pool,
                     control_agent_id,
@@ -183,7 +239,7 @@ async fn append_streaming_agent_message_inner(
                     channel_id,
                     thread_root_id,
                     stream_key,
-                    delta,
+                    &combined_body,
                     false,
                     PublishDecision::HoldStale {
                         base_version: 0,
@@ -270,6 +326,15 @@ async fn append_streaming_agent_message_inner(
     if let Some((control_agent_id, run_id, work_item_id)) =
         load_streaming_control_context(pool, stream_key).await?
     {
+        let decision = can_publish_public_output(
+            pool,
+            control_agent_id,
+            channel_id,
+            thread_root_id,
+            work_item_id,
+            PublishActionKind::ReplyText,
+        )
+        .await?;
         if work_item_id.is_some() && looks_like_internal_control_prefix_fragment(delta) {
             return hold_streaming_public_output(
                 pool,
@@ -281,22 +346,10 @@ async fn append_streaming_agent_message_inner(
                 stream_key,
                 delta,
                 false,
-                PublishDecision::HoldStale {
-                    base_version: 0,
-                    current_version: 0,
-                },
+                decision,
             )
             .await;
         }
-        let decision = can_publish_public_output(
-            pool,
-            control_agent_id,
-            channel_id,
-            thread_root_id,
-            work_item_id,
-            PublishActionKind::ReplyText,
-        )
-        .await?;
         if !matches!(decision, PublishDecision::Allow) {
             return hold_streaming_public_output(
                 pool,
