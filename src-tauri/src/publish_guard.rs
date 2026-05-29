@@ -96,6 +96,14 @@ impl InterruptedActionKind {
     }
 }
 
+pub(crate) fn append_held_output_delta(existing_body: &str, delta: &str) -> String {
+    if !delta.is_empty() && existing_body == delta {
+        existing_body.to_owned()
+    } else {
+        format!("{existing_body}{delta}")
+    }
+}
+
 pub(crate) fn control_action_kind_for_event_type(event_type: &str) -> PublishActionKind {
     match event_type {
         "channel_message_create" | "message" | "task_create" | "handoff_create" => {
@@ -613,6 +621,29 @@ fn interrupted_action_title(reason: &str) -> &'static str {
     }
 }
 
+pub(crate) async fn mark_held_output_buffer_yielded(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    stream_key: &str,
+) -> CommandResult<()> {
+    sqlx::query(
+        r#"
+        update agent_output_buffers
+        set state = 'yielded',
+            body = '',
+            held_visible_events = '[]',
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where stream_key = $1 and agent_id = $2 and state = 'held'
+        "#,
+    )
+    .bind(stream_key)
+    .bind(agent_id)
+    .execute(pool)
+    .await
+    .map_err(to_string)?;
+    Ok(())
+}
+
 async fn refresh_interrupted_action_payload_for_existing_buffer(
     pool: &SqlitePool,
     agent_id: Uuid,
@@ -739,11 +770,7 @@ pub(crate) async fn hold_streaming_public_output(
     let (existing_body, existing_held_events) = existing
         .map(|(body, events, _, _, _)| (body, events))
         .unwrap_or_default();
-    let combined_body = if !delta.is_empty() && existing_body == delta {
-        existing_body
-    } else {
-        format!("{existing_body}{delta}")
-    };
+    let combined_body = append_held_output_delta(&existing_body, delta);
     let (visible_body, mut held_visible_events) =
         parse_and_apply_buffer_control_events(pool, agent_id, run_id, &combined_body, terminal)
             .await?;
@@ -949,11 +976,7 @@ pub(crate) async fn consume_accumulated_control_only_output(
         return Ok(None);
     };
     let existing_body: String = row.get("body");
-    let combined_body = if !delta.is_empty() && existing_body == delta {
-        existing_body
-    } else {
-        format!("{existing_body}{delta}")
-    };
+    let combined_body = append_held_output_delta(&existing_body, delta);
     let (visible_body, event_jsons) = split_complete_streaming_agent_event_lines(&combined_body);
     if event_jsons.is_empty() || !visible_body.trim().is_empty() {
         return Ok(None);
@@ -969,38 +992,8 @@ pub(crate) async fn consume_accumulated_control_only_output(
         handle_streaming_agent_event_json(pool, agent_id, run_id, event_json).await?;
     }
 
-    sqlx::query(
-        r#"
-        update agent_output_buffers
-        set state = 'yielded',
-            body = '',
-            held_visible_events = '[]',
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where stream_key = $1 and agent_id = $2 and state = 'held'
-        "#,
-    )
-    .bind(stream_key)
-    .bind(agent_id)
-    .execute(pool)
-    .await
-    .map_err(to_string)?;
-    sqlx::query(
-        r#"
-        update agent_inbox_items
-        set state = 'archived',
-            archived_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where agent_id = $1
-          and kind = 'interrupted_action'
-          and json_extract(payload, '$.stream_key') = $2
-          and state <> 'archived'
-        "#,
-    )
-    .bind(agent_id)
-    .bind(stream_key)
-    .execute(pool)
-    .await
-    .map_err(to_string)?;
+    mark_held_output_buffer_yielded(pool, agent_id, stream_key).await?;
+    archive_interrupted_actions_for_stream(pool, agent_id, stream_key).await?;
     record_agent_activity(
         pool,
         Some(agent_id),
@@ -1239,7 +1232,7 @@ pub(crate) async fn resolve_interrupted_action(
     Ok(format!("interrupted action {action} accepted"))
 }
 
-async fn archive_interrupted_actions_for_stream(
+pub(crate) async fn archive_interrupted_actions_for_stream(
     pool: &SqlitePool,
     agent_id: Uuid,
     stream_key: &str,

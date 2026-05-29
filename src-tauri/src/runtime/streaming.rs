@@ -14,8 +14,9 @@ use crate::events::{
 };
 use crate::message_store::load_message;
 use crate::publish_guard::{
-    bump_thread_version, can_publish_public_output, consume_accumulated_control_only_output,
-    hold_streaming_public_output, output_buffer_exists,
+    append_held_output_delta, archive_interrupted_actions_for_stream, bump_thread_version,
+    can_publish_public_output, consume_accumulated_control_only_output,
+    hold_streaming_public_output, mark_held_output_buffer_yielded, output_buffer_exists,
     repin_run_work_item_base_thread_version_for_surface, PublishActionKind, PublishDecision,
 };
 use crate::ui_notifications::{
@@ -135,11 +136,7 @@ async fn append_streaming_agent_message_inner(
             let existing_body = row
                 .map(|row| row.get::<String, _>("body"))
                 .unwrap_or_default();
-            let combined_body = if !delta.is_empty() && existing_body == delta {
-                existing_body
-            } else {
-                format!("{existing_body}{delta}")
-            };
+            let combined_body = append_held_output_delta(&existing_body, delta);
             if looks_like_internal_control_prefix_fragment(&combined_body) {
                 return hold_streaming_public_output(
                     pool,
@@ -498,48 +495,14 @@ async fn consume_accumulated_silent_output(
         return Ok(None);
     };
     let existing_body: String = row.get("body");
-    let combined_body = if !delta.is_empty() && existing_body == delta {
-        existing_body
-    } else {
-        format!("{existing_body}{delta}")
-    };
+    let combined_body = append_held_output_delta(&existing_body, delta);
     let Some(reason) = silent_reply_reason(&combined_body) else {
         return Ok(None);
     };
 
     mark_run_work_item_silent(pool, agent_id, run_id, &reason).await?;
-    sqlx::query(
-        r#"
-        update agent_output_buffers
-        set state = 'yielded',
-            body = '',
-            held_visible_events = '[]',
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where stream_key = $1 and agent_id = $2 and state = 'held'
-        "#,
-    )
-    .bind(stream_key)
-    .bind(agent_id)
-    .execute(pool)
-    .await
-    .map_err(to_string)?;
-    sqlx::query(
-        r#"
-        update agent_inbox_items
-        set state = 'archived',
-            archived_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where agent_id = $1
-          and kind = 'interrupted_action'
-          and json_extract(payload, '$.stream_key') = $2
-          and state <> 'archived'
-        "#,
-    )
-    .bind(agent_id)
-    .bind(stream_key)
-    .execute(pool)
-    .await
-    .map_err(to_string)?;
+    mark_held_output_buffer_yielded(pool, agent_id, stream_key).await?;
+    archive_interrupted_actions_for_stream(pool, agent_id, stream_key).await?;
     record_agent_activity(
         pool,
         Some(agent_id),
