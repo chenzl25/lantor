@@ -43,6 +43,9 @@ fn runtime_standing_prompt_carries_memory_once() {
     assert!(prompt.contains("Turn startup sequence:"));
     assert!(prompt.contains("Use history-read or message-search when older channel/thread context"));
     assert!(prompt.contains("Reply briefly to direct greetings"));
+    assert!(prompt.contains("If you are explicitly mentioned"));
+    assert!(prompt
+        .contains("do not use LANTOR_SILENT_REPLY just because another agent already answered"));
     assert!(prompt.contains("Agent context tools"));
     assert!(prompt.contains("inbox-list"));
     assert!(prompt.contains("[target=... msg=... time=... type=...]"));
@@ -90,6 +93,8 @@ fn streaming_prompt_replaces_stdout_finish_contract() {
     assert!(streaming.contains("will stream your Codex assistant text"));
     assert!(streaming.contains("Reply briefly to direct greetings"));
     assert!(streaming.contains("pure acknowledgement"));
+    assert!(streaming.contains("If you are explicitly mentioned"));
+    assert!(streaming.contains("at least acknowledge or say you have nothing to add"));
     assert!(streaming.contains("you may emit standalone LANTOR_EVENT control lines"));
     assert!(streaming.contains("Activity progress: before your final reply"));
     assert!(streaming.contains("activity is not only for reasoning"));
@@ -121,6 +126,9 @@ fn streaming_work_item_prompt_omits_repeated_standing_context() {
     assert!(prompt.contains("Standing instructions are already installed"));
     assert!(prompt.contains("authoritative over older warm-runtime context"));
     assert!(prompt.contains("Same-channel/thread follow-ups may be delivered"));
+    assert!(prompt.contains("If you are explicitly mentioned"));
+    assert!(prompt
+        .contains("do not use LANTOR_SILENT_REPLY just because another agent already answered"));
     assert!(prompt.contains("Latest user message: please review"));
     assert!(prompt.contains(WORK_ITEM_FINISH_PROMPT));
     assert!(!prompt.contains("Operating policy:"));
