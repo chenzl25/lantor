@@ -56,6 +56,60 @@ fn inbox_wake_context_includes_message_headers_and_other_active_summary() {
 }
 
 #[test]
+fn inbox_wake_context_marks_direct_owner_mentions_as_visible_required() {
+    let context = inbox_wake_context(
+        &[InboxWakeItem {
+            id: Uuid::new_v4(),
+            channel_id: Some(Uuid::new_v4()),
+            channel_name: Some("lantor".to_owned()),
+            channel_kind: Some("channel".to_owned()),
+            thread_root_id: Some(Uuid::new_v4()),
+            source_message_id: Some(Uuid::new_v4()),
+            task_id: None,
+            kind: "mention".to_owned(),
+            priority: 80,
+            title: "@Dylan @Bugen what do you think?".to_owned(),
+            body_preview: "@Dylan @Bugen what do you think?".to_owned(),
+            payload: "{}".to_owned(),
+            message_created_at: Some(Utc::now()),
+            sender_name: Some("Martin".to_owned()),
+            sender_role: Some("owner".to_owned()),
+        }],
+        &[],
+        &[],
+    );
+
+    assert!(context.contains("direct_mention: owner explicitly @-mentioned you"));
+    assert!(context.contains("MUST produce a concise visible reply"));
+    assert!(context
+        .contains("Do not use LANTOR_SILENT_REPLY just because another agent already answered"));
+}
+
+#[test]
+fn steer_followup_prompt_marks_direct_owner_mentions_as_visible_required() {
+    let prompt = build_steer_followup_prompt(&[InboxWakeItem {
+        id: Uuid::new_v4(),
+        channel_id: Some(Uuid::new_v4()),
+        channel_name: Some("lantor".to_owned()),
+        channel_kind: Some("channel".to_owned()),
+        thread_root_id: Some(Uuid::new_v4()),
+        source_message_id: Some(Uuid::new_v4()),
+        task_id: None,
+        kind: "mention".to_owned(),
+        priority: 80,
+        title: "@Dylan @Bugen what do you think?".to_owned(),
+        body_preview: "@Dylan @Bugen what do you think?".to_owned(),
+        payload: "{}".to_owned(),
+        message_created_at: Some(Utc::now()),
+        sender_name: Some("Martin".to_owned()),
+        sender_role: Some("owner".to_owned()),
+    }]);
+
+    assert!(prompt.contains("direct_mention: owner explicitly @-mentioned you"));
+    assert!(prompt.contains("MUST produce a concise visible reply"));
+}
+
+#[test]
 fn inbox_wake_context_tells_task_available_agents_to_claim_silently() {
     let context = inbox_wake_context(
         &[InboxWakeItem {

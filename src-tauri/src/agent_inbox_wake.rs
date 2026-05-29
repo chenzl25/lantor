@@ -159,6 +159,21 @@ impl InboxWakeItem {
         }
         lines
     }
+
+    fn direct_mention_detail_lines(&self) -> Vec<String> {
+        match (self.kind.as_str(), self.sender_role.as_deref()) {
+            ("mention", Some("owner")) => vec![
+                "   direct_mention: owner explicitly @-mentioned you.".to_owned(),
+                "   instruction: You MUST produce a concise visible reply unless the message is only a pure acknowledgement, thanks, or emoji.".to_owned(),
+                "   instruction: Do not use LANTOR_SILENT_REPLY just because another agent already answered; at minimum acknowledge agreement or say you have nothing to add.".to_owned(),
+            ],
+            ("mention" | "collaboration", _) => vec![
+                "   direct_mention: this inbox item was routed to you because you were explicitly @-mentioned.".to_owned(),
+                "   instruction: Produce a visible reply when your view or action was requested; use LANTOR_SILENT_REPLY only for a true no-action acknowledgement.".to_owned(),
+            ],
+            _ => Vec::new(),
+        }
+    }
 }
 
 fn join_human_oxford(items: &[String]) -> String {
@@ -713,6 +728,7 @@ pub(crate) fn inbox_wake_context(
             "   kind: {}, priority: {}, title: {}",
             item.kind, item.priority, item.title
         ));
+        lines.extend(item.direct_mention_detail_lines());
         lines.extend(item.context_detail_lines());
         if index + 1 < items.len() {
             lines.push(String::new());
@@ -789,6 +805,7 @@ pub(crate) fn build_steer_followup_prompt(items: &[InboxWakeItem]) -> String {
             lines.push(item.message_header());
         }
         lines.push(format!("   inbox_id: {}", item.id));
+        lines.extend(item.direct_mention_detail_lines());
         lines.extend(item.context_detail_lines());
         if index + 1 < items.len() {
             lines.push(String::new());
