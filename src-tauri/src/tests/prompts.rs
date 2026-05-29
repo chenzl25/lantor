@@ -47,7 +47,6 @@ fn runtime_standing_prompt_carries_memory_once() {
     assert!(prompt.contains("inbox-list"));
     assert!(prompt.contains("[target=... msg=... time=... type=...]"));
     assert!(prompt.contains("Live inbox delivery"));
-    assert!(prompt.contains("choose only from that item's allowed_actions"));
     assert!(prompt.contains("Persistent memory: prefer concise replies"));
 }
 
@@ -100,7 +99,6 @@ fn streaming_prompt_replaces_stdout_finish_contract() {
     assert!(streaming.contains("handoff_create"));
     assert!(streaming.contains("task_handoff"));
     assert!(streaming.contains("task_claim"));
-    assert!(streaming.contains("choose only from the item's allowed_actions"));
     assert!(streaming.contains("Do not narrate every intermediate step in chat"));
     assert!(!streaming.contains(WORK_ITEM_FINISH_PROMPT));
 }

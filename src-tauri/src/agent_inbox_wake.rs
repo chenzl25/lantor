@@ -10,7 +10,6 @@ use crate::{
     app::{to_string, CommandResult},
     context_tool::short_id,
     events::activity::record_agent_activity,
-    publish_guard::inbox_payload_with_base_thread_version,
     text::compact_chars_middle,
 };
 
@@ -44,7 +43,6 @@ pub(crate) struct InboxWakeItem {
     pub(crate) priority: i32,
     pub(crate) title: String,
     pub(crate) body_preview: String,
-    pub(crate) payload: String,
     pub(crate) message_created_at: Option<DateTime<Utc>>,
     pub(crate) sender_name: Option<String>,
     pub(crate) sender_role: Option<String>,
@@ -86,93 +84,6 @@ impl InboxWakeItem {
             preview
         )
     }
-
-    fn context_detail_lines(&self) -> Vec<String> {
-        if self.kind != "interrupted_action" {
-            return Vec::new();
-        }
-        let Ok(payload) = serde_json::from_str::<Value>(&self.payload) else {
-            return Vec::new();
-        };
-        let allowed_actions: Vec<String> = payload
-            .get("allowed_actions")
-            .and_then(Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .unwrap_or_else(|| {
-                vec![
-                    "revise".to_owned(),
-                    "yield".to_owned(),
-                    "force_send".to_owned(),
-                ]
-            });
-        let can_revise = allowed_actions.iter().any(|action| action == "revise");
-        let decision_choices = join_human_oxford(&allowed_actions);
-        let mut lines = vec![
-            "   interrupted_action: review the held public output before replying.".to_owned(),
-            format!("   decision: choose one of {decision_choices}."),
-        ];
-        for key in [
-            "reason",
-            "stream_key",
-            "interrupted_action",
-            "action_kind",
-            "base_version",
-            "current_version",
-            "base_thread_version",
-        ] {
-            if let Some(value) = payload.get(key) {
-                lines.push(format!("   {key}: {}", compact_payload_value(value, 512)));
-            }
-        }
-        if let Some(actions) = payload.get("allowed_actions") {
-            lines.push(format!(
-                "   allowed_actions: {}",
-                compact_payload_value(actions, 512)
-            ));
-        }
-        if let Some(draft) = payload.get("draft_body").and_then(Value::as_str) {
-            lines.push(format!(
-                "   draft_body: {}",
-                compact_chars_middle(draft, DISPATCH_MESSAGE_BODY_LIMIT).replace('\n', "\\n")
-            ));
-        }
-        if let Some(events) = payload.get("held_visible_events").and_then(Value::as_array) {
-            lines.push(format!("   held_visible_events_count: {}", events.len()));
-        }
-        lines.push("   protocol: for yield or force_send, emit LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"<stream_key>\",\"action\":\"yield|force_send\"} and do not also post a normal reply.".to_owned());
-        if can_revise {
-            lines.push("   protocol: for revise, emit LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"<stream_key>\",\"action\":\"revise\"}, then continue with the revised visible reply in this same turn.".to_owned());
-        } else {
-            lines.push("   protocol: revise is not allowed for this interruption (no draft reply to rewrite); choose yield or force_send.".to_owned());
-        }
-        lines
-    }
-}
-
-fn join_human_oxford(items: &[String]) -> String {
-    match items.len() {
-        0 => String::new(),
-        1 => items[0].clone(),
-        2 => format!("{} or {}", items[0], items[1]),
-        _ => {
-            let (last, head) = items.split_last().unwrap();
-            format!("{}, or {last}", head.join(", "))
-        }
-    }
-}
-
-fn compact_payload_value(value: &Value, limit: usize) -> String {
-    let rendered = match value {
-        Value::String(value) => value.clone(),
-        _ => value.to_string(),
-    };
-    compact_chars_middle(&rendered, limit).replace('\n', "\\n")
 }
 
 pub(crate) struct InboxWakeSummary {
@@ -180,26 +91,10 @@ pub(crate) struct InboxWakeSummary {
     pub(crate) count: i64,
 }
 
-#[derive(Clone)]
-pub(crate) struct HeldReplyHint {
-    pub(crate) inbox_id: Uuid,
-    pub(crate) target: String,
-    pub(crate) stream_key: String,
-    pub(crate) reason: String,
-    pub(crate) allowed_actions: Vec<String>,
-}
-
 pub(crate) async fn create_agent_inbox_item(
     pool: &SqlitePool,
     input: AgentInboxItemInput<'_>,
 ) -> CommandResult<Uuid> {
-    let payload = inbox_payload_with_base_thread_version(
-        pool,
-        &input.payload,
-        input.channel_id,
-        input.thread_root_id,
-    )
-    .await?;
     if let Some(source_message_id) = input.source_message_id {
         let existing_id: Option<Uuid> = sqlx::query_scalar(
             r#"
@@ -242,7 +137,7 @@ pub(crate) async fn create_agent_inbox_item(
                 input.body_preview,
                 DISPATCH_MESSAGE_BODY_LIMIT,
             ))
-            .bind(payload.to_string())
+            .bind(input.payload)
             .execute(pool)
             .await
             .map_err(to_string)?;
@@ -272,7 +167,7 @@ pub(crate) async fn create_agent_inbox_item(
         input.body_preview,
         DISPATCH_MESSAGE_BODY_LIMIT,
     ))
-    .bind(payload.to_string())
+    .bind(input.payload)
     .fetch_one(pool)
     .await
     .map_err(to_string)?;
@@ -344,7 +239,6 @@ fn inbox_wake_item_from_row(row: &SqliteRow) -> InboxWakeItem {
         priority: row.get("priority"),
         title: row.get("title"),
         body_preview: row.get("body_preview"),
-        payload: row.get("payload"),
         message_created_at: row.get("message_created_at"),
         sender_name: row.get("sender_name"),
         sender_role: row.get("sender_role"),
@@ -369,7 +263,6 @@ async fn next_unread_inbox_wake_item(
             i.priority,
             i.title,
             i.body_preview,
-            i.payload,
             m.created_at as message_created_at,
             m.sender_name,
             m.sender_role
@@ -410,7 +303,6 @@ async fn load_unread_inbox_wake_batch(
             i.priority,
             i.title,
             i.body_preview,
-            i.payload,
             m.created_at as message_created_at,
             m.sender_name,
             m.sender_role
@@ -454,7 +346,6 @@ pub(crate) async fn load_inbox_wake_items_for_work_item(
             i.priority,
             i.title,
             i.body_preview,
-            i.payload,
             m.created_at as message_created_at,
             m.sender_name,
             m.sender_role
@@ -471,85 +362,6 @@ pub(crate) async fn load_inbox_wake_items_for_work_item(
     .map_err(to_string)?;
 
     Ok(rows.iter().map(inbox_wake_item_from_row).collect())
-}
-
-async fn load_unresolved_held_reply_hints(
-    pool: &SqlitePool,
-    agent_id: Uuid,
-) -> CommandResult<Vec<HeldReplyHint>> {
-    let rows = sqlx::query(
-        r#"
-        select
-            i.id,
-            c.name as channel_name,
-            c.kind as channel_kind,
-            i.thread_root_id,
-            i.payload
-        from agent_inbox_items i
-        left join channels c on c.id = i.channel_id
-        join agent_output_buffers b
-          on b.agent_id = i.agent_id
-         and json_extract(i.payload, '$.stream_key') = b.stream_key
-        where i.agent_id = $1
-          and i.kind = 'interrupted_action'
-          and i.state <> 'archived'
-          and b.state = 'held'
-        order by i.priority desc, i.created_at asc
-        "#,
-    )
-    .bind(agent_id)
-    .fetch_all(pool)
-    .await
-    .map_err(to_string)?;
-
-    Ok(rows
-        .iter()
-        .map(|row| {
-            let channel_name: Option<String> = row.get("channel_name");
-            let channel_kind: Option<String> = row.get("channel_kind");
-            let thread_root_id: Option<Uuid> = row.get("thread_root_id");
-            let payload: String = row.get("payload");
-            let payload_value: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
-            let stream_key = payload_value
-                .get("stream_key")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned();
-            let reason = payload_value
-                .get("reason")
-                .and_then(Value::as_str)
-                .unwrap_or("stale_context")
-                .to_owned();
-            let allowed_actions = payload_value
-                .get("allowed_actions")
-                .and_then(Value::as_array)
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_else(|| {
-                    vec![
-                        "revise".to_owned(),
-                        "yield".to_owned(),
-                        "force_send".to_owned(),
-                    ]
-                });
-            HeldReplyHint {
-                inbox_id: row.get("id"),
-                target: format_inbox_target(
-                    channel_kind.as_deref(),
-                    channel_name.as_deref(),
-                    thread_root_id,
-                ),
-                stream_key,
-                reason,
-                allowed_actions,
-            }
-        })
-        .collect())
 }
 
 async fn load_other_active_inbox_summary(
@@ -652,7 +464,6 @@ fn inbox_wake_work_item_title(items: &[InboxWakeItem]) -> String {
 pub(crate) fn inbox_wake_context(
     items: &[InboxWakeItem],
     other_active: &[InboxWakeSummary],
-    held_replies: &[HeldReplyHint],
 ) -> String {
     let Some(primary) = items.first() else {
         return "Lantor agent inbox wake.".to_owned();
@@ -707,7 +518,6 @@ pub(crate) fn inbox_wake_context(
             "   kind: {}, priority: {}, title: {}",
             item.kind, item.priority, item.title
         ));
-        lines.extend(item.context_detail_lines());
         if index + 1 < items.len() {
             lines.push(String::new());
         }
@@ -720,38 +530,6 @@ pub(crate) fn inbox_wake_context(
             lines.push(format!("- {}: {} active", summary.target, summary.count));
         }
         lines.push("Stay focused on the selected item(s) above unless another active target is clearly higher priority.".to_owned());
-    }
-
-    // Surface every still-held interrupted_action draft (across surfaces), so an agent
-    // never silently keeps stacking new replies on top of an un-released prior draft.
-    // Same-surface items will also appear in the batch above; this section exists so
-    // off-surface held replies are not invisible just because they live elsewhere.
-    let batch_ids: std::collections::HashSet<Uuid> = items.iter().map(|item| item.id).collect();
-    let off_surface: Vec<&HeldReplyHint> = held_replies
-        .iter()
-        .filter(|hint| !batch_ids.contains(&hint.inbox_id))
-        .collect();
-    if !off_surface.is_empty() {
-        lines.push(String::new());
-        lines.push(
-            "Unresolved held public replies (must be resolved before any new visible reply on the matching surface):"
-                .to_owned(),
-        );
-        for hint in &off_surface {
-            let allowed = if hint.allowed_actions.is_empty() {
-                "revise, yield, force_send".to_owned()
-            } else {
-                hint.allowed_actions.join(", ")
-            };
-            lines.push(format!(
-                "- target={} reason={} stream_key={} allowed_actions=[{}]",
-                hint.target, hint.reason, hint.stream_key, allowed
-            ));
-        }
-        lines.push(
-            "Resolve each with LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"<stream_key>\",\"action\":\"yield|force_send|revise\"} (choose only from that item's allowed_actions). Inspect the full draft with inbox-list/inbox-read first if needed."
-                .to_owned(),
-        );
     }
 
     lines.join("\n")
@@ -783,7 +561,6 @@ pub(crate) fn build_steer_followup_prompt(items: &[InboxWakeItem]) -> String {
             lines.push(item.message_header());
         }
         lines.push(format!("   inbox_id: {}", item.id));
-        lines.extend(item.context_detail_lines());
         if index + 1 < items.len() {
             lines.push(String::new());
         }
@@ -804,7 +581,6 @@ async fn refresh_inbox_wake_work_item(
     let other_active =
         load_other_active_inbox_summary(pool, agent_id, primary.channel_id, primary.thread_root_id)
             .await?;
-    let held_replies = load_unresolved_held_reply_hints(pool, agent_id).await?;
     sqlx::query(
         r#"
         update agent_work_items
@@ -826,7 +602,7 @@ async fn refresh_inbox_wake_work_item(
     .bind(primary.id)
     .bind(primary.task_id)
     .bind(inbox_wake_work_item_title(items))
-    .bind(inbox_wake_context(items, &other_active, &held_replies))
+    .bind(inbox_wake_context(items, &other_active))
     .execute(pool)
     .await
     .map_err(to_string)?;
@@ -887,57 +663,10 @@ pub(crate) async fn sync_inbox_for_work_item(
     .execute(pool)
     .await
     .map_err(to_string)?;
-    // If this work_item is closing/idle, any interrupted_action inbox items it was
-    // holding need to be released back to 'unread' so the next wake can pick them up.
-    // Otherwise an agent that ignored the held draft this turn would never be re-prompted
-    // about it, and the user's reply stays hidden forever.
-    if !matches!(status.as_str(), "queued" | "running" | "cancelling") {
-        let _ = requeue_orphan_interrupted_actions(pool, agent_id).await?;
-    }
     if source_kind == "inbox_wake" && matches!(status.as_str(), "done" | "failed" | "cancelled") {
         let _ = Box::pin(ensure_agent_inbox_wake_work_item(pool, agent_id)).await?;
     }
     Ok(())
-}
-
-/// Reset any unresolved `interrupted_action` inbox items whose underlying held buffer
-/// is still in state 'held' but whose linked work_item is no longer active. This puts
-/// them back to `state='unread'` (priority 95) so the next inbox wake picks them up
-/// ahead of new dms, instead of letting the held draft accumulate silently while the
-/// agent processes newer messages on the same surface.
-pub(crate) async fn requeue_orphan_interrupted_actions(
-    pool: &SqlitePool,
-    agent_id: Uuid,
-) -> CommandResult<u64> {
-    let affected = sqlx::query(
-        r#"
-        update agent_inbox_items
-        set state = 'unread',
-            work_item_id = null,
-            archived_at = null,
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id in (
-            select i.id
-            from agent_inbox_items i
-            join agent_output_buffers b
-              on json_extract(i.payload, '$.stream_key') = b.stream_key
-             and b.agent_id = i.agent_id
-            left join agent_work_items w on w.id = i.work_item_id
-            where i.agent_id = $1
-              and i.kind = 'interrupted_action'
-              and i.state <> 'unread'
-              and i.state <> 'archived'
-              and b.state = 'held'
-              and (w.id is null or w.status not in ('queued', 'running', 'cancelling'))
-        )
-        "#,
-    )
-    .bind(agent_id)
-    .execute(pool)
-    .await
-    .map_err(to_string)?
-    .rows_affected();
-    Ok(affected)
 }
 
 pub(crate) async fn ensure_agent_inbox_wake_work_item(
@@ -947,9 +676,6 @@ pub(crate) async fn ensure_agent_inbox_wake_work_item(
     if !agent_accepts_new_work(pool, agent_id).await? {
         return Ok(None);
     }
-    // Safety net: if a previous turn left an interrupted_action stranded on a closed
-    // work_item, surface it here before we pick the next primary item.
-    let _ = requeue_orphan_interrupted_actions(pool, agent_id).await?;
     let Some(primary) = next_unread_inbox_wake_item(pool, agent_id).await? else {
         return Ok(None);
     };
@@ -1006,7 +732,6 @@ pub(crate) async fn ensure_agent_inbox_wake_work_item(
         batch[0].thread_root_id,
     )
     .await?;
-    let held_replies = load_unresolved_held_reply_hints(pool, agent_id).await?;
     let work_item_id: Uuid = sqlx::query_scalar(
         r#"
         insert into agent_work_items (
@@ -1024,7 +749,7 @@ pub(crate) async fn ensure_agent_inbox_wake_work_item(
     .bind(batch[0].id)
     .bind(batch[0].task_id)
     .bind(inbox_wake_work_item_title(&batch))
-    .bind(inbox_wake_context(&batch, &other_active, &held_replies))
+    .bind(inbox_wake_context(&batch, &other_active))
     .fetch_one(pool)
     .await
     .map_err(to_string)?;

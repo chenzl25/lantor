@@ -24,11 +24,6 @@ use crate::message_store::{
     insert_agent_attachment_message, insert_agent_handoff_message, insert_agent_message,
     insert_agent_message_with_options,
 };
-use crate::publish_guard::{
-    can_publish_public_output, control_action_kind_for_event_type, hold_visible_control_event,
-    repin_run_work_item_base_thread_version_for_surface, resolve_interrupted_action,
-    run_work_item_id, work_item_public_surface, PublishDecision,
-};
 use crate::runtime::streaming::mark_run_work_item_silent;
 use crate::task_messages::create_agent_task_thread;
 use crate::ui_notifications::{insert_system_message, notify_ui_refresh};
@@ -166,10 +161,6 @@ pub(crate) enum AgentEvent {
         thread_root_id: Uuid,
         reason: Option<String>,
         body: String,
-    },
-    InterruptedActionResolve {
-        stream_key: String,
-        action: String,
     },
 }
 
@@ -435,7 +426,7 @@ pub(crate) fn split_terminal_streaming_agent_event_lines(body: &str) -> (String,
     split_agent_event_jsons_from_text(body, true)
 }
 
-pub(crate) fn streaming_agent_event_is_visible_side_effect(json: &str) -> bool {
+fn control_event_creates_visible_chat_message(json: &str) -> bool {
     let Ok(value) = serde_json::from_str::<Value>(json) else {
         return false;
     };
@@ -444,6 +435,7 @@ pub(crate) fn streaming_agent_event_is_visible_side_effect(json: &str) -> bool {
             "message"
             | "channel_message_create"
             | "task_create"
+            | "task_handoff"
             | "attachment_create"
             | "handoff_create",
         ) => true,
@@ -471,7 +463,7 @@ pub(crate) fn control_event_hides_empty_streaming_reply(json: &str) -> bool {
         return false;
     };
     value.get("type").and_then(Value::as_str) == Some("silent")
-        || streaming_agent_event_is_visible_side_effect(json)
+        || control_event_creates_visible_chat_message(json)
 }
 
 pub(crate) async fn handle_streaming_agent_event_json(
@@ -485,33 +477,8 @@ pub(crate) async fn handle_streaming_agent_event_json(
             if !claim_agent_event(pool, run_id, json).await? {
                 return Ok(());
             }
-            let should_repin_after_accept = streaming_agent_event_is_visible_side_effect(json);
-            if let Some(note) =
-                maybe_hold_visible_streaming_event(pool, agent_id, run_id, json, &event).await?
-            {
-                append_run_log(pool, run_id, format!("[stream-event] {note}\n")).await?;
-                record_agent_activity(
-                    pool,
-                    Some(agent_id),
-                    Some(run_id),
-                    "event",
-                    "Stream event held",
-                    note,
-                )
-                .await?;
-                return Ok(());
-            }
             match handle_agent_event(pool, agent_id, run_id, event).await {
                 Ok(note) => {
-                    if should_repin_after_accept {
-                        repin_run_work_item_base_thread_version_for_surface(
-                            pool,
-                            run_id,
-                            Uuid::nil(),
-                            None,
-                        )
-                        .await?;
-                    }
                     append_run_log(pool, run_id, format!("[stream-event] {note}\n")).await?;
                     record_agent_activity(
                         pool,
@@ -552,116 +519,6 @@ pub(crate) async fn handle_streaming_agent_event_json(
         }
     }
     Ok(())
-}
-
-pub(crate) async fn handle_claimed_agent_event_json(
-    pool: &SqlitePool,
-    agent_id: Uuid,
-    run_id: Uuid,
-    json: &str,
-) -> CommandResult<String> {
-    let event: AgentEvent = serde_json::from_str(json).map_err(to_string)?;
-    Box::pin(handle_agent_event(pool, agent_id, run_id, event)).await
-}
-
-async fn maybe_hold_visible_streaming_event(
-    pool: &SqlitePool,
-    agent_id: Uuid,
-    run_id: Uuid,
-    json: &str,
-    event: &AgentEvent,
-) -> CommandResult<Option<String>> {
-    let (channel_id, thread_root_id, action_kind) = match event {
-        AgentEvent::Message {
-            channel,
-            channel_id,
-            thread_root_id,
-            ..
-        } => (
-            resolve_event_channel(pool, *channel_id, channel.as_deref()).await?,
-            *thread_root_id,
-            control_action_kind_for_event_type("message"),
-        ),
-        AgentEvent::ChannelMessageCreate {
-            channel,
-            channel_id,
-            thread_root_id,
-            ..
-        } => (
-            resolve_event_channel(pool, *channel_id, channel.as_deref()).await?,
-            *thread_root_id,
-            control_action_kind_for_event_type("channel_message_create"),
-        ),
-        AgentEvent::ArtifactCreate {
-            channel,
-            channel_id,
-            thread_root_id,
-            ..
-        } => (
-            resolve_event_channel(pool, *channel_id, channel.as_deref()).await?,
-            *thread_root_id,
-            control_action_kind_for_event_type("artifact_create"),
-        ),
-        AgentEvent::AttachmentCreate {
-            channel,
-            channel_id,
-            thread_root_id,
-            ..
-        } => (
-            resolve_event_channel(pool, *channel_id, channel.as_deref()).await?,
-            *thread_root_id,
-            control_action_kind_for_event_type("attachment_create"),
-        ),
-        AgentEvent::HandoffCreate {
-            channel,
-            channel_id,
-            thread_root_id,
-            ..
-        } => (
-            resolve_event_channel(pool, *channel_id, channel.as_deref()).await?,
-            Some(*thread_root_id),
-            control_action_kind_for_event_type("handoff_create"),
-        ),
-        AgentEvent::TaskCreate {
-            channel,
-            channel_id,
-            ..
-        } => (
-            resolve_event_channel(pool, *channel_id, channel.as_deref()).await?,
-            None,
-            control_action_kind_for_event_type("task_create"),
-        ),
-        _ => return Ok(None),
-    };
-    let work_item_id = run_work_item_id(pool, run_id).await?;
-    let (gate_channel_id, gate_thread_root_id) = work_item_public_surface(pool, work_item_id)
-        .await?
-        .unwrap_or((channel_id, thread_root_id));
-    let decision = can_publish_public_output(
-        pool,
-        agent_id,
-        gate_channel_id,
-        gate_thread_root_id,
-        work_item_id,
-        action_kind,
-    )
-    .await?;
-    if matches!(decision, PublishDecision::Allow) {
-        return Ok(None);
-    }
-    hold_visible_control_event(
-        pool,
-        agent_id,
-        run_id,
-        work_item_id,
-        gate_channel_id,
-        gate_thread_root_id,
-        action_kind,
-        json,
-        decision,
-    )
-    .await
-    .map(Some)
 }
 
 pub(crate) async fn handle_agent_event(
@@ -1404,13 +1261,6 @@ pub(crate) async fn handle_agent_event(
             Ok(format!(
                 "handoff created for @{target_handle}: {work_item_id}"
             ))
-        }
-        AgentEvent::InterruptedActionResolve { stream_key, action } => {
-            let stream_key = stream_key.trim();
-            if stream_key.is_empty() {
-                return Err("interrupted_action_resolve stream_key is required".to_owned());
-            }
-            resolve_interrupted_action(pool, agent_id, run_id, stream_key, action.trim()).await
         }
     }
 }

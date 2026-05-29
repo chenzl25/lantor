@@ -1,7 +1,4 @@
-use super::{
-    build_steer_followup_prompt, inbox_wake_context, requeue_orphan_interrupted_actions,
-    HeldReplyHint, InboxWakeItem, InboxWakeSummary,
-};
+use super::{build_steer_followup_prompt, inbox_wake_context, InboxWakeItem, InboxWakeSummary};
 use crate::channels::open_dm_with_agent_in_pool;
 use crate::context_tool::short_id;
 use crate::message_store::send_owner_message_in_pool;
@@ -9,7 +6,6 @@ use crate::prompts::WORK_ITEM_FINISH_PROMPT;
 use crate::test_support::{drop_test_schema, insert_test_agent, insert_test_channel, test_pool};
 use crate::ui_notifications::notify_ui_work_item_changed;
 use chrono::Utc;
-use serde_json::json;
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -32,7 +28,6 @@ fn inbox_wake_context_includes_message_headers_and_other_active_summary() {
             priority: 90,
             title: "Handle follow-up".to_owned(),
             body_preview: "please use the latest numbers\nand reply directly".to_owned(),
-            payload: "{}".to_owned(),
             message_created_at: Some(Utc::now()),
             sender_name: Some("Dylan".to_owned()),
             sender_role: Some("owner".to_owned()),
@@ -41,7 +36,6 @@ fn inbox_wake_context_includes_message_headers_and_other_active_summary() {
             target: "dm:Hancock".to_owned(),
             count: 2,
         }],
-        &[],
     );
 
     assert!(context.contains("[target=#support:"));
@@ -70,12 +64,10 @@ fn inbox_wake_context_tells_task_available_agents_to_claim_silently() {
             priority: 70,
             title: "Implement queue behavior".to_owned(),
             body_preview: "Implement queue behavior".to_owned(),
-            payload: "{}".to_owned(),
             message_created_at: Some(Utc::now()),
             sender_name: Some("Dylan".to_owned()),
             sender_role: Some("owner".to_owned()),
         }],
-        &[],
         &[],
     );
 
@@ -104,7 +96,6 @@ fn steer_followup_prompt_uses_compact_inbox_headers() {
         priority: 90,
         title: "Handle follow-up".to_owned(),
         body_preview: "please use the latest numbers\nand reply directly".to_owned(),
-        payload: "{}".to_owned(),
         message_created_at: Some(Utc::now()),
         sender_name: Some("Dylan".to_owned()),
         sender_role: Some("owner".to_owned()),
@@ -120,110 +111,6 @@ fn steer_followup_prompt_uses_compact_inbox_headers() {
     assert!(!prompt.contains("title: Handle follow-up"));
     assert!(!prompt.contains("kind: owner_thread_followup"));
     assert!(!prompt.contains(WORK_ITEM_FINISH_PROMPT));
-}
-
-#[test]
-fn interrupted_action_context_exposes_payload_and_resolution_protocol() {
-    let stream_key = format!("{}:item-1", Uuid::new_v4());
-    let context = inbox_wake_context(
-        &[InboxWakeItem {
-            id: Uuid::new_v4(),
-            channel_id: Some(Uuid::new_v4()),
-            channel_name: Some("coordination".to_owned()),
-            channel_kind: Some("channel".to_owned()),
-            thread_root_id: Some(Uuid::new_v4()),
-            source_message_id: None,
-            task_id: None,
-            kind: "interrupted_action".to_owned(),
-            priority: 95,
-            title: "Public reply held because the thread changed".to_owned(),
-            body_preview: "stale_context".to_owned(),
-            payload: json!({
-                "interrupted_action": "public_reply",
-                "reason": "stale_context",
-                "stream_key": stream_key,
-                "action_kind": "reply_text",
-                "base_version": 1,
-                "current_version": 2,
-                "base_thread_version": 2,
-                "draft_body": "old answer",
-                "allowed_actions": ["revise", "yield", "force_send"],
-                "held_visible_events": []
-            })
-            .to_string(),
-            message_created_at: None,
-            sender_name: None,
-            sender_role: None,
-        }],
-        &[],
-        &[],
-    );
-
-    assert!(context.contains("interrupted_action: review the held public output"));
-    assert!(context.contains("decision: choose one of revise, yield, or force_send."));
-    assert!(context.contains("allowed_actions: [\"revise\",\"yield\",\"force_send\"]"));
-    assert!(context.contains("draft_body: old answer"));
-    assert!(context.contains("interrupted_action_resolve"));
-    assert!(context.contains("then continue with the revised visible reply"));
-    assert!(!context.contains("revise is not allowed for this interruption"));
-}
-
-#[test]
-fn interrupted_action_context_for_side_effect_only_omits_revise_protocol() {
-    // Regression for issue #96: when the held interruption is side-effect-only
-    // (no draft reply to rewrite), the prompt must not advertise `revise` as a
-    // decision option or render the revise resolution protocol.
-    let stream_key = format!("{}:event-1", Uuid::new_v4());
-    let context = inbox_wake_context(
-        &[InboxWakeItem {
-            id: Uuid::new_v4(),
-            channel_id: Some(Uuid::new_v4()),
-            channel_name: Some("coordination".to_owned()),
-            channel_kind: Some("channel".to_owned()),
-            thread_root_id: Some(Uuid::new_v4()),
-            source_message_id: None,
-            task_id: None,
-            kind: "interrupted_action".to_owned(),
-            priority: 95,
-            title: "Public reply held because the thread changed".to_owned(),
-            body_preview: "stale_context".to_owned(),
-            payload: json!({
-                "interrupted_action": "visible_control_event",
-                "reason": "stale_context",
-                "stream_key": stream_key,
-                "action_kind": "channel_message_create",
-                "base_version": 1,
-                "current_version": 2,
-                "base_thread_version": 2,
-                "draft_body": "",
-                "allowed_actions": ["yield", "force_send"],
-                "held_visible_events": [
-                    "{\"type\":\"channel_message_create\",\"body\":\"queued side effect\"}"
-                ]
-            })
-            .to_string(),
-            message_created_at: None,
-            sender_name: None,
-            sender_role: None,
-        }],
-        &[],
-        &[],
-    );
-
-    assert!(context.contains("interrupted_action: review the held public output"));
-    assert!(context.contains("decision: choose one of yield or force_send."));
-    assert!(context.contains("allowed_actions: [\"yield\",\"force_send\"]"));
-    assert!(context.contains("interrupted_action: visible_control_event"));
-    assert!(context.contains("held_visible_events_count: 1"));
-    assert!(context.contains("revise is not allowed for this interruption"));
-    assert!(
-        !context.contains("then continue with the revised visible reply"),
-        "side-effect-only interruption must not render the revise protocol line"
-    );
-    assert!(
-        !context.contains("\"action\":\"revise\""),
-        "side-effect-only interruption must not emit a `revise` example payload"
-    );
 }
 
 #[tokio::test]
@@ -458,292 +345,4 @@ async fn inbox_wake_batches_unread_items_for_same_thread() {
     .await;
     drop_test_schema(pool, schema).await;
     assert!(result.is_ok(), "{:?}", result.err());
-}
-
-#[tokio::test]
-async fn requeue_orphan_interrupted_actions_releases_held_drafts_from_closed_work_items() {
-    let Some((pool, schema)) = test_pool().await else {
-        return;
-    };
-    let result: Result<(), String> = async {
-        let agent_id = insert_test_agent(&pool, "interrupted-requeue").await?;
-        let dm_channel_id = Uuid::parse_str(&open_dm_with_agent_in_pool(&pool, agent_id).await?)
-            .map_err(|err| err.to_string())?;
-
-        // Stale interrupted_action whose work_item already closed but whose held buffer
-        // never got resolved by the agent. Without the requeue sweep this stays stuck in
-        // 'processing' forever and the next wake won't see it.
-        let stale_work_item: Uuid = sqlx::query_scalar(
-            r#"
-            insert into agent_work_items (
-                agent_id, channel_id, source_kind, title, context, status, completed_at
-            )
-            values ($1, $2, 'inbox_wake', 'stale wake', 'stale wake', 'done',
-                    strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
-            returning id
-            "#,
-        )
-        .bind(agent_id)
-        .bind(dm_channel_id)
-        .fetch_one(&pool)
-        .await
-        .map_err(|err| err.to_string())?;
-
-        let stream_key = "stream-orphan-1";
-        sqlx::query(
-            r#"
-            insert into agent_output_buffers (
-                stream_key, agent_id, work_item_id, channel_id, reason, body, state
-            )
-            values ($1, $2, $3, $4, 'stale_context', 'draft body', 'held')
-            "#,
-        )
-        .bind(stream_key)
-        .bind(agent_id)
-        .bind(stale_work_item)
-        .bind(dm_channel_id)
-        .execute(&pool)
-        .await
-        .map_err(|err| err.to_string())?;
-
-        let stale_inbox_id: Uuid = sqlx::query_scalar(
-            r#"
-            insert into agent_inbox_items (
-                agent_id, channel_id, kind, priority, state, title, body_preview, payload,
-                work_item_id
-            )
-            values ($1, $2, 'interrupted_action', 95, 'processing',
-                    'Public reply held because the thread changed', 'stale_context',
-                    json_object('stream_key', $3), $4)
-            returning id
-            "#,
-        )
-        .bind(agent_id)
-        .bind(dm_channel_id)
-        .bind(stream_key)
-        .bind(stale_work_item)
-        .fetch_one(&pool)
-        .await
-        .map_err(|err| err.to_string())?;
-
-        // A second item whose buffer was already resolved (force_sent). It must NOT be
-        // requeued — that would replay an already-published reply.
-        let resolved_stream_key = "stream-resolved-1";
-        sqlx::query(
-            r#"
-            insert into agent_output_buffers (
-                stream_key, agent_id, work_item_id, channel_id, reason, body, state
-            )
-            values ($1, $2, $3, $4, 'stale_context', 'already sent', 'force_sent')
-            "#,
-        )
-        .bind(resolved_stream_key)
-        .bind(agent_id)
-        .bind(stale_work_item)
-        .bind(dm_channel_id)
-        .execute(&pool)
-        .await
-        .map_err(|err| err.to_string())?;
-
-        let resolved_inbox_id: Uuid = sqlx::query_scalar(
-            r#"
-            insert into agent_inbox_items (
-                agent_id, channel_id, kind, priority, state, title, body_preview, payload,
-                work_item_id
-            )
-            values ($1, $2, 'interrupted_action', 95, 'processing',
-                    'Public reply held because the thread changed', 'stale_context',
-                    json_object('stream_key', $3), $4)
-            returning id
-            "#,
-        )
-        .bind(agent_id)
-        .bind(dm_channel_id)
-        .bind(resolved_stream_key)
-        .bind(stale_work_item)
-        .fetch_one(&pool)
-        .await
-        .map_err(|err| err.to_string())?;
-
-        // A third item whose work_item is still active (running). Active in-flight drafts
-        // are still being processed by the runtime and must not be ripped out from under it.
-        let active_work_item: Uuid = sqlx::query_scalar(
-            r#"
-            insert into agent_work_items (
-                agent_id, channel_id, source_kind, title, context, status
-            )
-            values ($1, $2, 'inbox_wake', 'live wake', 'live wake', 'running')
-            returning id
-            "#,
-        )
-        .bind(agent_id)
-        .bind(dm_channel_id)
-        .fetch_one(&pool)
-        .await
-        .map_err(|err| err.to_string())?;
-        let active_stream_key = "stream-active-1";
-        sqlx::query(
-            r#"
-            insert into agent_output_buffers (
-                stream_key, agent_id, work_item_id, channel_id, reason, body, state
-            )
-            values ($1, $2, $3, $4, 'stale_context', 'mid-flight draft', 'held')
-            "#,
-        )
-        .bind(active_stream_key)
-        .bind(agent_id)
-        .bind(active_work_item)
-        .bind(dm_channel_id)
-        .execute(&pool)
-        .await
-        .map_err(|err| err.to_string())?;
-        let active_inbox_id: Uuid = sqlx::query_scalar(
-            r#"
-            insert into agent_inbox_items (
-                agent_id, channel_id, kind, priority, state, title, body_preview, payload,
-                work_item_id
-            )
-            values ($1, $2, 'interrupted_action', 95, 'processing',
-                    'Public reply held because the thread changed', 'stale_context',
-                    json_object('stream_key', $3), $4)
-            returning id
-            "#,
-        )
-        .bind(agent_id)
-        .bind(dm_channel_id)
-        .bind(active_stream_key)
-        .bind(active_work_item)
-        .fetch_one(&pool)
-        .await
-        .map_err(|err| err.to_string())?;
-
-        let affected = requeue_orphan_interrupted_actions(&pool, agent_id)
-            .await
-            .map_err(|err| err.to_string())?;
-        assert_eq!(
-            affected, 1,
-            "only the orphaned held draft should be requeued"
-        );
-
-        let stale_row =
-            sqlx::query("select state, work_item_id from agent_inbox_items where id = $1")
-                .bind(stale_inbox_id)
-                .fetch_one(&pool)
-                .await
-                .map_err(|err| err.to_string())?;
-        assert_eq!(stale_row.get::<String, _>("state"), "unread");
-        assert!(
-            stale_row.get::<Option<Uuid>, _>("work_item_id").is_none(),
-            "requeued item must detach from the closed work_item"
-        );
-
-        let resolved_row = sqlx::query("select state from agent_inbox_items where id = $1")
-            .bind(resolved_inbox_id)
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-        assert_eq!(
-            resolved_row.get::<String, _>("state"),
-            "processing",
-            "already-resolved buffers must not be requeued",
-        );
-
-        let active_row = sqlx::query("select state from agent_inbox_items where id = $1")
-            .bind(active_inbox_id)
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-        assert_eq!(
-            active_row.get::<String, _>("state"),
-            "processing",
-            "items linked to a still-active work_item must not be requeued",
-        );
-
-        Ok(())
-    }
-    .await;
-    drop_test_schema(pool, schema).await;
-    assert!(result.is_ok(), "{:?}", result.err());
-}
-
-#[test]
-fn inbox_wake_context_lists_off_surface_held_replies_with_resolve_protocol() {
-    // Held drafts on a different channel/thread than the current wake target must
-    // still surface to the agent so they get resolved before any new visible reply
-    // on those surfaces. Same-surface ones already appear in the batch above, so
-    // we only render the off-surface hints here.
-    let primary_inbox_id = Uuid::new_v4();
-    let off_surface_inbox_id = Uuid::new_v4();
-    let same_surface_inbox_id = Uuid::new_v4();
-    let context = inbox_wake_context(
-        &[InboxWakeItem {
-            id: primary_inbox_id,
-            channel_id: Some(Uuid::new_v4()),
-            channel_name: Some("dm-target".to_owned()),
-            channel_kind: Some("dm".to_owned()),
-            thread_root_id: Some(Uuid::new_v4()),
-            source_message_id: Some(Uuid::new_v4()),
-            task_id: None,
-            kind: "dm".to_owned(),
-            priority: 85,
-            title: "another question".to_owned(),
-            body_preview: "another question".to_owned(),
-            payload: "{}".to_owned(),
-            message_created_at: Some(Utc::now()),
-            sender_name: Some("Dylan".to_owned()),
-            sender_role: Some("owner".to_owned()),
-        }],
-        &[],
-        &[HeldReplyHint {
-            inbox_id: off_surface_inbox_id,
-            target: "#dbt-risingwave:abc1234".to_owned(),
-            stream_key: "stream-off-1".to_owned(),
-            reason: "stale_context".to_owned(),
-            allowed_actions: vec![
-                "revise".to_owned(),
-                "yield".to_owned(),
-                "force_send".to_owned(),
-            ],
-        }],
-    );
-
-    assert!(context.contains("Unresolved held public replies"));
-    assert!(context.contains("target=#dbt-risingwave:abc1234"));
-    assert!(context.contains("stream_key=stream-off-1"));
-    assert!(context.contains("allowed_actions=[revise, yield, force_send]"));
-    assert!(context.contains("interrupted_action_resolve"));
-
-    // Items already present in the wake batch must NOT also appear in the
-    // off-surface hint section (renderer filters by inbox_id).
-    let context_with_same_surface_in_batch = inbox_wake_context(
-        &[InboxWakeItem {
-            id: same_surface_inbox_id,
-            channel_id: Some(Uuid::new_v4()),
-            channel_name: Some("dm-target".to_owned()),
-            channel_kind: Some("dm".to_owned()),
-            thread_root_id: Some(Uuid::new_v4()),
-            source_message_id: None,
-            task_id: None,
-            kind: "interrupted_action".to_owned(),
-            priority: 95,
-            title: "Public reply held".to_owned(),
-            body_preview: "stale_context".to_owned(),
-            payload: "{}".to_owned(),
-            message_created_at: None,
-            sender_name: None,
-            sender_role: None,
-        }],
-        &[],
-        &[HeldReplyHint {
-            inbox_id: same_surface_inbox_id,
-            target: "dm:dm-target:thread".to_owned(),
-            stream_key: "stream-same-1".to_owned(),
-            reason: "stale_context".to_owned(),
-            allowed_actions: vec!["yield".to_owned(), "force_send".to_owned()],
-        }],
-    );
-    assert!(
-        !context_with_same_surface_in_batch.contains("Unresolved held public replies"),
-        "when the only held reply is already in the batch the off-surface section must be omitted",
-    );
 }

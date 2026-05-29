@@ -13,7 +13,6 @@ use crate::agent_memory::append_run_log;
 use crate::app::{to_string, CommandResult};
 use crate::events::activity::{record_agent_activity, record_agent_activity_throttled};
 use crate::prompts::{build_claude_streaming_prompt, claude_system_prompt};
-use crate::publish_guard::output_buffer_exists;
 use crate::runtime::{
     process::{
         classify_agent_output_activity, configure_agent_context_tool_env,
@@ -638,15 +637,17 @@ async fn handle_claude_warm_stdout_line(
             })
         };
         if let Some((_, Some(channel_id), thread_root_id, stream_key)) = active {
-            append_claude_final_text_if_needed(
-                pool,
-                agent_id,
-                channel_id,
-                thread_root_id,
-                &stream_key,
-                &text,
-            )
-            .await?;
+            if !streaming_message_exists(pool, &stream_key).await? {
+                append_streaming_agent_message(
+                    pool,
+                    agent_id,
+                    channel_id,
+                    thread_root_id,
+                    &stream_key,
+                    &text,
+                )
+                .await?;
+            }
         }
     }
 
@@ -744,158 +745,5 @@ async fn remove_warm_claude_runtime_if_same(
         .unwrap_or(false)
     {
         runtimes.remove(&agent_id);
-    }
-}
-
-async fn append_claude_final_text_if_needed(
-    pool: &SqlitePool,
-    agent_id: Uuid,
-    channel_id: Uuid,
-    thread_root_id: Option<Uuid>,
-    stream_key: &str,
-    text: &str,
-) -> CommandResult<()> {
-    if !streaming_message_exists(pool, stream_key).await?
-        && !output_buffer_exists(pool, stream_key).await?
-    {
-        append_streaming_agent_message(
-            pool,
-            agent_id,
-            channel_id,
-            thread_root_id,
-            stream_key,
-            text,
-        )
-        .await?;
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::publish_guard::{bump_thread_version, output_buffer_exists};
-    use crate::runtime::streaming::append_streaming_agent_message;
-    use crate::test_support::{
-        drop_test_schema, insert_test_agent, insert_test_channel, test_pool,
-    };
-    use serde_json::json;
-
-    async fn insert_publish_gate_work(
-        pool: &SqlitePool,
-        agent_id: Uuid,
-        channel_id: Uuid,
-        thread_root_id: Option<Uuid>,
-        base_thread_version: i64,
-    ) -> Result<(Uuid, Uuid), String> {
-        let inbox_item_id: Uuid = sqlx::query_scalar(
-            r#"
-            insert into agent_inbox_items (
-                agent_id, channel_id, thread_root_id, kind, priority, state, title, payload
-            )
-            values ($1, $2, $3, 'mention', 80, 'processing', 'claude publish gate test', $4)
-            returning id
-            "#,
-        )
-        .bind(agent_id)
-        .bind(channel_id)
-        .bind(thread_root_id)
-        .bind(json!({"base_thread_version": base_thread_version}).to_string())
-        .fetch_one(pool)
-        .await
-        .map_err(|err| err.to_string())?;
-        let work_item_id: Uuid = sqlx::query_scalar(
-            r#"
-            insert into agent_work_items (
-                agent_id, channel_id, thread_root_id, inbox_item_id, source_kind, title, context, status
-            )
-            values ($1, $2, $3, $4, 'inbox_wake', 'claude publish gate test', 'context', 'running')
-            returning id
-            "#,
-        )
-        .bind(agent_id)
-        .bind(channel_id)
-        .bind(thread_root_id)
-        .bind(inbox_item_id)
-        .fetch_one(pool)
-        .await
-        .map_err(|err| err.to_string())?;
-        sqlx::query("update agent_inbox_items set work_item_id = $2 where id = $1")
-            .bind(inbox_item_id)
-            .bind(work_item_id)
-            .execute(pool)
-            .await
-            .map_err(|err| err.to_string())?;
-        let run_id: Uuid = sqlx::query_scalar(
-            r#"
-            insert into agent_runs (agent_id, work_item_id, command, status)
-            values ($1, $2, 'claude stream-json', 'running')
-            returning id
-            "#,
-        )
-        .bind(agent_id)
-        .bind(work_item_id)
-        .fetch_one(pool)
-        .await
-        .map_err(|err| err.to_string())?;
-        Ok((work_item_id, run_id))
-    }
-
-    #[tokio::test]
-    async fn claude_final_text_does_not_duplicate_held_delta_buffer() {
-        let Some((pool, schema)) = test_pool().await else {
-            return;
-        };
-        let result: Result<(), String> = async {
-            let agent_id = insert_test_agent(&pool, "claude-final-agent").await?;
-            let channel_id = insert_test_channel(&pool, "claude-final-channel").await?;
-            let (_work_item_id, run_id) =
-                insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
-            bump_thread_version(&pool, channel_id, None).await?;
-            let stream_key = claude_stream_key(run_id);
-
-            append_streaming_agent_message(
-                &pool,
-                agent_id,
-                channel_id,
-                None,
-                &stream_key,
-                "partial held text",
-            )
-            .await?;
-            assert!(output_buffer_exists(&pool, &stream_key).await?);
-
-            append_claude_final_text_if_needed(
-                &pool,
-                agent_id,
-                channel_id,
-                None,
-                &stream_key,
-                "partial held text final text",
-            )
-            .await?;
-
-            let body: String =
-                sqlx::query_scalar("select body from agent_output_buffers where stream_key = $1")
-                    .bind(&stream_key)
-                    .fetch_one(&pool)
-                    .await
-                    .map_err(|err| err.to_string())?;
-            assert_eq!(
-                body, "partial held text",
-                "Claude final text fallback must not append a second copy to an already held stream"
-            );
-            let message_count: i64 =
-                sqlx::query_scalar("select count(*) from messages where stream_key = $1")
-                    .bind(&stream_key)
-                    .fetch_one(&pool)
-                    .await
-                    .map_err(|err| err.to_string())?;
-            assert_eq!(message_count, 0);
-            Ok(())
-        }
-        .await;
-        drop_test_schema(pool, schema).await;
-        result.unwrap();
     }
 }
