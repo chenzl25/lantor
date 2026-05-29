@@ -1846,6 +1846,140 @@ async fn split_stale_silent_reply_marks_work_silent_without_publish_gate_hold() 
 }
 
 #[tokio::test]
+async fn fresh_visible_reply_starting_with_l_is_released_from_prefix_buffer() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "fresh-l-prefix-agent").await?;
+        let channel_id = insert_test_channel(&pool, "fresh-l-prefix-channel").await?;
+        let (_work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        let stream_key = format!("{run_id}:fresh-l-prefix");
+
+        append_streaming_agent_message_deferred_completion(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "L",
+        )
+        .await?;
+        append_streaming_agent_message_deferred_completion(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "ooks normal",
+        )
+        .await?;
+        finish_streaming_agent_message(&pool, &stream_key, "complete").await?;
+
+        let body: String = sqlx::query_scalar("select body from messages where stream_key = $1")
+            .bind(&stream_key)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        assert_eq!(body, "Looks normal");
+
+        let active_interrupted: i64 = sqlx::query_scalar(
+            "select count(*) from agent_inbox_items where kind = 'interrupted_action' and state <> 'archived'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(active_interrupted, 0);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn adopted_placeholder_control_fragment_is_deleted_before_final_stream_key_delta() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "adopted-control-fragment-agent").await?;
+        let channel_id = insert_test_channel(&pool, "adopted-control-fragment-channel").await?;
+        let (_work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        let pending_stream_key = format!("{run_id}:pending");
+        let final_stream_key = format!("{run_id}:msg-final");
+
+        let placeholder_id = ensure_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &pending_stream_key,
+        )
+        .await?;
+        adopt_streaming_agent_message_key(&pool, &pending_stream_key, &final_stream_key).await?;
+        append_streaming_agent_message_deferred_completion(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &final_stream_key,
+            "L",
+        )
+        .await?;
+
+        let message_count: i64 =
+            sqlx::query_scalar("select count(*) from messages where stream_key = $1")
+                .bind(&final_stream_key)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(message_count, 0, "a control prefix must not remain visible after adoption");
+
+        append_streaming_agent_message_deferred_completion(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &final_stream_key,
+            "ANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"held\",\"action\":\"yield\"}",
+        )
+        .await?;
+        finish_streaming_agent_message(&pool, &final_stream_key, "complete").await?;
+
+        let leaked_messages: i64 = sqlx::query_scalar(
+            "select count(*) from messages where body like '%LANTOR_EVENT%' or body = 'L'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(leaked_messages, 0, "split control event must not leak as a visible message");
+
+        let active_interrupted: i64 = sqlx::query_scalar(
+            "select count(*) from agent_inbox_items where kind = 'interrupted_action' and state <> 'archived'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(active_interrupted, 0);
+
+        let placeholder_remaining: i64 =
+            sqlx::query_scalar("select count(*) from messages where id = $1")
+                .bind(placeholder_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(placeholder_remaining, 0);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn split_allowed_silent_reply_never_creates_visible_message() {
     let Some((pool, schema)) = test_pool().await else {
         return;
