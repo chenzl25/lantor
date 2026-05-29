@@ -1631,6 +1631,75 @@ async fn force_send_replays_held_visible_side_effects() {
 }
 
 #[tokio::test]
+async fn force_send_strips_incomplete_control_tail_from_public_reply() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "force-strip-fragment-agent").await?;
+        let channel_id = insert_test_channel(&pool, "force-strip-fragment-channel").await?;
+        let (_work_item_id, run_id) =
+            insert_publish_gate_work(&pool, agent_id, channel_id, None, 0).await?;
+        bump_thread_version(&pool, channel_id, None).await?;
+        let stream_key = format!("{run_id}:public-reply-with-fragment");
+
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "visible draft\n",
+        )
+        .await?;
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &stream_key,
+            "LANTOR_EVENT {\"type\":\"interrupted_action_resolve\",\"stream_key\":\"held\",\"action\":\"force_send",
+        )
+        .await?;
+
+        let buffered_body: String =
+            sqlx::query_scalar("select body from agent_output_buffers where stream_key = $1")
+                .bind(&stream_key)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert!(
+            buffered_body.contains("LANTOR_EVENT"),
+            "test setup must match the live leak: the held buffer contains an incomplete control tail"
+        );
+
+        crate::publish_guard::resolve_interrupted_action(
+            &pool,
+            agent_id,
+            run_id,
+            &stream_key,
+            "force_send",
+        )
+        .await?;
+
+        let published_body: String =
+            sqlx::query_scalar("select body from messages where sender_agent_id = $1")
+                .bind(agent_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(
+            published_body, "visible draft",
+            "force_send must not leak an incomplete internal control fragment into a public message"
+        );
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn repeated_interrupted_action_resolve_is_a_noop_after_first_resolution() {
     let Some((pool, schema)) = test_pool().await else {
         return;

@@ -1167,13 +1167,19 @@ pub(crate) async fn resolve_interrupted_action(
             }
         }
         "force_send" | "send_as_is" => {
-            if !body.trim().is_empty() {
+            // Force-send publishes the user-visible draft only. A held buffer
+            // can still contain a terminal-incomplete LANTOR_EVENT fragment if
+            // a later resolve event arrives from another stream; that internal
+            // control tail must never leak into the public message.
+            let (public_body, _) = split_terminal_streaming_agent_event_lines(&body);
+            let public_body = public_body.trim();
+            if !public_body.is_empty() {
                 let msg_id = insert_agent_message_with_options(
                     pool,
                     agent_id,
                     channel_id,
                     thread_root_id,
-                    body.trim(),
+                    public_body,
                     false,
                     false,
                 )
