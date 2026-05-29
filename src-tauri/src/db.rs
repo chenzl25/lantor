@@ -180,6 +180,33 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         )
         "#,
         r#"
+        create table if not exists thread_versions (
+            surface_kind text not null,
+            surface_id blob not null,
+            version integer not null default 0,
+            updated_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+            primary key (surface_kind, surface_id)
+        )
+        "#,
+        r#"
+        create table if not exists agent_output_buffers (
+            stream_key text primary key not null,
+            agent_id blob not null references agents(id) on delete cascade,
+            run_id blob references agent_runs(id) on delete cascade,
+            work_item_id blob references agent_work_items(id) on delete set null,
+            channel_id blob not null references channels(id) on delete cascade,
+            thread_root_id blob references messages(id) on delete cascade,
+            reason text not null,
+            base_version integer not null default 0,
+            current_version integer not null default 0,
+            body text not null default '',
+            held_visible_events text not null default '[]',
+            state text not null default 'held',
+            created_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+            updated_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
+        )
+        "#,
+        r#"
         create table if not exists message_attachments (
             id blob primary key not null default (randomblob(16)),
             message_id blob not null references messages(id) on delete cascade,

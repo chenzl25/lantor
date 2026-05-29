@@ -10,6 +10,7 @@ use crate::agent_routing::{
 };
 use crate::agent_work_dispatch::dispatch_unassigned_task_availability;
 use crate::attachments::{write_attachment_file, ATTACHMENT_SIZE_LIMIT};
+use crate::publish_guard::bump_thread_version;
 use crate::ui_notifications::{notify_ui_message_upsert, notify_ui_refresh};
 use crate::{
     app::{to_string, CommandResult},
@@ -292,6 +293,7 @@ pub(crate) async fn insert_agent_message_with_options(
     }
 
     tx.commit().await.map_err(to_string)?;
+    bump_thread_version(pool, channel_id, thread_root_id).await?;
     let conversation_thread_root_id = thread_root_id.unwrap_or(msg_id);
     upsert_agent_thread_subscription(
         pool,
@@ -386,6 +388,7 @@ pub(crate) async fn send_owner_message_in_pool(
     }
 
     tx.commit().await.map_err(to_string)?;
+    bump_thread_version(pool, channel_id, thread_root_id).await?;
     queue_mentions_as_work_items(
         pool,
         channel_id,
@@ -618,6 +621,7 @@ pub(crate) async fn insert_agent_attachment_message(
         return Err("attachment_create produced no attachments".to_owned());
     }
     tx.commit().await.map_err(to_string)?;
+    bump_thread_version(pool, channel_id, thread_root_id).await?;
 
     let conversation_thread_root_id = thread_root_id.unwrap_or(msg_id);
     upsert_agent_thread_subscription(

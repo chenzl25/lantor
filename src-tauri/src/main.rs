@@ -23,6 +23,7 @@ mod message_store;
 mod models;
 mod owner_inbox;
 mod prompts;
+mod publish_guard;
 mod runtime;
 mod system_commands;
 mod task_messages;
