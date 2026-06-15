@@ -43,8 +43,8 @@ use crate::channels::{
 use crate::domain::reminders::complete_reminder_in_pool;
 use crate::launch_agent;
 use crate::lifecycle_commands::start_agent_in_pool;
-use crate::message_store::{load_artifact, send_owner_message_in_pool, set_message_saved_in_pool};
-use crate::models::AttachmentUpload;
+use crate::message_store::{load_artifact, set_message_saved_in_pool};
+use crate::models::{AttachmentUpload, Message};
 use crate::owner_inbox::{
     dismiss_inbox_items_in_pool, mark_all_owner_inbox_read_in_pool, mark_channel_read_in_pool,
     mark_inbox_items_read_in_pool,
@@ -77,6 +77,7 @@ struct SendMessageRequest {
     thread_root_id: Option<Uuid>,
     body: String,
     as_task: bool,
+    client_message_id: Option<String>,
     attachments: Option<Vec<AttachmentUpload>>,
 }
 
@@ -418,16 +419,17 @@ async fn api_send_message(
     State(state): State<Arc<WebState>>,
     Json(request): Json<SendMessageRequest>,
 ) -> Result<impl IntoResponse, Response> {
-    send_owner_message_in_pool(
+    crate::message_store::send_owner_message_in_pool_with_client_id(
         &state.pool,
         request.channel_id,
         request.thread_root_id,
         &request.body,
         request.as_task,
         request.attachments.unwrap_or_default(),
+        request.client_message_id.as_deref(),
     )
     .await
-    .map(Json)
+    .map(Json::<Message>)
     .map_err(api_error)
 }
 

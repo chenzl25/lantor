@@ -112,6 +112,34 @@ async fn streaming_placeholder_is_reused_for_visible_reply() {
 }
 
 #[tokio::test]
+async fn empty_streaming_placeholder_is_deleted_on_error() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "empty-placeholder-agent").await?;
+        let channel_id = insert_test_channel(&pool, "empty-placeholder-channel").await?;
+
+        let stream_key = "empty-run:error";
+        let message_id =
+            ensure_streaming_agent_message(&pool, agent_id, channel_id, None, stream_key).await?;
+        finish_streaming_agent_message(&pool, stream_key, "error").await?;
+
+        let exists: bool =
+            sqlx::query_scalar("select exists(select 1 from messages where id = $1)")
+                .bind(message_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert!(!exists, "empty error placeholder should be hidden");
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn completed_deferred_final_reply_survives_later_turn_error() {
     let Some((pool, schema)) = test_pool().await else {
         return;

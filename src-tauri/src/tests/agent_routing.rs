@@ -3,7 +3,9 @@ use super::{
     MentionDispatchOrigin,
 };
 use crate::channels::open_dm_with_agent_in_pool;
-use crate::message_store::{insert_agent_message, send_owner_message_in_pool};
+use crate::message_store::{
+    insert_agent_message, send_owner_message_in_pool, send_owner_message_in_pool_with_client_id,
+};
 use crate::test_support::{drop_test_schema, insert_test_agent, insert_test_channel, test_pool};
 use sqlx::Row;
 use uuid::Uuid;
@@ -108,6 +110,54 @@ async fn dm_rejects_tasks_and_auto_dispatches_owner_messages() {
     .await;
     drop_test_schema(pool, schema).await;
     assert!(result.is_ok(), "{:?}", result.err());
+}
+
+#[tokio::test]
+async fn owner_client_message_id_is_idempotent_and_returned() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let channel_id = insert_test_channel(&pool, "client-id-channel").await?;
+        let client_message_id = "client-message:local-test-send";
+
+        let first = send_owner_message_in_pool_with_client_id(
+            &pool,
+            channel_id,
+            None,
+            "hello once",
+            false,
+            vec![],
+            Some(client_message_id),
+        )
+        .await?;
+        let second = send_owner_message_in_pool_with_client_id(
+            &pool,
+            channel_id,
+            None,
+            "hello once",
+            false,
+            vec![],
+            Some(client_message_id),
+        )
+        .await?;
+
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.stream_key, client_message_id);
+        assert_eq!(second.body, "hello once");
+        let message_count: i64 = sqlx::query_scalar(
+            "select count(*) from messages where stream_key = $1 and sender_role = 'owner'",
+        )
+        .bind(client_message_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(message_count, 1);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
 }
 
 #[tokio::test]

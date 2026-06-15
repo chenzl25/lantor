@@ -401,6 +401,7 @@ pub(crate) async fn insert_agent_message_with_options(
     Ok(msg_id)
 }
 
+#[cfg(test)]
 pub(crate) async fn send_owner_message_in_pool(
     pool: &SqlitePool,
     channel_id: Uuid,
@@ -409,13 +410,54 @@ pub(crate) async fn send_owner_message_in_pool(
     as_task: bool,
     attachments: Vec<AttachmentUpload>,
 ) -> CommandResult<Message> {
+    send_owner_message_in_pool_with_client_id(
+        pool,
+        channel_id,
+        thread_root_id,
+        body,
+        as_task,
+        attachments,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn send_owner_message_in_pool_with_client_id(
+    pool: &SqlitePool,
+    channel_id: Uuid,
+    thread_root_id: Option<Uuid>,
+    body: &str,
+    as_task: bool,
+    attachments: Vec<AttachmentUpload>,
+    client_message_id: Option<&str>,
+) -> CommandResult<Message> {
     if body.trim().is_empty() && attachments.is_empty() {
         return Err("message body or attachment is required".to_owned());
     }
+    let client_message_id = client_message_id.unwrap_or_default().trim();
+    let client_message_key =
+        if client_message_id.starts_with("client-message:") && client_message_id.len() <= 160 {
+            client_message_id.to_owned()
+        } else {
+            String::new()
+        };
     let mut tx = pool
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(to_string)?;
+    if !client_message_key.is_empty() {
+        let existing_id: Option<Uuid> = sqlx::query_scalar(
+            "select id from messages where stream_key = $1 and sender_role = 'owner'",
+        )
+        .bind(&client_message_key)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(to_string)?;
+        if let Some(existing_id) = existing_id {
+            tx.rollback().await.map_err(to_string)?;
+            return load_message(pool, existing_id).await;
+        }
+    }
     let channel_kind: Option<String> =
         sqlx::query_scalar("select kind from channels where id = $1")
             .bind(channel_id)
@@ -438,8 +480,16 @@ pub(crate) async fn send_owner_message_in_pool(
 
     let msg_id: Uuid = sqlx::query_scalar(
         r#"
-        insert into messages (channel_id, thread_root_id, sender_name, sender_role, body, is_task)
-        values ($1, $2, $3, 'owner', $4, $5)
+        insert into messages (
+            channel_id,
+            thread_root_id,
+            sender_name,
+            sender_role,
+            body,
+            is_task,
+            stream_key
+        )
+        values ($1, $2, $3, 'owner', $4, $5, $6)
         returning id
         "#,
     )
@@ -448,6 +498,7 @@ pub(crate) async fn send_owner_message_in_pool(
     .bind(owner_display_name)
     .bind(body.trim())
     .bind(as_task)
+    .bind(&client_message_key)
     .fetch_one(&mut *tx)
     .await
     .map_err(to_string)?;
@@ -474,6 +525,9 @@ pub(crate) async fn send_owner_message_in_pool(
     }
 
     tx.commit().await.map_err(to_string)?;
+    let message = load_message(pool, msg_id).await?;
+    let _ = notify_ui_message_upsert(pool, &message, "message").await;
+
     queue_mentions_as_work_items(
         pool,
         channel_id,
@@ -486,9 +540,8 @@ pub(crate) async fn send_owner_message_in_pool(
     .await?;
     if let Some(task_id) = task_id {
         dispatch_unassigned_task_availability(pool, task_id).await?;
+        let _ = notify_ui_refresh(pool, "task_message").await;
     }
-    let message = load_message(pool, msg_id).await?;
-    let _ = notify_ui_message_upsert(pool, &message, "message").await;
     let _ = notify_ui_refresh(pool, "message").await;
     Ok(message)
 }

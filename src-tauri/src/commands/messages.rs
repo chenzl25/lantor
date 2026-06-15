@@ -3,10 +3,7 @@ use uuid::Uuid;
 
 use crate::{
     app::{AppState, CommandResult},
-    message_store::{
-        delete_message_in_pool, send_owner_message_in_pool, set_message_saved_in_pool,
-        update_message_in_pool,
-    },
+    message_store::{delete_message_in_pool, set_message_saved_in_pool, update_message_in_pool},
     models::{AttachmentUpload, Message},
 };
 
@@ -16,16 +13,18 @@ pub(crate) async fn send_message(
     thread_root_id: Option<Uuid>,
     body: String,
     as_task: bool,
+    client_message_id: Option<String>,
     attachments: Option<Vec<AttachmentUpload>>,
     state: State<'_, AppState>,
 ) -> CommandResult<Message> {
-    send_owner_message_in_pool(
+    crate::message_store::send_owner_message_in_pool_with_client_id(
         &state.pool,
         channel_id,
         thread_root_id,
         &body,
         as_task,
         attachments.unwrap_or_default(),
+        client_message_id.as_deref(),
     )
     .await
 }

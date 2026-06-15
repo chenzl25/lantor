@@ -466,6 +466,28 @@ async fn finish_streaming_agent_message_inner(
         }
     }
 
+    let pending_row = sqlx::query(
+        r#"
+        select id, body
+        from messages
+        where stream_key = $1
+          and delivery_state = 'streaming'
+        "#,
+    )
+    .bind(stream_key)
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)?;
+
+    if let Some(row) = pending_row {
+        let message_id: Uuid = row.get("id");
+        let body: String = row.get("body");
+        if body.trim().is_empty() && delivery_state == "error" {
+            delete_streaming_agent_message(pool, message_id, "empty_streaming_reply").await?;
+            return Ok(());
+        }
+    }
+
     let affected = sqlx::query(
         r#"
         update messages

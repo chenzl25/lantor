@@ -431,6 +431,10 @@ function clientId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+function clientMessageStreamKey(messageId: string) {
+  return `client-message:${messageId}`;
+}
+
 function draftAttachmentFromFile(file: File): DraftAttachment {
   return {
     id: `${file.name}-${file.size}-${file.lastModified}-${clientId()}`,
@@ -858,7 +862,16 @@ function App() {
     setData((current) => {
       if (!current || refreshInvalidation === refreshInvalidationRef.current) return refreshed;
       const refreshedMessageIds = new Set(refreshed.messages.map((message) => message.id));
-      const currentOnlyMessages = current.messages.filter((message) => !refreshedMessageIds.has(message.id));
+      const refreshedStreamKeys = new Set(
+        refreshed.messages
+          .map((message) => message.stream_key || null)
+          .filter((value): value is string => Boolean(value)),
+      );
+      const currentOnlyMessages = current.messages.filter((message) => {
+        if (refreshedMessageIds.has(message.id)) return false;
+        const optimisticKey = optimisticMessageIdentityKey(message);
+        return !optimisticKey || !refreshedStreamKeys.has(optimisticKey);
+      });
       if (currentOnlyMessages.length === 0) return refreshed;
       return {
         ...refreshed,
@@ -911,21 +924,26 @@ function App() {
   function applyMessageUpsert(message: Message) {
     messageDeltaBufferRef.current.delete(message.id);
     invalidatePendingRefreshResult();
+    const confirmedOptimisticIds = consumeConfirmedOptimisticMessages([message]);
     setData((current) => {
       if (!current) {
         requestRefresh(`Failed to refresh ${APP_DISPLAY_NAME} state after message update`);
         return current;
       }
-      const existingIndex = current.messages.findIndex((item) => item.id === message.id);
+      const currentMessages = confirmedOptimisticIds.size > 0
+        ? current.messages.filter((item) => !confirmedOptimisticIds.has(item.id))
+        : current.messages;
+      const existingIndex = currentMessages.findIndex((item) => item.id === message.id);
       const messages = existingIndex >= 0
-        ? current.messages.map((item) => item.id === message.id ? message : item)
-        : [...current.messages, message];
+        ? currentMessages.map((item) => item.id === message.id ? message : item)
+        : [...currentMessages, message];
       return { ...current, messages: sortedMessages(messages) };
     });
   }
 
   function withOptimisticMessages(next: Bootstrap): Bootstrap {
     if (optimisticMessagesRef.current.size === 0) return next;
+    consumeConfirmedOptimisticMessages(next.messages);
     const existingIds = new Set(next.messages.map((message) => message.id));
     const optimisticMessages = Array.from(optimisticMessagesRef.current.values())
       .filter((message) => !existingIds.has(message.id));
@@ -2884,6 +2902,44 @@ function App() {
     optimisticAttachmentUrlsRef.current.delete(messageId);
   }
 
+  function isLocalOptimisticMessage(message: Message) {
+    return message.id.startsWith("local-") && message.sender_role === "owner";
+  }
+
+  function optimisticMessageIdentityKey(message: Message) {
+    return isLocalOptimisticMessage(message) && message.stream_key ? message.stream_key : null;
+  }
+
+  function matchesConfirmedOptimisticMessage(confirmed: Message, optimistic: Message) {
+    if (confirmed.id === optimistic.id || !isLocalOptimisticMessage(optimistic)) return false;
+    if (confirmed.sender_role !== "owner") return false;
+    return Boolean(confirmed.stream_key) && confirmed.stream_key === optimistic.stream_key;
+  }
+
+  function consumeConfirmedOptimisticMessages(confirmedMessages: Message[]) {
+    if (optimisticMessagesRef.current.size === 0) return new Set<string>();
+    const confirmedOptimisticIds = new Set<string>();
+    const optimisticMessages = Array.from(optimisticMessagesRef.current.values())
+      .sort((left, right) => timestampSortValue(left.created_at) - timestampSortValue(right.created_at));
+
+    for (const confirmed of confirmedMessages) {
+      if (confirmed.sender_role !== "owner" || isLocalOptimisticMessage(confirmed)) continue;
+      const matched = optimisticMessages.find((optimistic) =>
+        !confirmedOptimisticIds.has(optimistic.id)
+        && matchesConfirmedOptimisticMessage(confirmed, optimistic)
+      );
+      if (!matched) continue;
+      confirmedOptimisticIds.add(matched.id);
+    }
+
+    for (const messageId of confirmedOptimisticIds) {
+      optimisticMessagesRef.current.delete(messageId);
+      releaseOptimisticAttachmentUrls(messageId);
+      knownMessageIdsRef.current?.delete(messageId);
+    }
+    return confirmedOptimisticIds;
+  }
+
   function addOptimisticOwnerMessage(
     channelId: string,
     threadRootId: string | null,
@@ -2893,6 +2949,7 @@ function App() {
   ) {
     const id = `local-${clientId()}`;
     const createdAt = new Date().toISOString();
+    const streamKey = clientMessageStreamKey(id);
     const optimisticMessage: Message = {
       id,
       channel_id: channelId,
@@ -2904,7 +2961,7 @@ function App() {
       is_task: asTask,
       thread_followed: true,
       delivery_state: attachments.length > 0 ? "sending" : "complete",
-      stream_key: "",
+      stream_key: streamKey,
       task_number: null,
       task_status: null,
       attachments: optimisticMessageAttachments(id, attachments),
@@ -3196,9 +3253,11 @@ function App() {
         threadRootId: null,
         body,
         asTask: sendAsTask,
+        clientMessageId: clientMessageStreamKey(optimisticId),
         attachments: await attachmentUploads(attachments),
       });
       settleOptimisticMessage(optimisticId, persistedMessage);
+      if (sendAsTask) requestRefresh(`Failed to refresh ${APP_DISPLAY_NAME} state after task message`);
     } catch (err) {
       removeOptimisticMessage(optimisticId);
       updateRootComposerDraft(channel.id, () => ({ text: body, attachments }));
@@ -3236,6 +3295,7 @@ function App() {
         threadRootId: activeRoot.id,
         body,
         asTask: false,
+        clientMessageId: clientMessageStreamKey(optimisticId),
         attachments: await attachmentUploads(attachments),
       });
       settleOptimisticMessage(optimisticId, persistedMessage);
