@@ -20,6 +20,7 @@ Use these groups before adding component-specific tokens:
 - `--surface-panel`: default content panel.
 - `--surface-panel-strong`: stronger panel used for cards and nav shells.
 - `--surface-elevated`: raised rows or nested panels.
+- `--surface-recessed`: inset surfaces inside a modal or panel (selection lists, embedded pickers, "wells" that should read as deeper than their container in both light and dark).
 - `--surface-floating`: popovers, menus, modals, and floating nav.
 - `--surface-sticky`: sticky headers and toolbars.
 - `--surface-input`: text fields and editable surfaces.
