@@ -16,6 +16,18 @@ use crate::{
     models::{Artifact, AttachmentUpload, Message, MessageAttachment, SavedMessage},
 };
 
+pub(crate) const MESSAGE_LIFECYCLE_INTERMEDIATE: &str = "intermediate";
+pub(crate) const MESSAGE_LIFECYCLE_STREAMING_FINAL: &str = "streaming_final";
+pub(crate) const MESSAGE_LIFECYCLE_COMMITTED: &str = "committed";
+pub(crate) const MESSAGE_LIFECYCLE_DISCARDED: &str = "discarded";
+
+pub(crate) fn message_lifecycle_is_visible(lifecycle: &str) -> bool {
+    matches!(
+        lifecycle,
+        MESSAGE_LIFECYCLE_STREAMING_FINAL | MESSAGE_LIFECYCLE_COMMITTED
+    )
+}
+
 pub(crate) async fn load_messages(pool: &SqlitePool) -> CommandResult<Vec<Message>> {
     load_messages_with_scope(pool, MessageLoadScope::All).await
 }
@@ -50,6 +62,7 @@ async fn load_messages_with_scope(
                 m.is_task,
                 m.thread_followed,
                 m.delivery_state,
+                m.lifecycle,
                 m.stream_key,
                 t.number as task_number,
                 t.status as task_status,
@@ -57,6 +70,7 @@ async fn load_messages_with_scope(
                 m.updated_at
             from messages m
             left join tasks t on t.message_id = m.id
+            where m.lifecycle in ('streaming_final', 'committed')
             order by julianday(m.created_at) asc, m.created_at asc
             "#,
             None,
@@ -72,6 +86,7 @@ async fn load_messages_with_scope(
                         order by julianday(created_at) desc, created_at desc
                     ) as message_rank
                 from messages
+                where lifecycle in ('streaming_final', 'committed')
             ),
             recent_work_items as (
                 select source_message_id, thread_root_id
@@ -101,6 +116,7 @@ async fn load_messages_with_scope(
                 from messages m
                 join base_selected_message_ids selected on selected.id = m.id
                 where m.thread_root_id is not null
+                  and m.lifecycle in ('streaming_final', 'committed')
             )
             select
                 m.id,
@@ -113,6 +129,7 @@ async fn load_messages_with_scope(
                 m.is_task,
                 m.thread_followed,
                 m.delivery_state,
+                m.lifecycle,
                 m.stream_key,
                 t.number as task_number,
                 t.status as task_status,
@@ -121,6 +138,7 @@ async fn load_messages_with_scope(
             from messages m
             left join tasks t on t.message_id = m.id
             where m.id in (select id from selected_message_ids)
+              and m.lifecycle in ('streaming_final', 'committed')
             order by julianday(m.created_at) asc, m.created_at asc
             "#,
             Some(limit),
@@ -145,6 +163,7 @@ async fn load_messages_with_scope(
             is_task: row.get("is_task"),
             thread_followed: row.get("thread_followed"),
             delivery_state: row.get("delivery_state"),
+            lifecycle: row.get("lifecycle"),
             stream_key: row.get("stream_key"),
             task_number: row.get("task_number"),
             task_status: row.get("task_status"),
@@ -176,6 +195,7 @@ pub(crate) async fn load_saved_messages(pool: &SqlitePool) -> CommandResult<Vec<
         from saved_messages sm
         join messages m on m.id = sm.message_id
         join channels c on c.id = m.channel_id
+        where m.lifecycle in ('streaming_final', 'committed')
         order by sm.created_at desc
         "#,
     )
@@ -214,6 +234,7 @@ pub(crate) async fn load_message(pool: &SqlitePool, message_id: Uuid) -> Command
             m.is_task,
             m.thread_followed,
             m.delivery_state,
+            m.lifecycle,
             m.stream_key,
             t.number as task_number,
             t.status as task_status,
@@ -240,6 +261,7 @@ pub(crate) async fn load_message(pool: &SqlitePool, message_id: Uuid) -> Command
         is_task: row.get("is_task"),
         thread_followed: row.get("thread_followed"),
         delivery_state: row.get("delivery_state"),
+        lifecycle: row.get("lifecycle"),
         stream_key: row.get("stream_key"),
         task_number: row.get("task_number"),
         task_status: row.get("task_status"),

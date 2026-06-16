@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::agent_inbox_wake::sync_inbox_for_work_item;
 use crate::app::{to_string, CommandResult};
-use crate::message_store::load_message;
+use crate::message_store::{load_message, message_lifecycle_is_visible};
 use crate::models::{AgentActivity, AgentRunPatch, AgentWorkItemPatch, Artifact, Message};
 
 pub(crate) const UI_REFRESH_CHANNEL: &str = "lantor_ui_refresh";
@@ -46,6 +46,9 @@ pub(crate) async fn notify_ui_message_upsert(
     message: &Message,
     reason: &str,
 ) -> CommandResult<()> {
+    if !message_lifecycle_is_visible(&message.lifecycle) {
+        return Ok(());
+    }
     notify_database_event(
         pool,
         UI_REFRESH_CHANNEL,

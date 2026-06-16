@@ -23,6 +23,7 @@ pub(crate) async fn load_channels(pool: &SqlitePool) -> CommandResult<Vec<Channe
                 )
                   and m.sender_role <> 'owner'
                   and m.delivery_state <> 'streaming'
+                  and m.lifecycle in ('streaming_final', 'committed')
                   and not (
                     m.sender_role <> 'system'
                     and m.delivery_state = 'complete'
@@ -81,6 +82,7 @@ pub(crate) async fn load_thread_activities(
             from messages m
             where m.thread_root_id is not null
               and m.delivery_state <> 'streaming'
+              and m.lifecycle in ('streaming_final', 'committed')
               and not (
                 m.sender_role <> 'system'
                 and m.sender_role <> 'owner'

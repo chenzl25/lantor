@@ -40,6 +40,20 @@ async fn agent_context_tool_reads_thread_history_and_searches_messages() {
         .execute(&pool)
         .await
         .map_err(|err| err.to_string())?;
+        sqlx::query(
+            r#"
+            insert into messages (
+                channel_id, thread_root_id, sender_name, sender_role, body, is_task, lifecycle
+            )
+            values ($1, $2, 'agent', 'agent', 'hidden draft needle', false, 'intermediate'),
+                   ($1, null, 'agent', 'agent', 'discarded root needle', false, 'discarded')
+            "#,
+        )
+        .bind(channel_id)
+        .bind(root_id)
+        .execute(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
 
         let history_args = vec![
             "history-read".to_owned(),
@@ -54,6 +68,7 @@ async fn agent_context_tool_reads_thread_history_and_searches_messages() {
         assert!(history.contains("[target=#context-tools:"));
         assert!(history.contains(" type=owner] Dylan: root message with needle"));
         assert!(!history.contains("separate root message"));
+        assert!(!history.contains("hidden draft needle"));
 
         let search_args = vec![
             "message-search".to_owned(),
@@ -64,6 +79,8 @@ async fn agent_context_tool_reads_thread_history_and_searches_messages() {
         ];
         let search = agent_context_message_search(&pool, &search_args).await?;
         assert!(search.contains("root message with needle"));
+        assert!(!search.contains("hidden draft needle"));
+        assert!(!search.contains("discarded root needle"));
         assert!(search.contains("[target=#context-tools msg="));
         Ok(())
     }

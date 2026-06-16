@@ -1,9 +1,10 @@
 use super::{
     adopt_streaming_agent_message_key, append_streaming_agent_message,
     append_streaming_agent_message_deferred_completion, consume_streaming_agent_control_lines,
-    dispatch_streaming_agent_message_mentions, ensure_streaming_agent_message,
-    finish_streaming_agent_message, finish_streaming_agent_message_deferred_mentions,
-    maybe_hide_silent_streaming_reply, streaming_message_body_is_empty,
+    delete_streaming_agent_message_by_key, dispatch_streaming_agent_message_mentions,
+    ensure_streaming_agent_message, finish_streaming_agent_message,
+    finish_streaming_agent_message_deferred_mentions, maybe_hide_silent_streaming_reply,
+    streaming_message_body_is_empty,
 };
 use crate::domain::reminders::load_reminders;
 use crate::message_store::load_messages;
@@ -70,13 +71,17 @@ async fn streaming_placeholder_is_reused_for_visible_reply() {
             ensure_streaming_agent_message(&pool, agent_id, channel_id, None, &pending_stream_key)
                 .await?;
         let messages = load_messages(&pool).await?;
-        let placeholder = messages
-            .iter()
-            .find(|message| message.id == placeholder_id)
-            .expect("placeholder should be visible in bootstrap payload");
-        assert_eq!(placeholder.body, "");
-        assert_eq!(placeholder.delivery_state, "streaming");
-        assert_eq!(placeholder.stream_key, pending_stream_key);
+        assert!(
+            messages.iter().all(|message| message.id != placeholder_id),
+            "intermediate placeholder must stay out of bootstrap payload"
+        );
+        let placeholder_lifecycle: String =
+            sqlx::query_scalar("select lifecycle from messages where id = $1")
+                .bind(placeholder_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(placeholder_lifecycle, "intermediate");
 
         let adopted_id =
             adopt_streaming_agent_message_key(&pool, &pending_stream_key, &final_stream_key)
@@ -103,7 +108,86 @@ async fn streaming_placeholder_is_reused_for_visible_reply() {
             .expect("final reply should reuse placeholder message");
         assert_eq!(message.body, "Done");
         assert_eq!(message.delivery_state, "complete");
+        assert_eq!(message.lifecycle, "committed");
         assert_eq!(message.stream_key, final_stream_key);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn superseded_intermediate_reply_is_not_emitted_to_ui() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "codex-agent").await?;
+        let channel_id = insert_test_channel(&pool, "codex-channel").await?;
+        let run_id = Uuid::new_v4();
+        let draft_stream_key = format!("{run_id}:draft");
+        let final_stream_key = format!("{run_id}:final");
+
+        let draft_id = append_streaming_agent_message_deferred_completion(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &draft_stream_key,
+            "Intermediate text that must never be visible",
+        )
+        .await?;
+        delete_streaming_agent_message_by_key(
+            &pool,
+            &draft_stream_key,
+            "superseded_intermediate_reply",
+        )
+        .await?;
+        let final_id = append_streaming_agent_message_deferred_completion(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            &final_stream_key,
+            "Final visible text",
+        )
+        .await?;
+        finish_streaming_agent_message_deferred_mentions(&pool, &final_stream_key, "complete")
+            .await?;
+
+        let draft_lifecycle: String =
+            sqlx::query_scalar("select lifecycle from messages where id = $1")
+                .bind(draft_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(draft_lifecycle, "discarded");
+
+        let messages = load_messages(&pool).await?;
+        assert!(messages.iter().all(|message| message.id != draft_id));
+        let final_message = messages
+            .iter()
+            .find(|message| message.id == final_id)
+            .expect("final message should be visible");
+        assert_eq!(final_message.body, "Final visible text");
+        assert_eq!(final_message.lifecycle, "committed");
+
+        let events: Vec<String> =
+            sqlx::query_scalar("select event_json from ui_events order by id asc")
+                .fetch_all(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        let event_log = events.join("\n");
+        assert!(
+            !event_log.contains("Intermediate text that must never be visible"),
+            "discarded intermediate body leaked into UI events: {event_log}"
+        );
+        assert!(
+            !event_log.contains("message_delete"),
+            "hidden intermediate should not emit a visible delete event: {event_log}"
+        );
+        assert!(event_log.contains("Final visible text"));
         Ok(())
     }
     .await;

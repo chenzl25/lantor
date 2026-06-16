@@ -85,6 +85,7 @@ export type Message = {
   is_task: boolean;
   thread_followed: boolean;
   delivery_state: "complete" | "streaming" | "error" | string;
+  lifecycle: "intermediate" | "streaming_final" | "committed" | "discarded" | string;
   stream_key: string;
   task_number: number | null;
   task_status: string | null;

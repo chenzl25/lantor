@@ -12,7 +12,10 @@ use crate::events::{
         split_terminal_streaming_agent_event_lines,
     },
 };
-use crate::message_store::load_message;
+use crate::message_store::{
+    load_message, message_lifecycle_is_visible, MESSAGE_LIFECYCLE_COMMITTED,
+    MESSAGE_LIFECYCLE_DISCARDED, MESSAGE_LIFECYCLE_INTERMEDIATE, MESSAGE_LIFECYCLE_STREAMING_FINAL,
+};
 use crate::ui_notifications::{
     notify_ui_message_delete, notify_ui_message_delta, notify_ui_message_upsert, notify_ui_refresh,
     notify_ui_work_item_changed,
@@ -104,7 +107,7 @@ async fn append_streaming_agent_message_inner(
     }
 
     if let Some(row) = sqlx::query(
-        "select id, delivery_state, length(body) as body_len from messages where stream_key = $1",
+        "select id, delivery_state, lifecycle, length(body) as body_len from messages where stream_key = $1",
     )
     .bind(stream_key)
     .fetch_optional(pool)
@@ -113,6 +116,8 @@ async fn append_streaming_agent_message_inner(
     {
         let message_id: Uuid = row.get("id");
         let delivery_state: String = row.get("delivery_state");
+        let previous_lifecycle: String = row.get("lifecycle");
+        let was_visible = message_lifecycle_is_visible(&previous_lifecycle);
         if delivery_state != "streaming" {
             return Ok(message_id);
         }
@@ -129,21 +134,39 @@ async fn append_streaming_agent_message_inner(
         } else {
             "streaming"
         };
-        sqlx::query("update messages set body = body || $2, delivery_state = $3 where id = $1")
+        let lifecycle = if truncated && complete_on_truncation {
+            MESSAGE_LIFECYCLE_COMMITTED
+        } else if complete_on_truncation {
+            MESSAGE_LIFECYCLE_STREAMING_FINAL
+        } else {
+            previous_lifecycle.as_str()
+        };
+        sqlx::query(
+            "update messages set body = body || $2, delivery_state = $3, lifecycle = $4 where id = $1",
+        )
             .bind(message_id)
             .bind(&append_delta)
             .bind(delivery_state)
+            .bind(lifecycle)
             .execute(pool)
             .await
             .map_err(to_string)?;
-        let _ = notify_ui_message_delta(
-            pool,
-            message_id,
-            &append_delta,
-            delivery_state,
-            "stream_delta",
-        )
-        .await;
+        if message_lifecycle_is_visible(lifecycle) {
+            if !was_visible {
+                if let Ok(message) = load_message(pool, message_id).await {
+                    let _ = notify_ui_message_upsert(pool, &message, "stream_start").await;
+                }
+            } else {
+                let _ = notify_ui_message_delta(
+                    pool,
+                    message_id,
+                    &append_delta,
+                    delivery_state,
+                    "stream_delta",
+                )
+                .await;
+            }
+        }
         if let Some((control_agent_id, run_id, _)) =
             load_streaming_control_context(pool, stream_key).await?
         {
@@ -183,6 +206,13 @@ async fn append_streaming_agent_message_inner(
     } else {
         "streaming"
     };
+    let lifecycle = if truncated && complete_on_truncation {
+        MESSAGE_LIFECYCLE_COMMITTED
+    } else if complete_on_truncation {
+        MESSAGE_LIFECYCLE_STREAMING_FINAL
+    } else {
+        MESSAGE_LIFECYCLE_INTERMEDIATE
+    };
 
     let message_id: Uuid = sqlx::query_scalar(
         r#"
@@ -195,9 +225,10 @@ async fn append_streaming_agent_message_inner(
             body,
             is_task,
             delivery_state,
+            lifecycle,
             stream_key
         )
-        values ($1, $2, $3, $4, $5, $6, false, $7, $8)
+        values ($1, $2, $3, $4, $5, $6, false, $7, $8, $9)
         returning id
         "#,
     )
@@ -208,6 +239,7 @@ async fn append_streaming_agent_message_inner(
     .bind(sender_role)
     .bind(initial_body)
     .bind(delivery_state)
+    .bind(lifecycle)
     .bind(stream_key)
     .fetch_one(pool)
     .await
@@ -273,9 +305,10 @@ pub(crate) async fn ensure_streaming_agent_message(
             body,
             is_task,
             delivery_state,
+            lifecycle,
             stream_key
         )
-        values ($1, $2, $3, $4, $5, '', false, 'streaming', $6)
+        values ($1, $2, $3, $4, $5, '', false, 'streaming', $6, $7)
         returning id
         "#,
     )
@@ -284,6 +317,7 @@ pub(crate) async fn ensure_streaming_agent_message(
     .bind(agent_id)
     .bind(sender_name)
     .bind(sender_role)
+    .bind(MESSAGE_LIFECYCLE_INTERMEDIATE)
     .bind(stream_key)
     .fetch_one(pool)
     .await
@@ -354,12 +388,23 @@ async fn delete_streaming_agent_message(
     message_id: Uuid,
     reason: &str,
 ) -> CommandResult<()> {
+    let lifecycle: Option<String> =
+        sqlx::query_scalar("select lifecycle from messages where id = $1")
+            .bind(message_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(to_string)?;
     sqlx::query("delete from messages where id = $1")
         .bind(message_id)
         .execute(pool)
         .await
         .map_err(to_string)?;
-    let _ = notify_ui_message_delete(pool, message_id, reason).await;
+    if lifecycle
+        .as_deref()
+        .is_some_and(message_lifecycle_is_visible)
+    {
+        let _ = notify_ui_message_delete(pool, message_id, reason).await;
+    }
     Ok(())
 }
 
@@ -368,14 +413,29 @@ pub(crate) async fn delete_streaming_agent_message_by_key(
     stream_key: &str,
     reason: &str,
 ) -> CommandResult<()> {
-    let message_id: Option<Uuid> =
-        sqlx::query_scalar("select id from messages where stream_key = $1")
-            .bind(stream_key)
-            .fetch_optional(pool)
+    let row = sqlx::query("select id, lifecycle from messages where stream_key = $1")
+        .bind(stream_key)
+        .fetch_optional(pool)
+        .await
+        .map_err(to_string)?;
+    if let Some(row) = row {
+        let message_id: Uuid = row.get("id");
+        let lifecycle: String = row.get("lifecycle");
+        if reason == "superseded_intermediate_reply" {
+            sqlx::query(
+                "update messages set lifecycle = $2, updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where id = $1",
+            )
+            .bind(message_id)
+            .bind(MESSAGE_LIFECYCLE_DISCARDED)
+            .execute(pool)
             .await
             .map_err(to_string)?;
-    if let Some(message_id) = message_id {
-        delete_streaming_agent_message(pool, message_id, reason).await?;
+            if message_lifecycle_is_visible(&lifecycle) {
+                let _ = notify_ui_message_delete(pool, message_id, reason).await;
+            }
+        } else {
+            delete_streaming_agent_message(pool, message_id, reason).await?;
+        }
     }
     Ok(())
 }
@@ -469,7 +529,12 @@ async fn finish_streaming_agent_message_inner(
     let affected = sqlx::query(
         r#"
         update messages
-        set delivery_state = $2
+        set delivery_state = $2,
+            lifecycle = case
+                when $2 = 'complete' then 'committed'
+                when lifecycle = 'intermediate' then 'discarded'
+                else lifecycle
+            end
         where stream_key = $1
           and delivery_state = 'streaming'
         "#,

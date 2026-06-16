@@ -109,6 +109,7 @@ pub(crate) struct Message {
     pub(crate) is_task: bool,
     pub(crate) thread_followed: bool,
     pub(crate) delivery_state: String,
+    pub(crate) lifecycle: String,
     pub(crate) stream_key: String,
     pub(crate) task_number: Option<i64>,
     pub(crate) task_status: Option<String>,

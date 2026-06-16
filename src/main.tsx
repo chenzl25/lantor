@@ -842,9 +842,13 @@ function App() {
   function normalizeBootstrap(next: Bootstrap): Bootstrap {
     return {
       ...next,
-      messages: sortedMessages(next.messages),
+      messages: sortedMessages(next.messages.filter(messageLifecycleIsVisible)),
       agent_activities: limitActivitiesPerAgent(next.agent_activities),
     };
+  }
+
+  function messageLifecycleIsVisible(message: Message) {
+    return message.lifecycle === "streaming_final" || message.lifecycle === "committed";
   }
 
   function invalidatePendingRefreshResult() {
@@ -915,6 +919,9 @@ function App() {
       if (!current) {
         requestRefresh(`Failed to refresh ${APP_DISPLAY_NAME} state after message update`);
         return current;
+      }
+      if (!messageLifecycleIsVisible(message)) {
+        return { ...current, messages: current.messages.filter((item) => item.id !== message.id) };
       }
       const existingIndex = current.messages.findIndex((item) => item.id === message.id);
       const messages = existingIndex >= 0
@@ -2904,6 +2911,7 @@ function App() {
       is_task: asTask,
       thread_followed: true,
       delivery_state: attachments.length > 0 ? "sending" : "complete",
+      lifecycle: "committed",
       stream_key: "",
       task_number: null,
       task_status: null,

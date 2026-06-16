@@ -212,6 +212,7 @@ async fn resolve_agent_context_thread(
         select id
         from messages
         where channel_id = $1 and lower(hex(id)) like replace(lower($2), '-', '')
+          and lifecycle in ('streaming_final', 'committed')
         order by created_at asc
         limit 1
         "#,
@@ -340,6 +341,7 @@ pub(crate) async fn agent_context_history_read(
             left join tasks t on t.message_id = m.id
             where m.channel_id = $1
               and (m.id = $2 or m.thread_root_id = $2)
+              and m.lifecycle in ('streaming_final', 'committed')
             order by m.created_at desc
             limit $3
             "#,
@@ -362,6 +364,7 @@ pub(crate) async fn agent_context_history_read(
             left join tasks t on t.message_id = m.id
             where m.channel_id = $1
               and m.thread_root_id is null
+              and m.lifecycle in ('streaming_final', 'committed')
             order by m.created_at desc
             limit $2
             "#,
@@ -417,6 +420,7 @@ pub(crate) async fn agent_context_message_search(
             left join tasks t on t.message_id = m.id
             where m.channel_id = $1
               and lower(m.body) like lower($2)
+              and m.lifecycle in ('streaming_final', 'committed')
             order by m.created_at desc
             limit $3
             "#,
@@ -440,6 +444,7 @@ pub(crate) async fn agent_context_message_search(
             join channels c on c.id = m.channel_id
             left join tasks t on t.message_id = m.id
             where lower(m.body) like lower($1)
+              and m.lifecycle in ('streaming_final', 'committed')
             order by m.created_at desc
             limit $2
             "#,
@@ -862,6 +867,7 @@ pub(crate) async fn agent_context_run_read(
         where m.sender_agent_id = $1
           and m.stream_key like $2
           and trim(m.body) <> ''
+          and m.lifecycle in ('streaming_final', 'committed')
         order by m.created_at asc
         limit $3
         "#,

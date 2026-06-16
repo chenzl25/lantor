@@ -198,6 +198,7 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             is_task boolean not null default 0,
             thread_followed boolean not null default 1,
             delivery_state text not null default 'complete',
+            lifecycle text not null default 'committed',
             stream_key text not null default '',
             created_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
             updated_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
@@ -473,6 +474,13 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "agents",
         "environment_variables",
         "text not null default ''",
+    )
+    .await?;
+    ensure_text_column(
+        pool,
+        "messages",
+        "lifecycle",
+        "text not null default 'committed'",
     )
     .await?;
 
