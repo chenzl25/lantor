@@ -3234,21 +3234,9 @@ mark {
   position: relative;
   z-index: 1;
   display: grid;
-  overflow: hidden;
   max-width: min(92vw, 1120px);
   max-height: calc(100dvh - 104px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   place-items: center;
-  touch-action: none;
-  cursor: zoom-in;
-  user-select: none;
-}
-
-.attachment-lightbox-content[data-zoomed="true"] {
-  cursor: grab;
-}
-
-.attachment-lightbox-content[data-zoomed="true"]:active {
-  cursor: grabbing;
 }
 
 .attachment-lightbox-content img {
@@ -3258,10 +3246,6 @@ mark {
   border-radius: 18px;
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.34);
   object-fit: contain;
-  transform-origin: center;
-  transition: transform 120ms ease;
-  user-select: none;
-  -webkit-user-drag: none;
 }
 
 .attachment-lightbox-close {
@@ -3277,54 +3261,6 @@ mark {
   background: rgba(255, 255, 255, 0.92);
   color: #111827;
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.2);
-}
-
-.attachment-lightbox-tools {
-  position: absolute;
-  top: calc(14px + env(safe-area-inset-top));
-  left: 50%;
-  z-index: 2;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 34px;
-  padding: 3px;
-  border: 1px solid rgba(255, 255, 255, 0.24);
-  border-radius: 999px;
-  background: rgba(17, 24, 39, 0.76);
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
-  color: #f9fafb;
-  transform: translateX(-50%);
-}
-
-.attachment-lightbox-tools button {
-  display: inline-grid;
-  width: 30px;
-  height: 28px;
-  place-items: center;
-  border-radius: 999px;
-  background: transparent;
-  color: inherit;
-}
-
-.attachment-lightbox-tools button:hover:not(:disabled),
-.attachment-lightbox-tools button:focus-visible {
-  background: rgba(255, 255, 255, 0.14);
-  outline: none;
-}
-
-.attachment-lightbox-tools button:disabled {
-  cursor: default;
-  opacity: 0.42;
-}
-
-.attachment-lightbox-tools span {
-  min-width: 48px;
-  color: inherit;
-  font-size: var(--type-size-meta);
-  font-weight: var(--type-weight-semibold);
-  line-height: 1;
-  text-align: center;
 }
 
 .message-stream-state {

@@ -303,36 +303,6 @@
       "n": 0
     },
     {
-      "selector": ".attachment-lightbox-tools",
-      "prop": "background",
-      "literal": "rgba(17, 24, 39, 0.76)",
-      "n": 0
-    },
-    {
-      "selector": ".attachment-lightbox-tools",
-      "prop": "border",
-      "literal": "rgba(255, 255, 255, 0.24)",
-      "n": 0
-    },
-    {
-      "selector": ".attachment-lightbox-tools",
-      "prop": "box-shadow",
-      "literal": "rgba(0, 0, 0, 0.22)",
-      "n": 0
-    },
-    {
-      "selector": ".attachment-lightbox-tools",
-      "prop": "color",
-      "literal": "#f9fafb",
-      "n": 0
-    },
-    {
-      "selector": ".attachment-lightbox-tools button:hover:not(:disabled), .attachment-lightbox-tools button:focus-visible",
-      "prop": "background",
-      "literal": "rgba(255, 255, 255, 0.14)",
-      "n": 0
-    },
-    {
       "selector": ".beginning",
       "prop": "color",
       "literal": "#8f8f95",
