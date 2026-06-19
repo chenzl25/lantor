@@ -5724,7 +5724,7 @@ body.resizing-column * {
 
 .settings-fieldset {
   display: grid;
-  gap: 9px;
+  gap: 12px;
   min-width: 0;
   margin: 0;
   padding: 0;
