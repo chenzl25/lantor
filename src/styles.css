@@ -3774,9 +3774,10 @@ mark {
 }
 
 .markdown-body table {
-  width: max-content;
+  width: 100%;
   min-width: 100%;
   border-spacing: 0;
+  table-layout: auto;
 }
 
 .markdown-body th,
@@ -3784,8 +3785,10 @@ mark {
   padding: 6px 8px;
   border-right: 1px solid var(--border-emphasis);
   border-bottom: 1px solid var(--border-emphasis);
-  white-space: nowrap;
   vertical-align: top;
+  white-space: normal;
+  min-width: 6em;
+  overflow-wrap: anywhere;
 }
 
 .markdown-body th {
