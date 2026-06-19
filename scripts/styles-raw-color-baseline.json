@@ -693,18 +693,6 @@
       "n": 0
     },
     {
-      "selector": ".message-attachment.image",
-      "prop": "background",
-      "literal": "#eef0f4",
-      "n": 0
-    },
-    {
-      "selector": ".message-attachment.image img",
-      "prop": "background",
-      "literal": "#eef0f4",
-      "n": 0
-    },
-    {
       "selector": ".message-card:hover .message-long-preview.collapsed::after, .message-card.focused .message-long-preview.collapsed::after, .message-card.tap-focused .message-long-preview.collapsed::after, .message-card[data-jump-focused=\"true\"] .message-long-preview.collapsed::after",
       "prop": "background",
       "literal": "rgba(248, 248, 248, 0.98)",

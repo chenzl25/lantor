@@ -2921,17 +2921,21 @@ mark {
 
 .message-attachments {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(132px, 260px));
+  grid-template-columns: repeat(auto-fit, 112px);
   gap: 8px;
   margin-top: 8px;
 }
 
 .message-attachment {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  position: relative;
+  display: flex;
+  aspect-ratio: 1;
+  flex-direction: column;
   align-items: center;
-  gap: 9px;
-  min-height: 48px;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 0;
   padding: 8px;
   border: 1px solid var(--line);
   border-radius: 13px;
@@ -2949,19 +2953,17 @@ mark {
   display: block;
   grid-template-columns: none;
   min-height: 0;
-  overflow: hidden;
-  padding: 0;
-  background: #eef0f4;
+  overflow: visible;
+  padding: 3px;
+  background: var(--bg-control-flat);
   cursor: zoom-in;
 }
 
 .message-attachment.image.compact-image {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  min-height: 48px;
+  display: flex;
   padding: 8px;
   background: var(--bg-control-flat);
-  text-align: left;
+  text-align: center;
 }
 
 .message-attachment.image.compact-image:hover {
@@ -2971,10 +2973,11 @@ mark {
 .message-attachment.image img {
   display: block;
   width: 100%;
-  height: 132px;
-  border-radius: 0;
+  aspect-ratio: 1;
+  height: auto;
+  border-radius: 9px;
   object-fit: cover;
-  background: #eef0f4;
+  background: var(--bg-control-flat);
 }
 
 .message-attachment.image:hover img {
@@ -2987,6 +2990,39 @@ mark {
 
 .message-attachment.pending {
   opacity: 0.78;
+}
+
+.message-attachment[data-attachment-name]::after {
+  position: absolute;
+  right: auto;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  z-index: 20;
+  width: max-content;
+  max-width: min(320px, 70vw);
+  padding: 6px 8px;
+  border: 1px solid var(--border-emphasis);
+  border-radius: 8px;
+  background: var(--surface-tooltip);
+  box-shadow: var(--state-selected-shadow);
+  color: var(--ink-on-tooltip);
+  content: attr(data-attachment-name);
+  font-size: var(--type-size-caption);
+  font-weight: var(--type-weight-medium);
+  line-height: 1.35;
+  opacity: 0;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  text-align: left;
+  transform: translate(-50%, 3px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  white-space: normal;
+}
+
+.message-attachment[data-attachment-name]:hover::after,
+.message-attachment[data-attachment-name]:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
 }
 
 .attachment-icon {
@@ -3107,14 +3143,14 @@ mark {
 
 .attachment-meta {
   display: grid;
+  width: 100%;
   min-width: 0;
-  gap: 2px;
+  gap: 1px;
+  text-align: left;
 }
 
-.attachment-meta span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+.attachment-name {
+  display: block;
   min-width: 0;
   overflow: hidden;
   color: var(--ink);
@@ -3130,6 +3166,16 @@ mark {
   font-size: var(--type-size-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.attachment-size {
+  overflow: visible;
+  text-align: center;
+  text-overflow: clip;
+}
+
+.attachment-type {
+  text-align: center;
 }
 
 .attachment-lightbox {
@@ -9427,12 +9473,8 @@ body.resizing-column * {
   }
 
   .message-attachments {
-    grid-template-columns: minmax(0, min(58vw, 220px));
+    grid-template-columns: repeat(auto-fit, 96px);
     justify-content: start;
-  }
-
-  .message-attachment.image img {
-    height: 124px;
   }
 
   .task-board {
