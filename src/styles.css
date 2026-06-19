@@ -3769,7 +3769,7 @@ mark {
 }
 
 .markdown-table-scroll:focus-visible {
-  outline: 2px solid rgba(10, 132, 255, 0.42);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
