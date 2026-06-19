@@ -3761,6 +3761,9 @@ mark {
   max-width: 100%;
   min-width: 0;
   overflow-x: auto;
+  border: 1px solid var(--border-emphasis);
+  border-radius: 8px;
+  background: var(--surface-panel);
   overscroll-behavior-x: contain;
   scrollbar-gutter: stable;
 }
@@ -3773,15 +3776,31 @@ mark {
 .markdown-body table {
   width: max-content;
   min-width: 100%;
-  border-collapse: collapse;
+  border-spacing: 0;
 }
 
 .markdown-body th,
 .markdown-body td {
   padding: 6px 8px;
-  border: 1px solid var(--line);
+  border-right: 1px solid var(--border-emphasis);
+  border-bottom: 1px solid var(--border-emphasis);
   white-space: nowrap;
   vertical-align: top;
+}
+
+.markdown-body th {
+  background: var(--surface-control-flat);
+  border-bottom-width: 2px;
+  font-weight: var(--type-weight-semibold);
+}
+
+.markdown-body tr:last-child td {
+  border-bottom: 0;
+}
+
+.markdown-body th:last-child,
+.markdown-body td:last-child {
+  border-right: 0;
 }
 
 .markdown-body td code,
