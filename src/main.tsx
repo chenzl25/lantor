@@ -160,6 +160,7 @@ const AGENT_DRAWER_WIDTH_STORAGE_KEY = "lantor.agentDrawerWidth";
 const SIDEBAR_WIDTH_STORAGE_KEY = "lantor.sidebarWidth";
 const THEME_PREFERENCE_STORAGE_KEY = "lantor.themePreference";
 const CHAT_TEXT_SIZE_STORAGE_KEY = "lantor.chatTextSize";
+const SHOW_IMAGE_THUMBNAILS_STORAGE_KEY = "lantor.showImageThumbnails";
 const MOBILE_EDGE_SWIPE_START_PX = 24;
 const MOBILE_EDGE_SWIPE_OPEN_PX = 72;
 const MOBILE_EDGE_SWIPE_MAX_VERTICAL_PX = 48;
@@ -504,6 +505,10 @@ function getStoredChatTextSize(): ChatTextSize {
   return CHAT_TEXT_SIZE_OPTIONS.includes(stored as ChatTextSize) ? stored as ChatTextSize : "default";
 }
 
+function getStoredShowImageThumbnails() {
+  return window.localStorage.getItem(SHOW_IMAGE_THUMBNAILS_STORAGE_KEY) !== "false";
+}
+
 async function attachmentUploads(attachments: DraftAttachment[]) {
   return Promise.all(attachments.map(async (attachment) => {
     const buffer = await attachment.file.arrayBuffer();
@@ -679,6 +684,7 @@ function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => getStoredThemePreference());
   const [chatTextSize, setChatTextSize] = useState<ChatTextSize>(() => getStoredChatTextSize());
+  const [showImageThumbnails, setShowImageThumbnails] = useState(() => getStoredShowImageThumbnails());
   const [showMobileSidebar, setShowMobileSidebar] = useState(() => isMobileViewport());
   const [mobileSidebarFocus, setMobileSidebarFocus] = useState<"home" | "dms">("home");
   const [mobileSidebarDragPx, setMobileSidebarDragPx] = useState(0);
@@ -1490,6 +1496,10 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(CHAT_TEXT_SIZE_STORAGE_KEY, chatTextSize);
   }, [chatTextSize]);
+
+  useEffect(() => {
+    window.localStorage.setItem(SHOW_IMAGE_THUMBNAILS_STORAGE_KEY, String(showImageThumbnails));
+  }, [showImageThumbnails]);
 
   useEffect(() => {
     setDismissedActivityFeedItems(data?.dismissed_inbox_items ?? {});
@@ -3720,8 +3730,10 @@ function App() {
         open={showSettingsModal}
         themePreference={themePreference}
         chatTextSize={chatTextSize}
+        showImageThumbnails={showImageThumbnails}
         onThemePreferenceChange={setThemePreference}
         onChatTextSizeChange={setChatTextSize}
+        onShowImageThumbnailsChange={setShowImageThumbnails}
         onClose={() => setShowSettingsModal(false)}
       />
 
@@ -3773,6 +3785,7 @@ function App() {
         shareBaseUrl={shareBaseUrl}
         savedMessageIds={savedMessageIds}
         focusedMessageId={focusedMessageId}
+        showImageThumbnails={showImageThumbnails}
         onToggleMessageSaved={setMessageSaved}
       />
 
@@ -3835,6 +3848,7 @@ function App() {
           shareBaseUrl={shareBaseUrl}
           savedMessageIds={savedMessageIds}
           focusedMessageId={focusedMessageId}
+          showImageThumbnails={showImageThumbnails}
           onToggleMessageSaved={setMessageSaved}
           onResizeStart={startThreadResize}
         />

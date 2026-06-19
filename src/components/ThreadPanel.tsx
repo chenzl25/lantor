@@ -104,6 +104,7 @@ type ThreadPanelProps = {
   shareBaseUrl: string | null;
   savedMessageIds: Set<string>;
   focusedMessageId: string | null;
+  showImageThumbnails: boolean;
   onToggleMessageSaved: (message: Message, saved: boolean) => void;
   onResizeStart: (event: ReactPointerEvent<HTMLButtonElement>) => void;
 };
@@ -145,6 +146,7 @@ export function ThreadPanel({
   shareBaseUrl,
   savedMessageIds,
   focusedMessageId,
+  showImageThumbnails,
   onToggleMessageSaved,
   onResizeStart,
 }: ThreadPanelProps) {
@@ -646,7 +648,7 @@ export function ThreadPanel({
                           </>
                         );
                       })()}
-                      <MessageAttachments attachments={activeRoot.attachments} />
+                      <MessageAttachments attachments={activeRoot.attachments} showImageThumbnails={showImageThumbnails} />
                       <MessageArtifacts artifacts={activeRoot.artifacts} onOpenArtifact={openArtifact} />
                       {activeRoot.delivery_state === "sending" && (
                         <div className="message-stream-state sending">Sending...</div>
@@ -919,7 +921,7 @@ export function ThreadPanel({
                           </>
                         );
                       })()}
-                      <MessageAttachments attachments={reply.attachments} />
+                      <MessageAttachments attachments={reply.attachments} showImageThumbnails={showImageThumbnails} />
                       <MessageArtifacts artifacts={reply.artifacts} onOpenArtifact={openArtifact} />
                       {reply.delivery_state === "sending" && (
                         <div className="message-stream-state sending">Sending...</div>

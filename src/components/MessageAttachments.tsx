@@ -1,10 +1,11 @@
 import { type MouseEvent, type PointerEvent, useEffect, useState } from "react";
-import { FileText, X } from "lucide-react";
+import { FileText, Image, X } from "lucide-react";
 import { attachmentAssetUrl, isTauriRuntime, openExternalUrl } from "../apiClient";
 import { MessageAttachment } from "../types";
 
 type MessageAttachmentsProps = {
   attachments: MessageAttachment[];
+  showImageThumbnails: boolean;
 };
 
 type ImagePreview = {
@@ -33,7 +34,7 @@ function isolateAttachmentEvent(event: MouseEvent<HTMLElement> | PointerEvent<HT
   event.stopPropagation();
 }
 
-export function MessageAttachments({ attachments }: MessageAttachmentsProps) {
+export function MessageAttachments({ attachments, showImageThumbnails }: MessageAttachmentsProps) {
   const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
 
   function closeImagePreview(event: MouseEvent<HTMLButtonElement>) {
@@ -71,15 +72,26 @@ export function MessageAttachments({ attachments }: MessageAttachmentsProps) {
               <button
                 key={attachment.id}
                 type="button"
-                className={`message-attachment image ${attachment.local_url ? "pending" : ""}`}
+                className={`message-attachment image ${showImageThumbnails ? "" : "compact-image"} ${attachment.local_url ? "pending" : ""}`}
                 aria-label={`Preview ${attachment.original_name}`}
+                title={attachment.original_name}
                 onPointerDown={isolateAttachmentEvent}
                 onClick={(event) => {
                   event.stopPropagation();
                   setImagePreview({ src, alt: attachment.original_name });
                 }}
               >
-                <img src={src} alt="" loading="lazy" />
+                {showImageThumbnails ? (
+                  <img src={src} alt="" loading="lazy" />
+                ) : (
+                  <>
+                    <span className="attachment-icon"><Image size={18} /></span>
+                    <span className="attachment-meta">
+                      <span><Image size={13} /> {attachment.original_name}</span>
+                      <small>{attachment.mime_type || "image"} · {formatBytes(attachment.size_bytes)}</small>
+                    </span>
+                  </>
+                )}
               </button>
             );
           }

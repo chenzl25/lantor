@@ -1,4 +1,4 @@
-import { Monitor, Moon, Sun, Type } from "lucide-react";
+import { Image, Monitor, Moon, Sun, Type } from "lucide-react";
 import { Modal } from "./Modal";
 
 export type ThemePreference = "auto" | "light" | "dark";
@@ -8,8 +8,10 @@ type SettingsModalProps = {
   open: boolean;
   themePreference: ThemePreference;
   chatTextSize: ChatTextSize;
+  showImageThumbnails: boolean;
   onThemePreferenceChange: (value: ThemePreference) => void;
   onChatTextSizeChange: (value: ChatTextSize) => void;
+  onShowImageThumbnailsChange: (value: boolean) => void;
   onClose: () => void;
 };
 
@@ -39,8 +41,10 @@ export function SettingsModal({
   open,
   themePreference,
   chatTextSize,
+  showImageThumbnails,
   onThemePreferenceChange,
   onChatTextSizeChange,
+  onShowImageThumbnailsChange,
   onClose,
 }: SettingsModalProps) {
   return (
@@ -93,6 +97,24 @@ export function SettingsModal({
             ))}
           </div>
           <p className="settings-hint">Applies across messages, inputs, panels, and modals. Use Command +/- or Ctrl +/- to adjust without opening Settings. Command/Ctrl+0 resets.</p>
+        </fieldset>
+        <fieldset className="settings-fieldset settings-attachments-fieldset">
+          <legend>Attachments</legend>
+          <label className="settings-toggle-row">
+            <span className="settings-toggle-copy">
+              <Image size={17} />
+              <span>
+                <strong>Show image thumbnails</strong>
+                <small>Display uploaded images inline before opening them.</small>
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              checked={showImageThumbnails}
+              onChange={(event) => onShowImageThumbnailsChange(event.currentTarget.checked)}
+            />
+          </label>
+          <p className="settings-hint">When disabled, images appear as compact attachment rows and still open in preview when clicked.</p>
         </fieldset>
       </section>
     </Modal>

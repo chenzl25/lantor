@@ -2170,9 +2170,9 @@ button,
   gap: 8px;
   width: min(100%, 520px);
   max-width: 100%;
-  min-height: 46px;
-  margin-top: 10px;
-  padding: 6px 10px;
+  min-height: 38px;
+  margin-top: 4px;
+  padding: 4px 8px;
   border: 1px solid transparent;
   border-radius: 10px;
   background: transparent;
@@ -2955,6 +2955,19 @@ mark {
   cursor: zoom-in;
 }
 
+.message-attachment.image.compact-image {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  min-height: 48px;
+  padding: 8px;
+  background: var(--bg-control-flat);
+  text-align: left;
+}
+
+.message-attachment.image.compact-image:hover {
+  background: var(--bg-control-hover);
+}
+
 .message-attachment.image img {
   display: block;
   width: 100%;
@@ -2966,6 +2979,10 @@ mark {
 
 .message-attachment.image:hover img {
   filter: saturate(1.04) contrast(1.02);
+}
+
+.message-attachment.image.compact-image:hover img {
+  filter: none;
 }
 
 .message-attachment.pending {
@@ -3732,13 +3749,15 @@ mark {
 :root[data-theme="dark"] .activity-run-card,
 :root[data-theme="dark"] .task-board-summary > div,
 :root[data-theme="dark"] .theme-choice-grid button,
-:root[data-theme="dark"] .chat-text-size-grid button {
+:root[data-theme="dark"] .chat-text-size-grid button,
+:root[data-theme="dark"] .settings-toggle-row {
   border-color: var(--border-subtle);
   background: var(--bg-panel);
   color: var(--ink-primary);
 }
 
-:root[data-theme="dark"] .theme-choice-grid button.selected {
+:root[data-theme="dark"] .theme-choice-grid button.selected,
+:root[data-theme="dark"] .chat-text-size-grid button.selected {
   border-color: var(--accent);
   background: var(--bg-selected-soft);
   box-shadow: inset 0 0 0 1px var(--accent);
@@ -3746,7 +3765,9 @@ mark {
 }
 
 :root[data-theme="dark"] .theme-choice-grid button.selected strong,
-:root[data-theme="dark"] .theme-choice-grid button.selected small {
+:root[data-theme="dark"] .theme-choice-grid button.selected small,
+:root[data-theme="dark"] .chat-text-size-grid button.selected strong,
+:root[data-theme="dark"] .chat-text-size-grid button.selected small {
   color: var(--accent);
 }
 
@@ -3784,7 +3805,8 @@ mark {
 :root[data-theme="dark"] .activity-run-head h5,
 :root[data-theme="dark"] .settings-section-head h4,
 :root[data-theme="dark"] .theme-choice-grid strong,
-:root[data-theme="dark"] .chat-text-size-grid strong {
+:root[data-theme="dark"] .chat-text-size-grid strong,
+:root[data-theme="dark"] .settings-toggle-copy strong {
   color: var(--ink-primary);
 }
 
@@ -5710,6 +5732,7 @@ body.resizing-column * {
 }
 
 .settings-fieldset legend {
+  margin-bottom: 8px;
   padding: 0;
   color: var(--muted);
   font-size: var(--type-size-meta);
@@ -5760,13 +5783,7 @@ body.resizing-column * {
   text-align: center;
 }
 
-.theme-choice-grid button.selected {
-  border-color: var(--accent);
-  background: var(--bg-selected-accent);
-  box-shadow: var(--shadow-selected-accent);
-  color: var(--accent);
-}
-
+.theme-choice-grid button.selected,
 .chat-text-size-grid button.selected {
   border-color: var(--accent);
   background: var(--bg-selected-accent);
@@ -5774,12 +5791,8 @@ body.resizing-column * {
   color: var(--accent);
 }
 
-:root[data-theme="dark"] .theme-choice-grid button.selected {
-  border-color: rgba(105, 170, 252, 0.72);
-  color: var(--accent);
-}
-
-.theme-choice-grid button.selected::after {
+.theme-choice-grid button.selected::after,
+.chat-text-size-grid button.selected::after {
   position: absolute;
   top: 8px;
   right: 8px;
@@ -5831,6 +5844,56 @@ body.resizing-column * {
   color: var(--muted);
   font-size: var(--type-size-meta);
   line-height: 1.4;
+}
+
+.settings-attachments-fieldset {
+  margin-top: 8px;
+}
+
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--panel-strong);
+}
+
+.settings-toggle-copy {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+}
+
+.settings-toggle-copy > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.settings-toggle-copy strong {
+  color: var(--ink);
+  font-size: var(--type-size-body);
+  font-weight: var(--type-weight-semibold);
+}
+
+.settings-toggle-copy small {
+  color: var(--muted);
+  font-size: var(--type-size-caption);
+  line-height: 1.3;
+}
+
+.settings-toggle-row input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
 }
 
 .modal-form {

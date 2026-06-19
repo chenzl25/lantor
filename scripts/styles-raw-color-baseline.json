@@ -93,12 +93,6 @@
       "n": 0
     },
     {
-      "selector": ":root[data-theme=\"dark\"] .theme-choice-grid button.selected",
-      "prop": "border-color",
-      "literal": "rgba(105, 170, 252, 0.72)",
-      "n": 0
-    },
-    {
       "selector": ".activity-progress-avatar-stack .agent-avatar",
       "prop": "box-shadow",
       "literal": "rgba(20, 22, 28, 0.16)",

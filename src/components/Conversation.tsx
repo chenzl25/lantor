@@ -81,6 +81,7 @@ type ConversationProps = {
   shareBaseUrl: string | null;
   savedMessageIds: Set<string>;
   focusedMessageId: string | null;
+  showImageThumbnails: boolean;
   onToggleMessageSaved: (message: Message, saved: boolean) => void;
 };
 
@@ -257,6 +258,7 @@ export function Conversation({
   shareBaseUrl,
   savedMessageIds,
   focusedMessageId,
+  showImageThumbnails,
   onToggleMessageSaved,
 }: ConversationProps) {
   const [showChannelActions, setShowChannelActions] = useState(false);
@@ -1043,7 +1045,7 @@ export function Conversation({
                         )}
                       </>
                     )}
-                    <MessageAttachments attachments={message.attachments} />
+                    <MessageAttachments attachments={message.attachments} showImageThumbnails={showImageThumbnails} />
                     <MessageArtifacts artifacts={message.artifacts} onOpenArtifact={openArtifact} />
                     {message.delivery_state === "sending" && (
                       <div className="message-stream-state sending">Sending...</div>
