@@ -11,7 +11,7 @@ import {
   Settings,
   UserRound,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   Agent,
   Bootstrap,
@@ -22,11 +22,7 @@ import { ownerAsAvatarAgent } from "../ui-utils";
 import { AgentAvatar } from "./AgentAvatar";
 import { UnreadBadge } from "./UnreadBadge";
 
-const SIDEBAR_CHANNELS_HEIGHT_STORAGE_KEY = "lantor.sidebarChannelsHeight";
 const SIDEBAR_CHANNEL_SORT_STORAGE_KEY = "lantor.sidebarChannelSort";
-const DEFAULT_SIDEBAR_CHANNELS_HEIGHT = 260;
-const MIN_SIDEBAR_SECTION_HEIGHT = 104;
-const SIDEBAR_SECTION_HANDLE_SPACE = 14;
 const CHANNEL_NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
 type ChannelSortMode = "name" | "recent";
@@ -50,24 +46,8 @@ type SidebarProps = {
   onResizeStart: (event: ReactPointerEvent<HTMLButtonElement>) => void;
 };
 
-function loadSidebarChannelsHeight() {
-  const stored = window.localStorage.getItem(SIDEBAR_CHANNELS_HEIGHT_STORAGE_KEY);
-  const parsed = stored ? Number(stored) : Number.NaN;
-  return Number.isFinite(parsed)
-    ? Math.max(MIN_SIDEBAR_SECTION_HEIGHT, parsed)
-    : DEFAULT_SIDEBAR_CHANNELS_HEIGHT;
-}
-
 function loadSidebarChannelSortMode(): ChannelSortMode {
   return window.localStorage.getItem(SIDEBAR_CHANNEL_SORT_STORAGE_KEY) === "recent" ? "recent" : "name";
-}
-
-function clampSidebarChannelsHeight(height: number, containerHeight: number) {
-  const maxHeight = Math.max(
-    MIN_SIDEBAR_SECTION_HEIGHT,
-    containerHeight - MIN_SIDEBAR_SECTION_HEIGHT - SIDEBAR_SECTION_HANDLE_SPACE,
-  );
-  return Math.min(maxHeight, Math.max(MIN_SIDEBAR_SECTION_HEIGHT, height));
 }
 
 function timestampValue(value: string | null | undefined) {
@@ -100,10 +80,7 @@ export function Sidebar({
   onResizeStart,
 }: SidebarProps) {
   const [collapsedSections, setCollapsedSections] = useState({ channels: false, dms: false });
-  const [channelSectionHeight, setChannelSectionHeight] = useState(() => loadSidebarChannelsHeight());
   const [channelSortMode, setChannelSortMode] = useState<ChannelSortMode>(() => loadSidebarChannelSortMode());
-  const sidebarSectionsRef = useRef<HTMLDivElement | null>(null);
-  const channelBlockRef = useRef<HTMLElement | null>(null);
   const dmListRef = useRef<HTMLElement | null>(null);
   const normalChannels = useMemo(() => {
     const latestActivityByChannel = new Map<string, number>();
@@ -146,48 +123,6 @@ export function Sidebar({
     if (dmChannel) selectChannel(dmChannel.id);
     else openDmWithAgent(agent);
   };
-  const showSectionResizeHandle = !collapsedSections.channels && !collapsedSections.dms;
-
-  const setClampedChannelSectionHeight = (nextHeight: number) => {
-    const containerHeight = sidebarSectionsRef.current?.clientHeight ?? 0;
-    setChannelSectionHeight(containerHeight > 0
-      ? clampSidebarChannelsHeight(nextHeight, containerHeight)
-      : Math.max(MIN_SIDEBAR_SECTION_HEIGHT, nextHeight));
-  };
-
-  const nudgeChannelSectionHeight = (delta: number) => {
-    setClampedChannelSectionHeight(channelSectionHeight + delta);
-  };
-
-  function startSectionResize(event: ReactPointerEvent<HTMLButtonElement>) {
-    event.preventDefault();
-    const containerHeight = sidebarSectionsRef.current?.clientHeight ?? 0;
-    if (containerHeight <= 0) return;
-    const startY = event.clientY;
-    const startHeight = channelBlockRef.current?.getBoundingClientRect().height ?? channelSectionHeight;
-
-    function onPointerMove(moveEvent: PointerEvent) {
-      const delta = moveEvent.clientY - startY;
-      setChannelSectionHeight(clampSidebarChannelsHeight(startHeight + delta, containerHeight));
-    }
-
-    function stopResize() {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", stopResize);
-      window.removeEventListener("pointercancel", stopResize);
-      document.body.classList.remove("resizing-row");
-    }
-
-    document.body.classList.add("resizing-row");
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", stopResize);
-    window.addEventListener("pointercancel", stopResize);
-  }
-
-  useEffect(() => {
-    window.localStorage.setItem(SIDEBAR_CHANNELS_HEIGHT_STORAGE_KEY, String(Math.round(channelSectionHeight)));
-  }, [channelSectionHeight]);
-
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_CHANNEL_SORT_STORAGE_KEY, channelSortMode);
   }, [channelSortMode]);
@@ -215,35 +150,32 @@ export function Sidebar({
       </section>
 
       <section className="quick-actions">
-        <button className="search-trigger" onClick={openSearch}>
-          <Search size={18} />
-          <span className="search-trigger-label">Search</span>
-          <kbd>⌘K</kbd>
+        <button type="button" className="channel quick-action-row" onClick={openSearch}>
+          <Search size={17} />
+          <span className="channel-name">Search</span>
         </button>
         <button
-          className={`sidebar-nav-trigger ${activityFeedUnreadCount ? "has-unread" : ""}`}
+          type="button"
+          className={`channel quick-action-row ${activityFeedUnreadCount ? "has-unread" : ""}`}
           onClick={openActivityFeed}
         >
-          <Inbox size={18} />
-          <span className="sidebar-nav-trigger-label">Activity</span>
+          <Inbox size={17} />
+          <span className="channel-name">Activity</span>
           {activityFeedUnreadCount > 0 && <UnreadBadge value={activityFeedUnreadCount} />}
         </button>
         <button
-          className={`sidebar-nav-trigger ${savedUnreadCount ? "has-unread" : ""}`}
+          type="button"
+          className={`channel quick-action-row ${savedUnreadCount ? "has-unread" : ""}`}
           onClick={openSaved}
         >
-          <Bookmark size={18} />
-          <span className="sidebar-nav-trigger-label">Saved</span>
+          <Bookmark size={17} />
+          <span className="channel-name">Saved</span>
           {savedUnreadCount > 0 && <UnreadBadge value={savedUnreadCount} />}
         </button>
       </section>
 
-      <div
-        ref={sidebarSectionsRef}
-        className={`sidebar-sections ${collapsedSections.channels ? "channels-collapsed" : ""} ${collapsedSections.dms ? "dms-collapsed" : ""}`}
-        style={{ "--sidebar-channels-height": `${channelSectionHeight}px` } as CSSProperties}
-      >
-        <section ref={channelBlockRef} className={`channel-block ${collapsedSections.channels ? "collapsed" : ""}`}>
+      <div className={`sidebar-sections ${collapsedSections.channels ? "channels-collapsed" : ""} ${collapsedSections.dms ? "dms-collapsed" : ""}`}>
+        <section className={`channel-block ${collapsedSections.channels ? "collapsed" : ""}`}>
           <div className="section-title">
             <div className="section-label">
               <button
@@ -308,26 +240,6 @@ export function Sidebar({
             )}
           </div>
         </section>
-
-        {showSectionResizeHandle && (
-          <button
-            type="button"
-            className="sidebar-section-resize-handle"
-            aria-label="Resize Channels and Agents"
-            aria-orientation="horizontal"
-            title="Resize Channels and Agents"
-            onPointerDown={startSectionResize}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowUp") {
-                event.preventDefault();
-                nudgeChannelSectionHeight(-24);
-              } else if (event.key === "ArrowDown") {
-                event.preventDefault();
-                nudgeChannelSectionHeight(24);
-              }
-            }}
-          />
-        )}
 
         <section ref={dmListRef} className={`dm-list ${collapsedSections.dms ? "collapsed" : ""}`}>
           <div className="section-title">

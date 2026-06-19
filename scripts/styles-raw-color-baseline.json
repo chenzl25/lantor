@@ -561,18 +561,6 @@
       "n": 0
     },
     {
-      "selector": ".hash-card",
-      "prop": "box-shadow",
-      "literal": "rgba(20, 23, 31, 0.04)",
-      "n": 0
-    },
-    {
-      "selector": ".hash-card",
-      "prop": "box-shadow",
-      "literal": "rgba(255, 255, 255, 0.82)",
-      "n": 0
-    },
-    {
       "selector": ".local-entity-link",
       "prop": "background",
       "literal": "rgba(10, 132, 255, 0.08)",
@@ -1341,24 +1329,6 @@
       "n": 0
     },
     {
-      "selector": ".sidebar-section-resize-handle::after",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0)",
-      "n": 0
-    },
-    {
-      "selector": ".sidebar-section-resize-handle::before",
-      "prop": "background",
-      "literal": "rgba(20, 23, 31, 0.08)",
-      "n": 0
-    },
-    {
-      "selector": ".sidebar-section-resize-handle:hover::after, .sidebar-section-resize-handle:focus-visible::after",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.5)",
-      "n": 0
-    },
-    {
       "selector": ".status-row",
       "prop": "background",
       "literal": "rgba(20, 23, 31, 0.04)",
@@ -1668,12 +1638,6 @@
       "selector": ".workspace-section",
       "prop": "box-shadow",
       "literal": "rgba(32, 36, 44, 0.04)",
-      "n": 0
-    },
-    {
-      "selector": ".workspace-switch",
-      "prop": "box-shadow",
-      "literal": "rgba(15, 23, 42, 0.06)",
       "n": 0
     },
     {
