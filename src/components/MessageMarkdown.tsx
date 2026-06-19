@@ -127,10 +127,14 @@ function MarkdownTableScroll({ children, scrollKey }: { children?: ReactNode; sc
   useLayoutEffect(() => {
     if (!scrollKey) return;
     const element = scrollRef.current;
-    const scrollLeft = tableScrollPositions.get(scrollKey);
-    if (!element || scrollLeft === undefined) return;
-    element.scrollLeft = Math.min(scrollLeft, Math.max(0, element.scrollWidth - element.clientWidth));
-  });
+    if (!element) return;
+    const storedScrollLeft = tableScrollPositions.get(scrollKey);
+    if (storedScrollLeft === undefined || storedScrollLeft === 0) return;
+    if (element.scrollLeft !== 0) return;
+    const maxScrollLeft = element.scrollWidth - element.clientWidth;
+    if (maxScrollLeft <= 0) return;
+    element.scrollLeft = Math.min(storedScrollLeft, maxScrollLeft);
+  }, [scrollKey]);
 
   function handleScroll(event: UIEvent<HTMLDivElement>) {
     if (!scrollKey) return;
