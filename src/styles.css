@@ -1641,9 +1641,13 @@ button,
   gap: 6px;
 }
 
-.channel-title .hash-card,
-.thread-title-card {
-  width: 22px;
+.channel-title .hash-card {
+  width: 34px;
+}
+
+.channel-title .hash-card svg {
+  width: 30px;
+  height: 30px;
 }
 
 .channel-title > div,
