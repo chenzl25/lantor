@@ -199,6 +199,13 @@ export function ThreadPanel({
     };
   }
 
+  function isThreadViewportOnlyResize(element: HTMLDivElement) {
+    const previous = threadScrollMetricsRef.current;
+    return previous.scrollHeight > 0 &&
+      previous.scrollHeight === element.scrollHeight &&
+      previous.clientHeight !== element.clientHeight;
+  }
+
   function cancelPendingThreadBottomScroll() {
     if (threadScrollFrameRef.current !== null) {
       window.cancelAnimationFrame(threadScrollFrameRef.current);
@@ -343,6 +350,10 @@ export function ThreadPanel({
     function keepBottomVisible() {
       const scrollRoot = threadScrollRef.current;
       if (!scrollRoot) return;
+      if (isThreadViewportOnlyResize(scrollRoot)) {
+        rememberThreadScrollMetrics(scrollRoot);
+        return;
+      }
       if (shouldFollowThreadRef.current && !isUserScrollingThread()) {
         scrollThreadToBottom();
         setShowBackToBottom(false);

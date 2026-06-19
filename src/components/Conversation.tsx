@@ -357,6 +357,13 @@ export function Conversation({
     };
   }
 
+  function isMessageListViewportOnlyResize(element: HTMLDivElement) {
+    const previous = messageListMetricsRef.current;
+    return previous.scrollHeight > 0 &&
+      previous.scrollHeight === element.scrollHeight &&
+      previous.clientHeight !== element.clientHeight;
+  }
+
   function cancelPendingMessageBottomScroll() {
     if (bottomScrollFrameRef.current !== null) {
       window.cancelAnimationFrame(bottomScrollFrameRef.current);
@@ -569,37 +576,47 @@ export function Conversation({
     const content = messageListContentRef.current;
     const bottomAnchor = messageListBottomAnchorRef.current;
     if (!root || !content || !bottomAnchor) return;
-    function keepBottomVisible() {
+    function keepBottomVisible(source: "viewport" | "content") {
       const list = messageListRef.current;
       if (!list) return;
+      if (source === "viewport" && isMessageListViewportOnlyResize(list)) {
+        rememberMessageListMetrics(list);
+        return;
+      }
       if (shouldFollowMessagesRef.current && !isUserScrollingMessages()) {
         scrollMessagesToBottom();
       } else {
         rememberMessageListMetrics(list);
       }
     }
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(keepBottomVisible);
+    const observer = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver((entries) => {
+        const hasContentResize = entries.some((entry) => entry.target === content);
+        keepBottomVisible(hasContentResize ? "content" : "viewport");
+      });
     const intersectionObserver = typeof IntersectionObserver === "undefined"
       ? null
       : new IntersectionObserver((entries) => {
         if (!shouldFollowMessagesRef.current) return;
         if (entries.some((entry) => !entry.isIntersecting || entry.intersectionRatio < 1)) {
-          keepBottomVisible();
+          keepBottomVisible("viewport");
         }
       }, { root, threshold: 1 });
     const mutationObserver = typeof MutationObserver === "undefined"
       ? null
-      : new MutationObserver(keepBottomVisible);
+      : new MutationObserver(() => keepBottomVisible("content"));
     observer?.observe(root);
     observer?.observe(content);
     intersectionObserver?.observe(bottomAnchor);
     mutationObserver?.observe(content, { childList: true, characterData: true, subtree: true });
-    window.addEventListener("resize", keepBottomVisible);
+    const handleWindowResize = () => keepBottomVisible("viewport");
+    window.addEventListener("resize", handleWindowResize);
     return () => {
       observer?.disconnect();
       intersectionObserver?.disconnect();
       mutationObserver?.disconnect();
-      window.removeEventListener("resize", keepBottomVisible);
+      window.removeEventListener("resize", handleWindowResize);
     };
   }, [activeTab, channel?.id]);
 
