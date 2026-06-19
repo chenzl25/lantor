@@ -1641,8 +1641,7 @@ button,
   gap: 6px;
 }
 
-.channel-title .hash-card,
-.thread-title-card {
+.channel-title .hash-card {
   width: 22px;
 }
 
@@ -5492,10 +5491,6 @@ body.resizing-column * {
 
   .thread-title {
     gap: 8px;
-  }
-
-  .thread-title-card {
-    display: none;
   }
 
   .thread h2 {
@@ -9578,10 +9573,6 @@ body.resizing-column * {
   .thread-title {
     max-width: calc(100vw - 88px);
     overflow: hidden;
-  }
-
-  .thread-title-card {
-    display: none;
   }
 
   .thread header .thread-mobile-back,

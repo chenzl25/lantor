@@ -462,9 +462,6 @@ export function ThreadPanel({
           <ArrowLeft size={18} />
         </button>
         <div className="thread-title">
-          <span className="hash-card thread-title-card" aria-hidden="true">
-            <MessageSquare size={21} />
-          </span>
           <h2>
             Thread <span>{channel ? isDm ? `- @${dmAgent?.handle || "agent"}` : `- #${channel.name}` : "- no channel"}</span>
           </h2>
