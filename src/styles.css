@@ -1642,12 +1642,12 @@ button,
 }
 
 .channel-title .hash-card {
-  width: 28px;
+  width: 34px;
 }
 
 .channel-title .hash-card svg {
-  width: 24px;
-  height: 24px;
+  width: 30px;
+  height: 30px;
 }
 
 .channel-title > div,
