@@ -3757,10 +3757,22 @@ mark {
   color: var(--muted);
 }
 
-.markdown-body table {
-  display: block;
+.markdown-table-scroll {
   max-width: 100%;
-  overflow: auto;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
+}
+
+.markdown-table-scroll:focus-visible {
+  outline: 2px solid rgba(10, 132, 255, 0.42);
+  outline-offset: 2px;
+}
+
+.markdown-body table {
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
 }
 
@@ -3768,6 +3780,13 @@ mark {
 .markdown-body td {
   padding: 6px 8px;
   border: 1px solid var(--line);
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.markdown-body td code,
+.markdown-body th code {
+  white-space: nowrap;
 }
 
 :root[data-theme="dark"] .workspace-switch,

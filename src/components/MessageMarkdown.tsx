@@ -136,6 +136,11 @@ export function MessageMarkdown({ body, onLocalAgentLink }: MessageMarkdownProps
           pre: ({ children }) => (
             <CopyableCodeBlock>{Children.toArray(children)}</CopyableCodeBlock>
           ),
+          table: ({ children }) => (
+            <div className="markdown-table-scroll" role="region" tabIndex={0} aria-label="Scrollable table">
+              <table>{children}</table>
+            </div>
+          ),
         }}
       >
         {linkedBody}

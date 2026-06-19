@@ -99,6 +99,8 @@ const LANTOR_CONTROL_EVENTS = [
 const LANTOR_VISIBLE_REPLY_TRANSPORT = [
   "Visible reply transport:",
   "- Warm Codex/Claude streaming runtimes should answer with normal assistant text; Lantor routes it to the current channel/thread automatically.",
+  "- Normal visible replies may use GitHub-flavored markdown, including lists, code blocks, links, and tables; wide markdown tables render as horizontally scrollable content.",
+  "- Use markdown artifacts for long reports that should render as a separate thread card, and keep the visible chat summary short.",
   "- Warm streaming runtimes may still emit non-message LANTOR_EVENT control lines above, including artifact_create, attachment_create, channel_message_create, task_claim, and handoff_create; Lantor consumes and hides those lines.",
   "- Stdout command runtimes should create visible chat by printing exactly one LANTOR_EVENT message line.",
   '{"type":"message","channel_id":"uuid","body":"..."}',
