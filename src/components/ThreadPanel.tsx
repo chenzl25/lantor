@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowLeft, Bookmark, CheckCircle2, Crosshair, Hash, MessageSquare, Paperclip, RotateCcw, Send, X } from "lucide-react";
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TextareaHTMLAttributes, type WheelEvent as ReactWheelEvent } from "react";
 import { useAutoGrowTextarea } from "../hooks/useAutoGrowTextarea";
 import { useMentionPicker } from "../hooks/useMentionPicker";
 import { useMobileViewport } from "../hooks/useMobileViewport";
@@ -20,6 +20,10 @@ import { MessageAttachments } from "./MessageAttachments";
 import { MessageArtifacts } from "./MessageArtifacts";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { TaskAssigneePicker } from "./TaskAssigneePicker";
+
+type WritingSuggestionsTextareaAttrs = TextareaHTMLAttributes<HTMLTextAreaElement> & { "writingsuggestions": "false" };
+
+const disableWritingSuggestionsAttrs: WritingSuggestionsTextareaAttrs = { writingsuggestions: "false" };
 
 function taskStatusLabel(status: string) {
   return status.replace("_", " ");
@@ -1209,6 +1213,7 @@ function ThreadReplyComposer({
         autoCapitalize="none"
         autoComplete="off"
         autoCorrect="off"
+        {...disableWritingSuggestionsAttrs}
         spellCheck={false}
         onChange={(event) => {
           updateText(event.target.value);
