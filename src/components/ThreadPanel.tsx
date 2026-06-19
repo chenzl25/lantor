@@ -542,7 +542,7 @@ export function ThreadPanel({
                 >
                 {activeRoot.sender_role === "system" ? (
                   <div className="system-message-line">
-                    <MessageMarkdown body={activeRoot.body} onLocalAgentLink={openLinkedAgentDetail} />
+                    <MessageMarkdown body={activeRoot.body} onLocalAgentLink={openLinkedAgentDetail} scrollKey={`message:${activeRoot.id}`} />
                     <time>{formatTime(activeRoot.created_at)}</time>
                   </div>
                 ) : (
@@ -616,7 +616,7 @@ export function ThreadPanel({
                         return (
                           <>
                             <div className={isLongThreadMessage && !isThreadMessageExpanded ? "message-long-preview collapsed" : "message-long-preview"}>
-                              <MessageMarkdown body={visibleBody} onLocalAgentLink={openLinkedAgentDetail} />
+                              <MessageMarkdown body={visibleBody} onLocalAgentLink={openLinkedAgentDetail} scrollKey={`message:${activeRoot.id}`} />
                             </div>
                             {isLongThreadMessage && (
                               <button
@@ -775,7 +775,7 @@ export function ThreadPanel({
                     )}
                     <article className="system-message">
                       <div className="system-message-line">
-                        <MessageMarkdown body={reply.body} onLocalAgentLink={openLinkedAgentDetail} />
+                        <MessageMarkdown body={reply.body} onLocalAgentLink={openLinkedAgentDetail} scrollKey={`message:${reply.id}`} />
                         <time>{formatTime(reply.created_at)}</time>
                       </div>
                     </article>
@@ -889,7 +889,7 @@ export function ThreadPanel({
                         return (
                           <>
                             <div className={isLongThreadMessage && !isThreadMessageExpanded ? "message-long-preview collapsed" : "message-long-preview"}>
-                              <MessageMarkdown body={visibleBody} onLocalAgentLink={openLinkedAgentDetail} />
+                              <MessageMarkdown body={visibleBody} onLocalAgentLink={openLinkedAgentDetail} scrollKey={`message:${reply.id}`} />
                             </div>
                             {isLongThreadMessage && (
                               <button

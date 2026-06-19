@@ -887,7 +887,7 @@ export function Conversation({
                   )}
                   <article className="system-message">
                     <div className="system-message-line">
-                      <MessageMarkdown body={message.body} onLocalAgentLink={openLinkedAgentDetail} />
+                      <MessageMarkdown body={message.body} onLocalAgentLink={openLinkedAgentDetail} scrollKey={`message:${message.id}`} />
                       <time>{formatTime(message.created_at)}</time>
                     </div>
                   </article>
@@ -1008,7 +1008,7 @@ export function Conversation({
                     {message.delivery_state !== "streaming" && (
                       <>
                         <div className={isLongChannelMessage && !isChannelMessageExpanded ? "message-long-preview collapsed" : "message-long-preview"}>
-                          <MessageMarkdown body={visibleMessageBody} onLocalAgentLink={openLinkedAgentDetail} />
+                          <MessageMarkdown body={visibleMessageBody} onLocalAgentLink={openLinkedAgentDetail} scrollKey={`message:${message.id}`} />
                         </div>
                         {isLongChannelMessage && (
                           <button

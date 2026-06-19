@@ -1204,7 +1204,7 @@ export function AgentDetailDrawer({
             </div>
           </div>
           {isMarkdownWorkspaceFile(workspacePreview) ? (
-            <MessageMarkdown body={workspacePreview.content} />
+            <MessageMarkdown body={workspacePreview.content} scrollKey={`workspace:${workspacePreview.path}`} />
           ) : (
             <pre className="workspace-preview-raw">{workspacePreview.content}</pre>
           )}

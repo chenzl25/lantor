@@ -1,5 +1,16 @@
-import { Children, ReactNode, isValidElement, type MouseEvent, type PointerEvent, useState } from "react";
-import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import {
+  Children,
+  ReactNode,
+  isValidElement,
+  type MouseEvent,
+  type PointerEvent,
+  type UIEvent,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { openExternalUrl } from "../apiClient";
 import { copyText } from "../clipboard";
@@ -7,11 +18,13 @@ import { copyText } from "../clipboard";
 type MessageMarkdownProps = {
   body: string;
   onLocalAgentLink?: (handle: string) => void;
+  scrollKey?: string;
 };
 
 const INLINE_CODE_SPLIT = /(`[^`\n]*(?:`|$))/g;
 const FENCE_SPLIT = /(```[\s\S]*?(?:```|$))/g;
 const LOCAL_ENTITY_PATH_PREFIX = "/lantor/";
+const tableScrollPositions = new Map<string, number>();
 
 function encodeLocalPath(value: string) {
   return encodeURIComponent(value.replace(/^[@#]/, ""));
@@ -108,40 +121,74 @@ function transformMessageUrl(url: string) {
   return /^file:\/\//i.test(url) ? url : defaultUrlTransform(url);
 }
 
-export function MessageMarkdown({ body, onLocalAgentLink }: MessageMarkdownProps) {
+function MarkdownTableScroll({ children, scrollKey }: { children?: ReactNode; scrollKey?: string }) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!scrollKey) return;
+    const element = scrollRef.current;
+    const scrollLeft = tableScrollPositions.get(scrollKey);
+    if (!element || scrollLeft === undefined) return;
+    element.scrollLeft = Math.min(scrollLeft, Math.max(0, element.scrollWidth - element.clientWidth));
+  });
+
+  function handleScroll(event: UIEvent<HTMLDivElement>) {
+    if (!scrollKey) return;
+    tableScrollPositions.set(scrollKey, event.currentTarget.scrollLeft);
+  }
+
+  return (
+    <div
+      ref={scrollRef}
+      className="markdown-table-scroll"
+      role="region"
+      tabIndex={0}
+      aria-label="Scrollable table"
+      onScroll={handleScroll}
+    >
+      <table>{children}</table>
+    </div>
+  );
+}
+
+export function MessageMarkdown({ body, onLocalAgentLink, scrollKey }: MessageMarkdownProps) {
   const linkedBody = linkifyMessageBody(body);
+  const tableIndexRef = useRef(0);
+  tableIndexRef.current = 0;
+  const markdownComponents = useMemo<Components>(() => ({
+    a: ({ children, href, node: _node, ...props }) => {
+      const isLocalLink = Boolean(href?.startsWith(LOCAL_ENTITY_PATH_PREFIX));
+      return (
+        <a
+          {...props}
+          href={href}
+          className={isLocalLink ? "local-entity-link" : undefined}
+          target={isLocalLink ? undefined : "_blank"}
+          rel={isLocalLink ? undefined : "noreferrer"}
+          onPointerDown={isolateLinkEvent}
+          onContextMenu={isolateLinkEvent}
+          onClick={(event) => handleLinkClick(event, href, isLocalLink, onLocalAgentLink)}
+        >
+          {children}
+        </a>
+      );
+    },
+    pre: ({ children }) => (
+      <CopyableCodeBlock>{Children.toArray(children)}</CopyableCodeBlock>
+    ),
+    table: ({ children }) => {
+      const tableScrollKey = scrollKey ? `${scrollKey}:table:${tableIndexRef.current}` : undefined;
+      tableIndexRef.current += 1;
+      return <MarkdownTableScroll scrollKey={tableScrollKey}>{children}</MarkdownTableScroll>;
+    },
+  }), [onLocalAgentLink, scrollKey]);
+
   return (
     <div className="markdown-body">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         urlTransform={transformMessageUrl}
-        components={{
-          a: ({ children, href, ...props }) => {
-            const isLocalLink = Boolean(href?.startsWith(LOCAL_ENTITY_PATH_PREFIX));
-            return (
-              <a
-                {...props}
-                href={href}
-                className={isLocalLink ? "local-entity-link" : undefined}
-                target={isLocalLink ? undefined : "_blank"}
-                rel={isLocalLink ? undefined : "noreferrer"}
-                onPointerDown={isolateLinkEvent}
-                onContextMenu={isolateLinkEvent}
-                onClick={(event) => handleLinkClick(event, href, isLocalLink, onLocalAgentLink)}
-              >
-                {children}
-              </a>
-            );
-          },
-          pre: ({ children }) => (
-            <CopyableCodeBlock>{Children.toArray(children)}</CopyableCodeBlock>
-          ),
-          table: ({ children }) => (
-            <div className="markdown-table-scroll" role="region" tabIndex={0} aria-label="Scrollable table">
-              <table>{children}</table>
-            </div>
-          ),
-        }}
+        components={markdownComponents}
       >
         {linkedBody}
       </ReactMarkdown>
