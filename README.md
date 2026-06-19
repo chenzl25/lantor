@@ -55,6 +55,39 @@ npm install
 npm run tauri:dev
 ```
 
+To run only the browser UI and local backend, without opening the macOS
+desktop window:
+
+```bash
+npm run web:dev
+```
+
+This builds the web bundle, starts the same local SQLite database, supervisor,
+reminder worker, event pruning, and web server, then serves Lantor at
+`http://127.0.0.1:8787/` by default. Set `LANTOR_WEB_BIND` to choose another
+bind address, for example `LANTOR_WEB_BIND=127.0.0.1:8787 npm run web:dev` for
+loopback-only access.
+
+For frontend hot reload in browser-only development, run two terminals:
+
+```bash
+# Terminal 1: local backend and API/SSE server, no desktop window
+npm run web:backend
+
+# Terminal 2: Vite frontend with /api proxied to the backend above
+npm run dev
+```
+
+Open `http://127.0.0.1:5173/` for the hot-reload UI. The Vite dev server
+proxies `/api` and `/api/events` to `http://127.0.0.1:8787/` by default. If
+the backend uses a non-default bind, set `LANTOR_WEB_BIND` in both terminals
+or set `LANTOR_WEB_PROXY_TARGET=http://127.0.0.1:<port>` for the Vite terminal.
+
+Do not run `npm run tauri:dev` and `npm run web:dev` / `npm run web:backend`
+at the same time against the same SQLite database. Use one backend-owning
+process at a time so the local supervisor and background workers have a single
+owner.
+
 When the desktop app opens, add your first agent:
 
 1. Install and sign in to the CLI runtime you want to use. You only need the
@@ -137,6 +170,12 @@ The optional mobile web UI is served by the same local desktop process and
 shares the same SQLite database and attachment store. There is still no
 separate hosted Lantor service in the path.
 
+If you do not need the desktop window, run `npm run web:dev` instead. Web-only
+mode starts the same local backend and serves the same browser UI, but skips
+the Tauri window and desktop-only event listener. Browser refreshes continue
+to use the web SSE stream. During frontend development, use `npm run
+web:backend` plus `npm run dev` for Vite hot reload.
+
 ## Mobile
 
 The same desktop process also serves a mobile-friendly web UI, so you can
@@ -212,6 +251,9 @@ npm run build                                              # frontend bundle
 cargo check --manifest-path src-tauri/Cargo.toml           # rust typecheck
 cargo test  --manifest-path src-tauri/Cargo.toml --no-run  # compile tests
 npm run tauri:dev                                          # desktop app
+npm run web:dev                                            # built web UI + backend, no desktop window
+npm run web:backend                                        # backend only for Vite hot reload
+npm run dev                                                # Vite frontend; proxies /api to web backend
 ```
 
 Composer input latency benchmarks live in

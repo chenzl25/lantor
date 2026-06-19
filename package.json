@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "web:backend": "cargo run --manifest-path src-tauri/Cargo.toml -- --web-only",
+    "web:dev": "npm run build && npm run web:backend",
     "build": "tsc && vite build",
     "build:bench": "tsc && vite build --mode bench",
     "bench:composer": "node bench/composer-input-latency.mjs",

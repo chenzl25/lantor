@@ -233,6 +233,22 @@ fn install_window_state_persistence(window: &WebviewWindow, path: PathBuf) {
     });
 }
 
+fn initialize_backend() -> (String, SqlitePool) {
+    let database_url = db_url();
+    let pool = tauri::async_runtime::block_on(db_connect_with_url(&database_url, 5))
+        .expect("failed to connect Lantor SQLite database");
+
+    tauri::async_runtime::block_on(migrate(&pool)).expect("failed to initialize Lantor schema");
+    launch_agent::spawn_supervisor_process(&database_url);
+    (database_url, pool)
+}
+
+fn spawn_shared_background_workers(pool: SqlitePool, database_url: String) {
+    spawn_ui_events_pruner(pool.clone());
+    web::spawn_web_server_if_configured(pool.clone(), database_url);
+    spawn_reminder_worker(pool);
+}
+
 async fn resolve_run_reminder_anchor(
     pool: &SqlitePool,
     agent_id: Uuid,
@@ -300,12 +316,7 @@ async fn resolve_event_channel(
 }
 
 pub fn run() {
-    let database_url = db_url();
-    let pool = tauri::async_runtime::block_on(db_connect_with_url(&database_url, 5))
-        .expect("failed to connect Lantor SQLite database");
-
-    tauri::async_runtime::block_on(migrate(&pool)).expect("failed to initialize Lantor schema");
-    launch_agent::spawn_supervisor_process(&database_url);
+    let (database_url, pool) = initialize_backend();
     let state_db_url = database_url.clone();
     let reminder_pool = pool.clone();
 
@@ -313,9 +324,7 @@ pub fn run() {
         .manage(AppState::new(pool, state_db_url))
         .setup(move |app| {
             spawn_ui_refresh_listener(app.handle().clone(), reminder_pool.clone());
-            spawn_ui_events_pruner(reminder_pool.clone());
-            web::spawn_web_server_if_configured(reminder_pool.clone(), database_url.clone());
-            spawn_reminder_worker(reminder_pool.clone());
+            spawn_shared_background_workers(reminder_pool.clone(), database_url.clone());
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_title("Lantor");
                 if let Some(path) = window_state_path(app.handle()) {
@@ -370,6 +379,19 @@ pub fn run() {
         .expect("error while running Lantor");
 }
 
+fn run_web_only() {
+    let (database_url, pool) = initialize_backend();
+    spawn_shared_background_workers(pool, database_url);
+    eprintln!("Lantor web-only mode is running. Press Ctrl-C to stop.");
+    tauri::async_runtime::block_on(async {
+        if let Err(err) = tokio::signal::ctrl_c().await {
+            eprintln!("failed to listen for Ctrl-C: {err}");
+            std::future::pending::<()>().await;
+        }
+    });
+    eprintln!("Lantor web-only mode stopped.");
+}
+
 fn main() {
     let args = env::args().collect::<Vec<_>>();
     if let Some(tool_arg_index) = args.iter().position(|arg| arg == "--agent-context-tool") {
@@ -394,6 +416,8 @@ fn main() {
             eprintln!("Lantor supervisor stopped: {err}");
             std::process::exit(1);
         }
+    } else if args.iter().any(|arg| arg == "--web-only") {
+        run_web_only();
     } else {
         run();
     }
