@@ -1,5 +1,5 @@
 import { type MouseEvent, type PointerEvent, useEffect, useState } from "react";
-import { FileText, X } from "lucide-react";
+import { FileText, X, ZoomIn, ZoomOut } from "lucide-react";
 import { DraftAttachment } from "../types";
 
 type DraftAttachmentsPreviewProps = {
@@ -88,20 +88,37 @@ function DraftAttachmentPreviewItem({ attachment, onRemove, onOpenImage }: Draft
 
 export function DraftAttachmentsPreview({ attachments, onRemove }: DraftAttachmentsPreviewProps) {
   const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
+  const [imagePreviewZoomed, setImagePreviewZoomed] = useState(false);
 
   function closeImagePreview(event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
     event.stopPropagation();
     setImagePreview(null);
+    setImagePreviewZoomed(false);
+  }
+
+  function openImagePreview(preview: ImagePreview) {
+    setImagePreview(preview);
+    setImagePreviewZoomed(false);
+  }
+
+  function toggleImagePreviewZoom(event: MouseEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setImagePreviewZoomed((zoomed) => !zoomed);
   }
 
   useEffect(() => {
     if (!imagePreview) return;
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setImagePreview(null);
+      if (event.key === "Escape") {
+        setImagePreview(null);
+        setImagePreviewZoomed(false);
+      }
     }
     function handleHistoryNavigation() {
       setImagePreview(null);
+      setImagePreviewZoomed(false);
     }
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("popstate", handleHistoryNavigation);
@@ -121,7 +138,7 @@ export function DraftAttachmentsPreview({ attachments, onRemove }: DraftAttachme
             key={attachment.id}
             attachment={attachment}
             onRemove={onRemove}
-            onOpenImage={setImagePreview}
+            onOpenImage={openImagePreview}
           />
         ))}
       </div>
@@ -150,8 +167,26 @@ export function DraftAttachmentsPreview({ attachments, onRemove }: DraftAttachme
           >
             <X size={18} />
           </button>
-          <div className="attachment-lightbox-content">
-            <img src={imagePreview.src} alt={imagePreview.alt} />
+          <button
+            type="button"
+            className="attachment-lightbox-zoom"
+            aria-label={imagePreviewZoomed ? "Fit image to screen" : "View image at full size"}
+            aria-pressed={imagePreviewZoomed}
+            onPointerDown={isolateDraftAttachmentEvent}
+            onClick={toggleImagePreviewZoom}
+          >
+            {imagePreviewZoomed ? <ZoomOut size={18} /> : <ZoomIn size={18} />}
+          </button>
+          <div className={`attachment-lightbox-content ${imagePreviewZoomed ? "zoomed" : ""}`}>
+            <button
+              type="button"
+              className="attachment-lightbox-image-button"
+              aria-label={imagePreviewZoomed ? "Fit image to screen" : "View image at full size"}
+              onPointerDown={isolateDraftAttachmentEvent}
+              onClick={toggleImagePreviewZoom}
+            >
+              <img src={imagePreview.src} alt={imagePreview.alt} />
+            </button>
           </div>
         </div>
       )}

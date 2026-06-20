@@ -1,5 +1,5 @@
 import { type MouseEvent, type PointerEvent, useEffect, useState } from "react";
-import { FileText, Image, X } from "lucide-react";
+import { FileText, Image, X, ZoomIn, ZoomOut } from "lucide-react";
 import { attachmentAssetUrl, isTauriRuntime, openExternalUrl } from "../apiClient";
 import { MessageAttachment } from "../types";
 
@@ -36,20 +36,37 @@ function isolateAttachmentEvent(event: MouseEvent<HTMLElement> | PointerEvent<HT
 
 export function MessageAttachments({ attachments, showImageThumbnails }: MessageAttachmentsProps) {
   const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
+  const [imagePreviewZoomed, setImagePreviewZoomed] = useState(false);
 
   function closeImagePreview(event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
     event.stopPropagation();
     setImagePreview(null);
+    setImagePreviewZoomed(false);
+  }
+
+  function openImagePreview(preview: ImagePreview) {
+    setImagePreview(preview);
+    setImagePreviewZoomed(false);
+  }
+
+  function toggleImagePreviewZoom(event: MouseEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setImagePreviewZoomed((zoomed) => !zoomed);
   }
 
   useEffect(() => {
     if (!imagePreview) return;
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setImagePreview(null);
+      if (event.key === "Escape") {
+        setImagePreview(null);
+        setImagePreviewZoomed(false);
+      }
     }
     function handleHistoryNavigation() {
       setImagePreview(null);
+      setImagePreviewZoomed(false);
     }
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("popstate", handleHistoryNavigation);
@@ -78,7 +95,7 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
                 onPointerDown={isolateAttachmentEvent}
                 onClick={(event) => {
                   event.stopPropagation();
-                  setImagePreview({ src, alt: attachment.original_name });
+                  openImagePreview({ src, alt: attachment.original_name });
                 }}
               >
                 {showImageThumbnails ? (
@@ -143,8 +160,26 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
           >
             <X size={18} />
           </button>
-          <div className="attachment-lightbox-content">
-            <img src={imagePreview.src} alt={imagePreview.alt} />
+          <button
+            type="button"
+            className="attachment-lightbox-zoom"
+            aria-label={imagePreviewZoomed ? "Fit image to screen" : "View image at full size"}
+            aria-pressed={imagePreviewZoomed}
+            onPointerDown={isolateAttachmentEvent}
+            onClick={toggleImagePreviewZoom}
+          >
+            {imagePreviewZoomed ? <ZoomOut size={18} /> : <ZoomIn size={18} />}
+          </button>
+          <div className={`attachment-lightbox-content ${imagePreviewZoomed ? "zoomed" : ""}`}>
+            <button
+              type="button"
+              className="attachment-lightbox-image-button"
+              aria-label={imagePreviewZoomed ? "Fit image to screen" : "View image at full size"}
+              onPointerDown={isolateAttachmentEvent}
+              onClick={toggleImagePreviewZoom}
+            >
+              <img src={imagePreview.src} alt={imagePreview.alt} />
+            </button>
           </div>
         </div>
       )}

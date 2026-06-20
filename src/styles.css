@@ -3154,9 +3154,30 @@ mark {
   position: relative;
   z-index: 1;
   display: grid;
+  overflow: auto;
   max-width: min(92vw, 1120px);
   max-height: calc(100dvh - 104px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   place-items: center;
+}
+
+.attachment-lightbox-content.zoomed {
+  width: calc(100vw - 32px);
+  max-width: none;
+  place-items: start center;
+  padding: 16px;
+}
+
+.attachment-lightbox-image-button {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  border-radius: 18px;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.attachment-lightbox-content.zoomed .attachment-lightbox-image-button {
+  cursor: zoom-out;
 }
 
 .attachment-lightbox-content img {
@@ -3166,6 +3187,11 @@ mark {
   border-radius: 18px;
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.34);
   object-fit: contain;
+}
+
+.attachment-lightbox-content.zoomed .attachment-lightbox-image-button img {
+  max-width: none;
+  max-height: none;
 }
 
 .attachment-lightbox-close {
@@ -3181,6 +3207,21 @@ mark {
   background: rgba(255, 255, 255, 0.92);
   color: #111827;
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.2);
+}
+
+.attachment-lightbox-zoom {
+  position: absolute;
+  top: calc(56px + env(safe-area-inset-top));
+  right: 14px;
+  z-index: 2;
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--surface-floating);
+  color: var(--ink-primary);
+  box-shadow: var(--state-selected-shadow);
 }
 
 .message-stream-state {
