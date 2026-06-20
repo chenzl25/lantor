@@ -43,7 +43,9 @@ fn inbox_wake_context_includes_message_headers_and_other_active_summary() {
     assert!(context.contains("type=owner"));
     assert!(context.contains("Dylan: please use the latest numbers and reply directly"));
     assert!(context.contains("Warm-runtime guard"));
+    assert!(context.contains("mention in a thread with prior messages"));
     assert!(context.contains("use history-read on the default reply target"));
+    assert!(context.contains("source message is not self-contained"));
     assert!(context.contains(&format!("inbox_id: {inbox_id}")));
     assert!(context.contains("Other active inbox targets:"));
     assert!(context.contains("- dm:Hancock: 2 active"));

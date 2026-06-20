@@ -41,6 +41,7 @@ fn runtime_standing_prompt_carries_memory_once() {
     assert!(prompt.contains("stable user preferences"));
     assert!(prompt.contains("Before long-running work, update Active Context"));
     assert!(prompt.contains("Turn startup sequence:"));
+    assert!(prompt.contains("first mentioned in a thread"));
     assert!(prompt.contains("Use history-read or message-search when older channel/thread context"));
     assert!(prompt.contains("Reply briefly to direct greetings"));
     assert!(prompt.contains("Agent context tools"));
