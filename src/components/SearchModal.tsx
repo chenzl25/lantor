@@ -134,6 +134,9 @@ export function SearchModal({
               <X size={18} />
             </button>
           )}
+          <button className="search-clear search-modal-close" onClick={onClose} aria-label="Close search">
+            <X size={18} />
+          </button>
         </header>
 
         <div className="search-filters">

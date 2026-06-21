@@ -38,13 +38,13 @@ export function SavedMessagesModal({
     <div className="search-backdrop" onClick={onClose}>
       <section className="activity-feed-panel saved-panel" onClick={(event) => event.stopPropagation()}>
         <header className="activity-feed-head">
-          <button className="activity-feed-back" onClick={onClose} aria-label="Close saved messages">
-            <X size={18} />
-          </button>
           <div>
             <h2>Saved</h2>
             <p>{items.length} saved {items.length === 1 ? "message" : "messages"}</p>
           </div>
+          <button className="activity-feed-back" onClick={onClose} aria-label="Close saved messages">
+            <X size={18} />
+          </button>
         </header>
 
         <div className="activity-feed-body">

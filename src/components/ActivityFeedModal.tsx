@@ -221,9 +221,6 @@ export function ActivityFeedModal({
     <div className="search-backdrop" onClick={onClose}>
       <section className="activity-feed-panel activity-panel" onClick={(event) => event.stopPropagation()}>
         <header className="activity-feed-head">
-          <button className="activity-feed-back" onClick={onClose} aria-label="Close activity">
-            <X size={18} />
-          </button>
           <div>
             <h2>Activity</h2>
             <p>{displayItems.length} active · {unreadCount} unread</p>
@@ -244,6 +241,9 @@ export function ActivityFeedModal({
               Dismiss all
             </button>
           </div>
+          <button className="activity-feed-back" onClick={onClose} aria-label="Close activity">
+            <X size={18} />
+          </button>
         </header>
 
         <div className="activity-feed-filters">

@@ -55,8 +55,6 @@ export function CreateChannelModal({
       title="Create Channel"
       onClose={submitting ? () => undefined : onCancel}
       width={560}
-      closeOnBackdrop={false}
-      closeOnEscape={false}
     >
       <div className="modal-form">
         <label>

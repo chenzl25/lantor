@@ -57,8 +57,6 @@ export function OwnerProfileModal({
       title="Edit Profile"
       onClose={onCancel}
       width={560}
-      closeOnBackdrop={false}
-      closeOnEscape={false}
     >
       <div className="modal-form owner-profile-form">
         <div className="owner-profile-preview">

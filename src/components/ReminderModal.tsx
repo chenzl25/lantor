@@ -91,8 +91,6 @@ export function ReminderModal({
       title="Reminders"
       onClose={onClose}
       width={880}
-      closeOnBackdrop={false}
-      closeOnEscape={false}
     >
       <div className="reminder-modal">
         <section className="reminder-create">

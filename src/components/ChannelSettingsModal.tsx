@@ -28,8 +28,6 @@ export function ChannelSettingsModal({
       title={channel ? `#${channel.name} Settings` : "Channel Settings"}
       onClose={onCancel}
       width={560}
-      closeOnBackdrop={false}
-      closeOnEscape={false}
     >
       {channel && (
         <div className="modal-form">
