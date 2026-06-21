@@ -36,20 +36,35 @@ const remarkPlugins: PluggableList = [
 const rehypePlugins: PluggableList = [
   [rehypeKatex, { strict: false, trust: false }],
 ];
+const LOCAL_ENTITY_LEADING_BOUNDARY = String.raw`(^|[^A-Za-z0-9_/@.-])`;
+const LOCAL_ENTITY_TRAILING_BOUNDARY = String.raw`(?=$|[^A-Za-z0-9_-])`;
 
 function encodeLocalPath(value: string) {
   return encodeURIComponent(value.replace(/^[@#]/, ""));
 }
 
 function linkifyPlainText(value: string) {
+  const agentMentionPattern = new RegExp(
+    `${LOCAL_ENTITY_LEADING_BOUNDARY}@([A-Za-z][A-Za-z0-9_-]{1,31})${LOCAL_ENTITY_TRAILING_BOUNDARY}`,
+    "g",
+  );
+  const channelMentionPattern = new RegExp(
+    `${LOCAL_ENTITY_LEADING_BOUNDARY}#([A-Za-z][A-Za-z0-9_-]{1,63})${LOCAL_ENTITY_TRAILING_BOUNDARY}`,
+    "g",
+  );
+  const taskMentionPattern = new RegExp(
+    `${LOCAL_ENTITY_LEADING_BOUNDARY}task #([0-9]+)${LOCAL_ENTITY_TRAILING_BOUNDARY}`,
+    "gi",
+  );
+
   return value
-    .replace(/(^|[\s([{])@([A-Za-z][A-Za-z0-9_-]{1,31})(?=$|[\s.,;:!?)\]}])/g, (_match, prefix, handle) => (
+    .replace(agentMentionPattern, (_match, prefix, handle) => (
       `${prefix}[@${handle}](${LOCAL_ENTITY_PATH_PREFIX}agent/${encodeLocalPath(handle)})`
     ))
-    .replace(/(^|[\s([{])#([A-Za-z][A-Za-z0-9_-]{1,63})(?=$|[\s.,;:!?)\]}])/g, (_match, prefix, channel) => (
+    .replace(channelMentionPattern, (_match, prefix, channel) => (
       `${prefix}[#${channel}](${LOCAL_ENTITY_PATH_PREFIX}channel/${encodeLocalPath(channel)})`
     ))
-    .replace(/(^|[\s([{])task #([0-9]+)(?=$|[\s.,;:!?)\]}])/gi, (_match, prefix, taskNumber) => (
+    .replace(taskMentionPattern, (_match, prefix, taskNumber) => (
       `${prefix}[task #${taskNumber}](${LOCAL_ENTITY_PATH_PREFIX}task/${taskNumber})`
     ));
 }
