@@ -26,7 +26,7 @@ type MessageMarkdownProps = {
 };
 
 const INLINE_CODE_SPLIT = /(`[^`\n]*(?:`|$))/g;
-const FENCE_SPLIT = /(```[\s\S]*?(?:```|$))/g;
+const FENCE_SPLIT = /((?:^|\n)```[\s\S]*?(?:\n```|$))/g;
 const LOCAL_ENTITY_PATH_PREFIX = "/lantor/";
 const tableScrollPositions = new Map<string, number>();
 const remarkPlugins: PluggableList = [
@@ -58,7 +58,7 @@ function linkifyMessageBody(body: string) {
   return body
     .split(FENCE_SPLIT)
     .map((segment) => {
-      if (segment.startsWith("```")) return segment;
+      if (segment.startsWith("```") || segment.startsWith("\n```")) return segment;
       return segment
         .split(INLINE_CODE_SPLIT)
         .map((inlineSegment) => inlineSegment.startsWith("`") ? inlineSegment : linkifyPlainText(inlineSegment))
