@@ -3697,6 +3697,35 @@ mark {
   font-weight: var(--type-weight-semibold);
 }
 
+.markdown-body .katex {
+  max-width: 100%;
+  color: var(--ink);
+  font-size: 1.03em;
+}
+
+.markdown-body .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  margin: 4px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-recessed);
+  color: var(--ink);
+  overscroll-behavior-x: contain;
+}
+
+.markdown-body .katex-display > .katex {
+  display: inline-block;
+  min-width: max-content;
+  max-width: none;
+}
+
+.markdown-body .katex-error {
+  color: var(--status-danger);
+}
+
 .markdown-body code {
   padding: 2px 5px;
   border-radius: 6px;

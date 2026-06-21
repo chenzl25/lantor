@@ -191,22 +191,6 @@ function shouldCollapseChannelMessage(body: string) {
   return text.split("\n").length > DESKTOP_MESSAGE_PREVIEW_LINES || text.length > DESKTOP_MESSAGE_PREVIEW_CHARS;
 }
 
-function closeUnbalancedCodeFence(body: string) {
-  const fenceMatches = body.match(/(^|\n)```/g);
-  if (!fenceMatches || fenceMatches.length % 2 === 0) return body;
-  return `${body.replace(/\s+$/, "")}\n\`\`\``;
-}
-
-function channelMessagePreview(body: string) {
-  const text = body.trim();
-  const lines = text.split("\n");
-  const linePreview = lines.slice(0, DESKTOP_MESSAGE_PREVIEW_LINES).join("\n");
-  const preview = linePreview.length > DESKTOP_MESSAGE_PREVIEW_CHARS
-    ? `${linePreview.slice(0, DESKTOP_MESSAGE_PREVIEW_CHARS).replace(/\s+\S*$/, "")}`
-    : linePreview;
-  return closeUnbalancedCodeFence(preview);
-}
-
 function isInteractiveMessageClick(event: ReactMouseEvent<HTMLElement>) {
   if (event.nativeEvent.composedPath().some((node) => (
     node instanceof Element && node.matches(MESSAGE_CARD_INTERACTIVE_TARGET_SELECTOR)
@@ -895,9 +879,6 @@ export function Conversation({
             const showDateDivider = index === 0 || !isSameCalendarDay(message.created_at, rootMessages[index - 1]?.created_at ?? "");
             const isLongChannelMessage = shouldCollapseChannelMessage(message.body);
             const isChannelMessageExpanded = expandedChannelMessageIds.has(message.id);
-            const visibleMessageBody = isLongChannelMessage && !isChannelMessageExpanded
-              ? channelMessagePreview(message.body)
-              : message.body;
             if (message.sender_role === "system") {
               return (
                 <Fragment key={message.id}>
@@ -1031,7 +1012,7 @@ export function Conversation({
                     {message.delivery_state !== "streaming" && (
                       <>
                         <div className={isLongChannelMessage && !isChannelMessageExpanded ? "message-long-preview collapsed" : "message-long-preview"}>
-                          <MessageMarkdown body={visibleMessageBody} onLocalAgentLink={openLinkedAgentDetail} scrollKey={`message:${message.id}`} />
+                          <MessageMarkdown body={message.body} onLocalAgentLink={openLinkedAgentDetail} scrollKey={`message:${message.id}`} />
                         </div>
                         {isLongChannelMessage && (
                           <button

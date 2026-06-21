@@ -60,22 +60,6 @@ function shouldCollapseThreadMessage(body: string) {
   return text.split("\n").length > DESKTOP_MESSAGE_PREVIEW_LINES || text.length > DESKTOP_MESSAGE_PREVIEW_CHARS;
 }
 
-function closeUnbalancedCodeFence(body: string) {
-  const fenceMatches = body.match(/(^|\n)```/g);
-  if (!fenceMatches || fenceMatches.length % 2 === 0) return body;
-  return `${body.replace(/\s+$/, "")}\n\`\`\``;
-}
-
-function threadMessagePreview(body: string) {
-  const text = body.trim();
-  const lines = text.split("\n");
-  const linePreview = lines.slice(0, DESKTOP_MESSAGE_PREVIEW_LINES).join("\n");
-  const preview = linePreview.length > DESKTOP_MESSAGE_PREVIEW_CHARS
-    ? linePreview.slice(0, DESKTOP_MESSAGE_PREVIEW_CHARS).replace(/\s+\S*$/, "")
-    : linePreview;
-  return closeUnbalancedCodeFence(preview);
-}
-
 type ThreadPanelProps = {
   channel: Channel | null;
   channels: Channel[];
@@ -627,13 +611,10 @@ export function ThreadPanel({
                       {activeRoot.delivery_state !== "streaming" && (() => {
                         const isLongThreadMessage = shouldCollapseThreadMessage(activeRoot.body);
                         const isThreadMessageExpanded = expandedThreadMessageIds.has(activeRoot.id);
-                        const visibleBody = isLongThreadMessage && !isThreadMessageExpanded
-                          ? threadMessagePreview(activeRoot.body)
-                          : activeRoot.body;
                         return (
                           <>
                             <div className={isLongThreadMessage && !isThreadMessageExpanded ? "message-long-preview collapsed" : "message-long-preview"}>
-                              <MessageMarkdown body={visibleBody} onLocalAgentLink={openLinkedAgentDetail} scrollKey={`message:${activeRoot.id}`} />
+                              <MessageMarkdown body={activeRoot.body} onLocalAgentLink={openLinkedAgentDetail} scrollKey={`message:${activeRoot.id}`} />
                             </div>
                             {isLongThreadMessage && (
                               <button
@@ -900,13 +881,10 @@ export function ThreadPanel({
                       {reply.delivery_state !== "streaming" && (() => {
                         const isLongThreadMessage = shouldCollapseThreadMessage(reply.body);
                         const isThreadMessageExpanded = expandedThreadMessageIds.has(reply.id);
-                        const visibleBody = isLongThreadMessage && !isThreadMessageExpanded
-                          ? threadMessagePreview(reply.body)
-                          : reply.body;
                         return (
                           <>
                             <div className={isLongThreadMessage && !isThreadMessageExpanded ? "message-long-preview collapsed" : "message-long-preview"}>
-                              <MessageMarkdown body={visibleBody} onLocalAgentLink={openLinkedAgentDetail} scrollKey={`message:${reply.id}`} />
+                              <MessageMarkdown body={reply.body} onLocalAgentLink={openLinkedAgentDetail} scrollKey={`message:${reply.id}`} />
                             </div>
                             {isLongThreadMessage && (
                               <button

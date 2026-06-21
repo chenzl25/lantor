@@ -10,8 +10,12 @@ import {
   useRef,
   useState,
 } from "react";
+import rehypeKatex from "rehype-katex";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import type { PluggableList } from "unified";
+import "katex/dist/katex.min.css";
 import { openExternalUrl } from "../apiClient";
 import { copyText } from "../clipboard";
 
@@ -25,6 +29,13 @@ const INLINE_CODE_SPLIT = /(`[^`\n]*(?:`|$))/g;
 const FENCE_SPLIT = /(```[\s\S]*?(?:```|$))/g;
 const LOCAL_ENTITY_PATH_PREFIX = "/lantor/";
 const tableScrollPositions = new Map<string, number>();
+const remarkPlugins: PluggableList = [
+  remarkGfm,
+  [remarkMath, { singleDollarTextMath: false }],
+];
+const rehypePlugins: PluggableList = [
+  [rehypeKatex, { strict: false, trust: false }],
+];
 
 function encodeLocalPath(value: string) {
   return encodeURIComponent(value.replace(/^[@#]/, ""));
@@ -190,7 +201,8 @@ export function MessageMarkdown({ body, onLocalAgentLink, scrollKey }: MessageMa
   return (
     <div className="markdown-body">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={remarkPlugins}
+        rehypePlugins={rehypePlugins}
         urlTransform={transformMessageUrl}
         components={markdownComponents}
       >
