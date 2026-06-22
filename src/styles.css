@@ -1896,7 +1896,12 @@ button,
   position: relative;
 }
 
-.thread-header-actions button[data-tooltip]:not(:disabled)::after {
+.thread-header-actions button[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.thread-header-actions button[data-tooltip]::after {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
@@ -1919,7 +1924,7 @@ button,
   white-space: nowrap;
 }
 
-.thread-header-actions button[data-tooltip]:not(:disabled)::before {
+.thread-header-actions button[data-tooltip]::before {
   position: absolute;
   top: calc(100% + 3px);
   right: 15px;
@@ -1936,16 +1941,16 @@ button,
     transform 60ms ease;
 }
 
-.thread-header-actions button[data-tooltip]:not(:disabled):hover::after,
-.thread-header-actions button[data-tooltip]:not(:disabled):focus-visible::after,
-.thread-header-actions button[data-tooltip]:not(:disabled):hover::before,
-.thread-header-actions button[data-tooltip]:not(:disabled):focus-visible::before {
+.thread-header-actions button[data-tooltip]:hover::after,
+.thread-header-actions button[data-tooltip]:focus-visible::after,
+.thread-header-actions button[data-tooltip]:hover::before,
+.thread-header-actions button[data-tooltip]:focus-visible::before {
   opacity: 1;
   transform: translateY(0);
 }
 
-.thread-header-actions button[data-tooltip]:not(:disabled):hover::before,
-.thread-header-actions button[data-tooltip]:not(:disabled):focus-visible::before {
+.thread-header-actions button[data-tooltip]:hover::before,
+.thread-header-actions button[data-tooltip]:focus-visible::before {
   transform: translateY(0) rotate(45deg);
 }
 

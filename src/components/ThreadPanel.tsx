@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowLeft, Bookmark, CheckCircle2, Crosshair, Hash, MessageSquare, Paperclip, RotateCcw, Send, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, Bookmark, CheckCircle2, Crosshair, Hash, Maximize2, MessageSquare, Minimize2, Paperclip, RotateCcw, Send, X } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TextareaHTMLAttributes, type WheelEvent as ReactWheelEvent } from "react";
 import { useAutoGrowTextarea } from "../hooks/useAutoGrowTextarea";
 import { useMentionPicker } from "../hooks/useMentionPicker";
@@ -166,6 +166,17 @@ export function ThreadPanel({
       : `Thread in #${channel.name}`
     : `${APP_DISPLAY_NAME} thread`;
   const lastReply = replies[replies.length - 1] ?? null;
+  const collapsibleThreadMessageIds = useMemo(() => {
+    const messages = activeRoot ? [activeRoot, ...replies] : replies;
+    return messages
+      .filter((message) => message.delivery_state !== "streaming" && shouldCollapseThreadMessage(message.body))
+      .map((message) => message.id);
+  }, [activeRoot, replies]);
+  const hasCollapsibleThreadMessages = collapsibleThreadMessageIds.length > 0;
+  const areAllThreadMessagesExpanded = hasCollapsibleThreadMessages
+    && collapsibleThreadMessageIds.every((messageId) => expandedThreadMessageIds.has(messageId));
+  const areAllThreadMessagesFolded = hasCollapsibleThreadMessages
+    && collapsibleThreadMessageIds.every((messageId) => !expandedThreadMessageIds.has(messageId));
 
   function isThreadScrollAtBottom(element: HTMLDivElement) {
     return threadScrollDistanceFromBottom(element) < 32;
@@ -420,6 +431,20 @@ export function ThreadPanel({
     });
   }
 
+  function expandAllThreadMessages() {
+    if (!hasCollapsibleThreadMessages || areAllThreadMessagesExpanded) return;
+    stopFollowingThread();
+    setPendingCollapsedThreadMessageId(null);
+    setExpandedThreadMessageIds(new Set(collapsibleThreadMessageIds));
+  }
+
+  function foldAllThreadMessages() {
+    if (!hasCollapsibleThreadMessages || areAllThreadMessagesFolded) return;
+    stopFollowingThread();
+    setPendingCollapsedThreadMessageId(null);
+    setExpandedThreadMessageIds(new Set());
+  }
+
   const activeTaskAssignee = activeTask
     ? agents.find((agent) => agent.id === activeTask.assignee_id) ?? null
     : null;
@@ -471,6 +496,28 @@ export function ThreadPanel({
           </h2>
         </div>
         <span className="thread-header-actions">
+          <button
+            type="button"
+            className="thread-expand-all"
+            onClick={expandAllThreadMessages}
+            aria-disabled={!hasCollapsibleThreadMessages || areAllThreadMessagesExpanded}
+            data-tooltip="Expand all messages in this thread"
+            title="Expand all messages in this thread"
+            aria-label="Expand all messages in this thread"
+          >
+            <Maximize2 size={18} />
+          </button>
+          <button
+            type="button"
+            className="thread-fold-all"
+            onClick={foldAllThreadMessages}
+            aria-disabled={!hasCollapsibleThreadMessages || areAllThreadMessagesFolded}
+            data-tooltip="Fold all messages in this thread"
+            title="Fold all messages in this thread"
+            aria-label="Fold all messages in this thread"
+          >
+            <Minimize2 size={18} />
+          </button>
           <button
             type="button"
             className="thread-locate-root"
