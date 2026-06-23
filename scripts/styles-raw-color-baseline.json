@@ -273,24 +273,6 @@
       "n": 0
     },
     {
-      "selector": ".attachment-lightbox-close",
-      "prop": "background",
-      "literal": "rgba(255, 255, 255, 0.92)",
-      "n": 0
-    },
-    {
-      "selector": ".attachment-lightbox-close",
-      "prop": "box-shadow",
-      "literal": "rgba(0, 0, 0, 0.2)",
-      "n": 0
-    },
-    {
-      "selector": ".attachment-lightbox-close",
-      "prop": "color",
-      "literal": "#111827",
-      "n": 0
-    },
-    {
       "selector": ".attachment-lightbox-content img",
       "prop": "box-shadow",
       "literal": "rgba(0, 0, 0, 0.34)",

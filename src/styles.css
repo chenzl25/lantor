@@ -3046,7 +3046,7 @@ mark {
 
 .attachment-download:hover,
 .attachment-download:focus-visible {
-  border-color: rgba(10, 132, 255, 0.32);
+  border-color: var(--accent-soft-hover-border);
   color: var(--accent);
   outline: none;
 }
@@ -3314,9 +3314,9 @@ mark {
   height: 34px;
   place-items: center;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.92);
-  color: #111827;
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.2);
+  background: var(--surface-floating);
+  color: var(--ink-primary);
+  box-shadow: var(--state-selected-shadow);
 }
 
 .attachment-lightbox-close {
@@ -3325,16 +3325,10 @@ mark {
 
 .attachment-lightbox-zoom {
   top: calc(56px + env(safe-area-inset-top));
-  background: var(--surface-floating);
-  color: var(--ink-primary);
-  box-shadow: var(--state-selected-shadow);
 }
 
 .attachment-lightbox-download {
   top: calc(98px + env(safe-area-inset-top));
-  background: var(--surface-floating);
-  color: var(--ink-primary);
-  box-shadow: var(--state-selected-shadow);
 }
 
 .message-stream-state {
@@ -6469,6 +6463,23 @@ body.resizing-column * {
   color: #4f5560;
   font-size: var(--type-size-meta);
   font-weight: var(--type-weight-semibold);
+}
+
+.app-toast.success {
+  border-color: var(--status-success-border);
+  background: color-mix(in srgb, var(--status-success-soft) 72%, var(--surface-floating));
+  color: var(--status-success);
+}
+
+.app-toast.error {
+  border-color: var(--status-danger-border);
+  background: color-mix(in srgb, var(--status-danger-soft) 72%, var(--surface-floating));
+  color: var(--status-danger);
+}
+
+.attachment-download-toast {
+  bottom: 80px;
+  z-index: 1300;
 }
 
 .agent-detail {

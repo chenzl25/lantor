@@ -14,10 +14,25 @@ type ImagePreview = {
   attachment: MessageAttachment;
 };
 
+type DownloadNotice = {
+  id: number;
+  kind: "success" | "error";
+  message: string;
+};
+
 function formatBytes(value: number) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function filenameFromPath(path: string, fallback: string) {
+  const normalized = path.replace(/\\/g, "/");
+  return normalized.split("/").pop() || fallback;
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error || "Unknown error");
 }
 
 async function openStoredAttachment(event: MouseEvent<HTMLAnchorElement>, attachment: MessageAttachment) {
@@ -31,15 +46,27 @@ async function openStoredAttachment(event: MouseEvent<HTMLAnchorElement>, attach
   }
 }
 
-async function downloadStoredAttachment(event: MouseEvent<HTMLElement>, attachment: MessageAttachment) {
+async function downloadStoredAttachment(
+  event: MouseEvent<HTMLElement>,
+  attachment: MessageAttachment,
+  onNotice: (notice: Omit<DownloadNotice, "id">) => void,
+) {
   event.preventDefault();
   event.stopPropagation();
 
   if (!attachment.local_url && isTauriRuntime()) {
     try {
-      await downloadAttachment(attachment.storage_path, attachment.original_name);
+      const targetPath = await downloadAttachment(attachment.storage_path, attachment.original_name);
+      onNotice({
+        kind: "success",
+        message: `Saved to Downloads: ${filenameFromPath(targetPath, attachment.original_name)}`,
+      });
     } catch (error) {
       console.error("Failed to download attachment", error);
+      onNotice({
+        kind: "error",
+        message: `Download failed: ${errorMessage(error)}`,
+      });
     }
     return;
   }
@@ -67,6 +94,14 @@ function isolateAttachmentEvent(event: MouseEvent<HTMLElement> | PointerEvent<HT
 export function MessageAttachments({ attachments, showImageThumbnails }: MessageAttachmentsProps) {
   const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
   const [imagePreviewZoomed, setImagePreviewZoomed] = useState(false);
+  const [downloadNotice, setDownloadNotice] = useState<DownloadNotice | null>(null);
+
+  function showDownloadNotice(notice: Omit<DownloadNotice, "id">) {
+    setDownloadNotice({
+      ...notice,
+      id: Date.now(),
+    });
+  }
 
   function closeImagePreview(event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
@@ -105,6 +140,14 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
       window.removeEventListener("popstate", handleHistoryNavigation);
     };
   }, [imagePreview]);
+
+  useEffect(() => {
+    if (!downloadNotice) return;
+    const timeout = window.setTimeout(() => {
+      setDownloadNotice((current) => current?.id === downloadNotice.id ? null : current);
+    }, downloadNotice.kind === "error" ? 6000 : 3600);
+    return () => window.clearTimeout(timeout);
+  }, [downloadNotice]);
 
   if (attachments.length === 0) return null;
 
@@ -151,7 +194,7 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
                   title={`Download ${attachment.original_name}`}
                   onPointerDown={isolateAttachmentEvent}
                   onClick={(event) => {
-                    void downloadStoredAttachment(event, attachment);
+                    void downloadStoredAttachment(event, attachment, showDownloadNotice);
                   }}
                 >
                   <Download size={15} />
@@ -191,7 +234,7 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
                 title={`Download ${attachment.original_name}`}
                 onPointerDown={isolateAttachmentEvent}
                 onClick={(event) => {
-                  void downloadStoredAttachment(event, attachment);
+                  void downloadStoredAttachment(event, attachment, showDownloadNotice);
                 }}
               >
                 <Download size={15} />
@@ -242,7 +285,7 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
             title={`Download ${imagePreview.alt}`}
             onPointerDown={isolateAttachmentEvent}
             onClick={(event) => {
-              void downloadStoredAttachment(event, imagePreview.attachment);
+              void downloadStoredAttachment(event, imagePreview.attachment, showDownloadNotice);
             }}
           >
             <Download size={18} />
@@ -258,6 +301,12 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
               <img src={imagePreview.src} alt={imagePreview.alt} />
             </button>
           </div>
+        </div>
+      )}
+      {downloadNotice && (
+        <div className={`app-toast attachment-download-toast ${downloadNotice.kind}`} role={downloadNotice.kind === "error" ? "alert" : "status"}>
+          <span>{downloadNotice.message}</span>
+          <button type="button" onClick={() => setDownloadNotice(null)} aria-label="Dismiss download notification">Dismiss</button>
         </div>
       )}
     </>
