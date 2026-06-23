@@ -1,4 +1,4 @@
-import { type MouseEvent, type PointerEvent, useEffect, useState } from "react";
+import { type MouseEvent, type PointerEvent, useEffect, useRef, useState } from "react";
 import { Download, FileText, Image, X, ZoomIn, ZoomOut } from "lucide-react";
 import { attachmentAssetUrl, downloadAttachment, isTauriRuntime, openExternalUrl } from "../apiClient";
 import { MessageAttachment } from "../types";
@@ -14,10 +14,21 @@ type ImagePreview = {
   attachment: MessageAttachment;
 };
 
+type DownloadFeedback = {
+  kind: "success" | "error";
+  message: string;
+};
+
 function formatBytes(value: number) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string" && error) return error;
+  return fallback;
 }
 
 async function openStoredAttachment(event: MouseEvent<HTMLAnchorElement>, attachment: MessageAttachment) {
@@ -31,23 +42,42 @@ async function openStoredAttachment(event: MouseEvent<HTMLAnchorElement>, attach
   }
 }
 
-async function downloadStoredAttachment(event: MouseEvent<HTMLElement>, attachment: MessageAttachment) {
+async function downloadStoredAttachment(event: MouseEvent<HTMLElement>, attachment: MessageAttachment): Promise<DownloadFeedback> {
   event.preventDefault();
   event.stopPropagation();
 
   if (!attachment.local_url && isTauriRuntime()) {
     try {
-      await downloadAttachment(attachment.storage_path, attachment.original_name);
+      const savedPath = await downloadAttachment(attachment.storage_path, attachment.original_name);
+      return {
+        kind: "success",
+        message: `Saved to Downloads: ${savedPath.split(/[\\/]/).pop() || attachment.original_name}`,
+      };
     } catch (error) {
       console.error("Failed to download attachment", error);
+      return {
+        kind: "error",
+        message: errorMessage(error, `Download failed: ${attachment.original_name}`),
+      };
     }
-    return;
   }
 
-  triggerBrowserDownload(
-    attachment.local_url ?? attachmentAssetUrl(attachment.storage_path, attachment.id),
-    attachment.original_name,
-  );
+  try {
+    triggerBrowserDownload(
+      attachment.local_url ?? attachmentAssetUrl(attachment.storage_path, attachment.id),
+      attachment.original_name,
+    );
+    return {
+      kind: "success",
+      message: `Download started: ${attachment.original_name}`,
+    };
+  } catch (error) {
+    console.error("Failed to download attachment", error);
+    return {
+      kind: "error",
+      message: errorMessage(error, `Download failed: ${attachment.original_name}`),
+    };
+  }
 }
 
 function triggerBrowserDownload(url: string, filename: string) {
@@ -67,6 +97,8 @@ function isolateAttachmentEvent(event: MouseEvent<HTMLElement> | PointerEvent<HT
 export function MessageAttachments({ attachments, showImageThumbnails }: MessageAttachmentsProps) {
   const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
   const [imagePreviewZoomed, setImagePreviewZoomed] = useState(false);
+  const [downloadFeedback, setDownloadFeedback] = useState<DownloadFeedback | null>(null);
+  const downloadFeedbackTimerRef = useRef<number | null>(null);
 
   function closeImagePreview(event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
@@ -84,6 +116,29 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
     event.preventDefault();
     event.stopPropagation();
     setImagePreviewZoomed((zoomed) => !zoomed);
+  }
+
+  function showDownloadFeedback(feedback: DownloadFeedback) {
+    if (downloadFeedbackTimerRef.current !== null) {
+      window.clearTimeout(downloadFeedbackTimerRef.current);
+    }
+    setDownloadFeedback(feedback);
+    downloadFeedbackTimerRef.current = window.setTimeout(() => {
+      setDownloadFeedback(null);
+      downloadFeedbackTimerRef.current = null;
+    }, 4200);
+  }
+
+  function clearDownloadFeedback() {
+    if (downloadFeedbackTimerRef.current !== null) {
+      window.clearTimeout(downloadFeedbackTimerRef.current);
+      downloadFeedbackTimerRef.current = null;
+    }
+    setDownloadFeedback(null);
+  }
+
+  function handleDownloadAttachment(event: MouseEvent<HTMLElement>, attachment: MessageAttachment) {
+    void downloadStoredAttachment(event, attachment).then(showDownloadFeedback);
   }
 
   useEffect(() => {
@@ -105,6 +160,14 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
       window.removeEventListener("popstate", handleHistoryNavigation);
     };
   }, [imagePreview]);
+
+  useEffect(() => {
+    return () => {
+      if (downloadFeedbackTimerRef.current !== null) {
+        window.clearTimeout(downloadFeedbackTimerRef.current);
+      }
+    };
+  }, []);
 
   if (attachments.length === 0) return null;
 
@@ -151,7 +214,7 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
                   title={`Download ${attachment.original_name}`}
                   onPointerDown={isolateAttachmentEvent}
                   onClick={(event) => {
-                    void downloadStoredAttachment(event, attachment);
+                    handleDownloadAttachment(event, attachment);
                   }}
                 >
                   <Download size={15} />
@@ -191,7 +254,7 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
                 title={`Download ${attachment.original_name}`}
                 onPointerDown={isolateAttachmentEvent}
                 onClick={(event) => {
-                  void downloadStoredAttachment(event, attachment);
+                  handleDownloadAttachment(event, attachment);
                 }}
               >
                 <Download size={15} />
@@ -242,7 +305,7 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
             title={`Download ${imagePreview.alt}`}
             onPointerDown={isolateAttachmentEvent}
             onClick={(event) => {
-              void downloadStoredAttachment(event, imagePreview.attachment);
+              handleDownloadAttachment(event, imagePreview.attachment);
             }}
           >
             <Download size={18} />
@@ -258,6 +321,12 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
               <img src={imagePreview.src} alt={imagePreview.alt} />
             </button>
           </div>
+        </div>
+      )}
+      {downloadFeedback && (
+        <div className={`app-toast ${downloadFeedback.kind}`} role={downloadFeedback.kind === "error" ? "alert" : "status"}>
+          <span>{downloadFeedback.message}</span>
+          <button type="button" onClick={clearDownloadFeedback} aria-label="Dismiss download notification">Dismiss</button>
         </div>
       )}
     </>

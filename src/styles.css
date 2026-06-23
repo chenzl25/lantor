@@ -6471,6 +6471,16 @@ body.resizing-column * {
   font-weight: var(--type-weight-semibold);
 }
 
+.app-toast.success {
+  border-color: var(--status-success-border);
+  color: var(--status-success);
+}
+
+.app-toast.error {
+  border-color: var(--status-danger-border);
+  color: var(--status-danger);
+}
+
 .agent-detail {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
