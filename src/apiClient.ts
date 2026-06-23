@@ -21,6 +21,13 @@ export async function openExternalUrl(url: string): Promise<void> {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
+export async function downloadAttachment(storagePath: string, originalName: string): Promise<string> {
+  if (!isTauriRuntime()) {
+    throw new Error("downloadAttachment is only available in the desktop app");
+  }
+  return tauriInvoke<string>("download_attachment", { storagePath, originalName });
+}
+
 function apiPath(command: string) {
   return `/api/${command}`;
 }

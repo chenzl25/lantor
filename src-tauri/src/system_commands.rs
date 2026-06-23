@@ -1,5 +1,6 @@
 use std::{
-    path::Path,
+    fs,
+    path::{Path, PathBuf},
     process::{Command as StdCommand, Stdio},
 };
 
@@ -8,6 +9,7 @@ use crate::{
     db::expand_home_path,
     models::RuntimeCheck,
 };
+use tauri::Manager;
 
 #[derive(Debug, PartialEq, Eq)]
 enum OpenLinkTarget {
@@ -285,6 +287,78 @@ pub(crate) async fn open_external_url(url: String) -> CommandResult<()> {
     tauri::async_runtime::spawn_blocking(move || open_link_target(&target))
         .await
         .map_err(to_string)?
+}
+
+fn safe_download_filename(value: &str) -> String {
+    let name = Path::new(value)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("attachment")
+        .trim();
+    let sanitized: String = name
+        .chars()
+        .map(|character| match character {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            character if character.is_control() => '_',
+            character => character,
+        })
+        .collect();
+    let sanitized = sanitized.trim_matches(['.', ' ']);
+    if sanitized.is_empty() {
+        "attachment".to_owned()
+    } else {
+        sanitized.to_owned()
+    }
+}
+
+fn unique_download_path(downloads_dir: &Path, filename: &str) -> PathBuf {
+    let initial = downloads_dir.join(filename);
+    if !initial.exists() {
+        return initial;
+    }
+
+    let source = Path::new(filename);
+    let stem = source
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("attachment");
+    let extension = source.extension().and_then(|value| value.to_str());
+    for index in 1..1000 {
+        let candidate_name = match extension {
+            Some(extension) if !extension.is_empty() => format!("{stem} ({index}).{extension}"),
+            _ => format!("{stem} ({index})"),
+        };
+        let candidate = downloads_dir.join(candidate_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    downloads_dir.join(format!("{stem} ({})", uuid::Uuid::new_v4()))
+}
+
+#[tauri::command]
+pub(crate) async fn download_attachment(
+    app: tauri::AppHandle,
+    storage_path: String,
+    original_name: String,
+) -> CommandResult<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = PathBuf::from(expand_home_path(&storage_path));
+        if !source.is_file() {
+            return Err(format!(
+                "attachment file does not exist: {}",
+                source.display()
+            ));
+        }
+        let downloads_dir = app.path().download_dir().map_err(to_string)?;
+        fs::create_dir_all(&downloads_dir).map_err(to_string)?;
+        let filename = safe_download_filename(&original_name);
+        let target = unique_download_path(&downloads_dir, &filename);
+        fs::copy(&source, &target).map_err(to_string)?;
+        Ok(target.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(to_string)?
 }
 
 #[tauri::command]

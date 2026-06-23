@@ -2933,20 +2933,17 @@ mark {
 
 .message-attachment {
   position: relative;
-  display: flex;
+  display: grid;
   aspect-ratio: 1;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
   min-width: 0;
   min-height: 0;
-  padding: 8px;
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: 13px;
   background: rgba(255, 255, 255, 0.72);
   color: var(--ink);
   text-decoration: none;
+  overflow: visible;
 }
 
 .message-attachment:hover {
@@ -2955,7 +2952,6 @@ mark {
 }
 
 .message-attachment.image {
-  display: block;
   grid-template-columns: none;
   min-height: 0;
   overflow: visible;
@@ -2965,10 +2961,40 @@ mark {
 }
 
 .message-attachment.image.compact-image {
-  display: flex;
   padding: 8px;
   background: var(--bg-control-flat);
   text-align: center;
+}
+
+.attachment-open,
+.attachment-preview-trigger {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px;
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  text-decoration: none;
+}
+
+.attachment-preview-trigger {
+  height: 100%;
+  cursor: zoom-in;
+}
+
+.message-attachment.image:not(.compact-image) .attachment-preview-trigger {
+  display: block;
+  padding: 0;
+}
+
+.message-attachment.image.compact-image .attachment-preview-trigger {
+  padding: 0;
 }
 
 .message-attachment.image.compact-image:hover {
@@ -2991,6 +3017,38 @@ mark {
 
 .message-attachment.image.compact-image:hover img {
   filter: none;
+}
+
+.attachment-download {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-floating);
+  color: var(--ink-primary);
+  box-shadow: var(--state-selected-shadow);
+  opacity: 0.94;
+  transform: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.message-attachment:hover .attachment-download,
+.message-attachment:focus-within .attachment-download {
+  opacity: 1;
+  transform: none;
+}
+
+.attachment-download:hover,
+.attachment-download:focus-visible {
+  border-color: rgba(10, 132, 255, 0.32);
+  color: var(--accent);
+  outline: none;
 }
 
 .message-attachment.pending {
@@ -3245,9 +3303,10 @@ mark {
   max-height: none;
 }
 
-.attachment-lightbox-close {
+.attachment-lightbox-close,
+.attachment-lightbox-download,
+.attachment-lightbox-zoom {
   position: absolute;
-  top: calc(14px + env(safe-area-inset-top));
   right: 14px;
   z-index: 2;
   display: inline-grid;
@@ -3260,16 +3319,19 @@ mark {
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.2);
 }
 
+.attachment-lightbox-close {
+  top: calc(14px + env(safe-area-inset-top));
+}
+
 .attachment-lightbox-zoom {
-  position: absolute;
   top: calc(56px + env(safe-area-inset-top));
-  right: 14px;
-  z-index: 2;
-  display: inline-grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border-radius: 999px;
+  background: var(--surface-floating);
+  color: var(--ink-primary);
+  box-shadow: var(--state-selected-shadow);
+}
+
+.attachment-lightbox-download {
+  top: calc(98px + env(safe-area-inset-top));
   background: var(--surface-floating);
   color: var(--ink-primary);
   box-shadow: var(--state-selected-shadow);

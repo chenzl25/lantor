@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowLeft, Bookmark, CheckCircle2, Crosshair, Hash, Maximize2, MessageSquare, Minimize2, Paperclip, RotateCcw, Send, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, Bookmark, CheckCircle2, Crosshair, FileImage, Hash, Maximize2, MessageSquare, Minimize2, Paperclip, RotateCcw, Send, X } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TextareaHTMLAttributes, type WheelEvent as ReactWheelEvent } from "react";
 import { useAutoGrowTextarea } from "../hooks/useAutoGrowTextarea";
 import { useMentionPicker } from "../hooks/useMentionPicker";
@@ -10,6 +10,7 @@ import { copyText } from "../clipboard";
 import { isCompactFollowupMessage, wasEdited } from "../message-grouping";
 import { DESKTOP_MESSAGE_PREVIEW_CHARS, DESKTOP_MESSAGE_PREVIEW_LINES } from "../message-preview";
 import { messageShareLink, messageToMarkdown } from "../message-share";
+import { downloadThreadPanelSvg } from "../thread-svg-export";
 import { Agent, AgentActivity, AgentRun, AgentWorkItem, Artifact, Channel, DraftAttachment, Message, OwnerProfile, TASK_STATUSES, Task } from "../types";
 import { agentForMessageSender, deletedAgentForMessageSender, formatClockTime, formatDateDivider, formatTime, isSameCalendarDay, ownerAsAvatarAgent, visibleAgentDescription, visibleChannelDescription } from "../ui-utils";
 import { ActivityProgressDock } from "./ActivityProgressDock";
@@ -58,6 +59,12 @@ function shouldCollapseThreadMessage(body: string) {
   const text = body.trim();
   if (!text) return false;
   return text.split("\n").length > DESKTOP_MESSAGE_PREVIEW_LINES || text.length > DESKTOP_MESSAGE_PREVIEW_CHARS;
+}
+
+function waitForNextFrame() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
 }
 
 type ThreadPanelProps = {
@@ -143,6 +150,7 @@ export function ThreadPanel({
   const [tapFocusedMessageId, setTapFocusedMessageId] = useState<string | null>(null);
   const [expandedThreadMessageIds, setExpandedThreadMessageIds] = useState<Set<string>>(() => new Set());
   const [pendingCollapsedThreadMessageId, setPendingCollapsedThreadMessageId] = useState<string | null>(null);
+  const threadPanelRef = useRef<HTMLElement | null>(null);
   const threadScrollRef = useRef<HTMLDivElement | null>(null);
   const threadBottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const threadMessageRefs = useRef(new Map<string, HTMLElement>());
@@ -445,6 +453,24 @@ export function ThreadPanel({
     setExpandedThreadMessageIds(new Set());
   }
 
+  async function exportThreadVectorImage() {
+    const threadPanel = threadPanelRef.current;
+    if (!activeRoot || !threadPanel) return;
+    const previousExpandedMessageIds = new Set(expandedThreadMessageIds);
+    const shouldTemporarilyExpand = collapsibleThreadMessageIds.some((messageId) => !previousExpandedMessageIds.has(messageId));
+    if (shouldTemporarilyExpand) {
+      setPendingCollapsedThreadMessageId(null);
+      setExpandedThreadMessageIds(new Set(collapsibleThreadMessageIds));
+      await waitForNextFrame();
+      await waitForNextFrame();
+    }
+    try {
+      await downloadThreadPanelSvg(threadPanel, surfaceLabel);
+    } finally {
+      if (shouldTemporarilyExpand) setExpandedThreadMessageIds(previousExpandedMessageIds);
+    }
+  }
+
   const activeTaskAssignee = activeTask
     ? agents.find((agent) => agent.id === activeTask.assignee_id) ?? null
     : null;
@@ -472,7 +498,7 @@ export function ThreadPanel({
   const showTaskReviewActions = Boolean(activeTask && activeTask.status === "in_review" && latestFinishedTaskWorkItem?.status === "done");
 
   return (
-    <aside className="thread">
+    <aside className="thread" ref={threadPanelRef}>
       <button
         className="thread-resize-handle"
         aria-label="Resize thread panel"
@@ -496,6 +522,17 @@ export function ThreadPanel({
           </h2>
         </div>
         <span className="thread-header-actions">
+          <button
+            type="button"
+            className="thread-export-svg"
+            onClick={exportThreadVectorImage}
+            aria-disabled={!activeRoot}
+            data-tooltip="Export thread as SVG"
+            title="Export thread as SVG"
+            aria-label="Export thread as SVG"
+          >
+            <FileImage size={18} />
+          </button>
           <button
             type="button"
             className="thread-expand-all"
