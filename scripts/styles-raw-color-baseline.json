@@ -285,36 +285,6 @@
       "n": 0
     },
     {
-      "selector": ".boot",
-      "prop": "color",
-      "literal": "#777",
-      "n": 0
-    },
-    {
-      "selector": ".boot-panel button",
-      "prop": "background",
-      "literal": "#1d4ed8",
-      "n": 0
-    },
-    {
-      "selector": ".boot-panel button",
-      "prop": "color",
-      "literal": "#fff",
-      "n": 0
-    },
-    {
-      "selector": ".boot-panel p",
-      "prop": "color",
-      "literal": "#b42318",
-      "n": 0
-    },
-    {
-      "selector": ".boot-panel strong",
-      "prop": "color",
-      "literal": "#23252b",
-      "n": 0
-    },
-    {
       "selector": ".channel-actions-menu",
       "prop": "box-shadow",
       "literal": "rgba(20, 22, 28, 0.18)",

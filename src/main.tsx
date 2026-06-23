@@ -334,6 +334,51 @@ function errorMessage(err: unknown, fallback: string) {
   return fallback;
 }
 
+function BootSplash({ appError, onRetry }: { appError: string | null; onRetry: () => void }) {
+  const statuses = [
+    "Waking agents...",
+    "Restoring workspace...",
+    "Syncing threads...",
+  ];
+
+  return (
+    <div className="boot" aria-live="polite">
+      <div className="boot-panel">
+        <div className="boot-constellation" aria-hidden="true">
+          <div className="boot-orbit">
+            <span className="boot-node node-dylan">D</span>
+            <span className="boot-node node-bugen">B</span>
+            <span className="boot-node node-admin">A</span>
+            <span className="boot-node node-owner">M</span>
+            <span className="boot-link link-one" />
+            <span className="boot-link link-two" />
+            <span className="boot-link link-three" />
+          </div>
+          <div className="boot-core">
+            <span className="boot-core-mark">L</span>
+          </div>
+        </div>
+        <div className="boot-copy">
+          <strong>{APP_DISPLAY_NAME}</strong>
+          <div className="boot-status" aria-label={statuses.join(" ")}>
+            {statuses.map((status, index) => (
+              <span key={status} style={{ "--status-index": index } as CSSProperties}>{status}</span>
+            ))}
+          </div>
+        </div>
+        {appError ? (
+          <div className="boot-error" role="alert">
+            <p>{appError}</p>
+            <button type="button" onClick={onRetry}>
+              Retry
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 class AppErrorBoundary extends Component<{ children: ReactNode }, AppErrorBoundaryState> {
   state: AppErrorBoundaryState = { error: null, info: null };
 
@@ -3592,19 +3637,10 @@ function App() {
 
   if (!data) {
     return (
-      <div className="boot">
-        <div className="boot-panel">
-          <strong>Opening {APP_DISPLAY_NAME}...</strong>
-          {appError ? (
-            <>
-              <p>{appError}</p>
-              <button type="button" onClick={() => refreshWithError(`Failed to load ${APP_DISPLAY_NAME} state`)}>
-                Retry
-              </button>
-            </>
-          ) : null}
-        </div>
-      </div>
+      <BootSplash
+        appError={appError}
+        onRetry={() => refreshWithError(`Failed to load ${APP_DISPLAY_NAME} state`)}
+      />
     );
   }
 
