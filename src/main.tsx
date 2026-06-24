@@ -144,6 +144,7 @@ const MIN_COMPACT_SIDEBAR_VISIBLE_WIDTH = 220;
 const MOBILE_BREAKPOINT = 760;
 const UI_REFRESH_DEBOUNCE_MS = 80;
 const EPHEMERAL_FLUSH_FALLBACK_MS = 80;
+const MIN_BOOT_SPLASH_MS = 1400;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const ACTIVITY_HISTORY_LIMIT_PER_AGENT = 80;
 // Issue #82: run states that must bypass the ephemeral coalescing buffer
@@ -688,6 +689,8 @@ function buildAgentPerformance(activities: AgentActivity[], runs: AgentRun[]): A
 }
 
 function App() {
+  const [bootStartedAt] = useState(() => performance.now());
+  const [bootReady, setBootReady] = useState(false);
   const [data, setData] = useState<Bootstrap | null>(null);
   const [activeChannelId, setActiveChannelId] = useState<string>("");
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -1360,6 +1363,14 @@ function App() {
       console.error(err);
     });
   }, []);
+
+  useEffect(() => {
+    if (!data || bootReady) return;
+    const elapsed = performance.now() - bootStartedAt;
+    const delay = Math.max(0, MIN_BOOT_SPLASH_MS - elapsed);
+    const timer = window.setTimeout(() => setBootReady(true), delay);
+    return () => window.clearTimeout(timer);
+  }, [bootReady, bootStartedAt, data]);
 
   useEffect(() => {
     if (!data || showOwnerProfileModal) return;
@@ -3635,7 +3646,7 @@ function App() {
     await mutate("uninstall_supervisor_service");
   }
 
-  if (!data) {
+  if (!data || !bootReady) {
     return (
       <BootSplash
         appError={appError}
