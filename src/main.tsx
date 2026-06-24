@@ -3636,12 +3636,54 @@ function App() {
     window.addEventListener("pointerup", onPointerUp);
   }
 
+  // Optimistically toggle saved state so the bookmark button responds instantly,
+  // instead of waiting for the backend command + a full bootstrap refresh. The
+  // backend still emits `saved_message_updated`, which triggers a later refresh
+  // that reconciles the optimistic entry with the authoritative row.
+  async function toggleMessageSaved(messageId: string, saved: boolean, optimisticEntry?: SavedMessage) {
+    const snapshot = data?.saved_messages ?? null;
+    setData((current) => {
+      if (!current) return current;
+      const next = saved
+        ? current.saved_messages.some((item) => item.message_id === messageId)
+          ? current.saved_messages
+          : optimisticEntry
+            ? [optimisticEntry, ...current.saved_messages]
+            : current.saved_messages
+        : current.saved_messages.filter((item) => item.message_id !== messageId);
+      if (next === current.saved_messages) return current;
+      return { ...current, saved_messages: next };
+    });
+    try {
+      await apiInvoke("set_message_saved", { messageId, saved });
+    } catch (err) {
+      // Roll back to the pre-click snapshot and surface the error.
+      setData((current) => (current && snapshot ? { ...current, saved_messages: snapshot } : current));
+      setAppError(errorMessage(err, "set_message_saved failed"));
+      console.error(err);
+    }
+  }
+
   async function setMessageSaved(message: Message, saved: boolean) {
-    await mutate("set_message_saved", { messageId: message.id, saved });
+    const optimisticEntry: SavedMessage | undefined = saved
+      ? {
+          id: `optimistic-saved:${message.id}`,
+          message_id: message.id,
+          channel_id: message.channel_id,
+          channel_name: data?.channels.find((channel) => channel.id === message.channel_id)?.name ?? "",
+          thread_root_id: message.thread_root_id,
+          sender_name: message.sender_name,
+          sender_role: message.sender_role,
+          body: message.body,
+          message_created_at: message.created_at,
+          created_at: new Date().toISOString(),
+        }
+      : undefined;
+    await toggleMessageSaved(message.id, saved, optimisticEntry);
   }
 
   async function unsaveSavedMessage(item: SavedMessage) {
-    await mutate("set_message_saved", { messageId: item.message_id, saved: false });
+    await toggleMessageSaved(item.message_id, false);
   }
 
   async function installSupervisorService() {
