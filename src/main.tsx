@@ -347,11 +347,11 @@ function BootSplash({ appError, onRetry }: { appError: string | null; onRetry: (
       <div className="boot-panel">
         <div className="boot-constellation" aria-hidden="true">
           <div className="boot-orbit">
-            <span className="boot-node node-lantor-a">A</span>
-            <span className="boot-node node-lantor-n">N</span>
-            <span className="boot-node node-lantor-t">T</span>
-            <span className="boot-node node-lantor-o">O</span>
-            <span className="boot-node node-lantor-r">R</span>
+            <span className="boot-node node-lantor-a" />
+            <span className="boot-node node-lantor-n" />
+            <span className="boot-node node-lantor-t" />
+            <span className="boot-node node-lantor-o" />
+            <span className="boot-node node-lantor-r" />
             <span className="boot-link link-one" />
             <span className="boot-link link-two" />
             <span className="boot-link link-three" />
