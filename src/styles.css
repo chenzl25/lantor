@@ -115,27 +115,19 @@ button,
 .boot-constellation {
   position: relative;
   display: grid;
-  width: 240px;
+  width: 124px;
   aspect-ratio: 1;
   place-items: center;
 }
 
-.boot-orbit,
 .boot-core {
-  position: absolute;
-  inset: 0;
   display: grid;
   place-items: center;
 }
 
-.boot-orbit {
-  border: 1px solid var(--border-subtle);
-  border-radius: 999px;
-  animation: bootOrbit 2400ms ease-in-out infinite;
-}
-
 .boot-core {
-  inset: 58px;
+  width: 124px;
+  aspect-ratio: 1;
   border: 1px solid var(--border-emphasis);
   border-radius: 28px;
   background: var(--surface-floating);
@@ -154,95 +146,6 @@ button,
   font-size: 34px;
   font-weight: var(--type-weight-bold);
   letter-spacing: 0;
-}
-
-.boot-node {
-  position: absolute;
-  z-index: 2;
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border: 1px solid var(--border-emphasis);
-  border-radius: 999px;
-  background: var(--surface-floating);
-  box-shadow: var(--state-selected-shadow);
-  color: var(--ink-primary);
-  font-size: var(--type-size-meta);
-  font-weight: var(--type-weight-bold);
-  animation: bootNode 2400ms ease-in-out infinite;
-}
-
-.node-lantor-a {
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-}
-
-.node-lantor-n {
-  top: 74px;
-  right: 6px;
-  animation-delay: 180ms;
-}
-
-.node-lantor-t {
-  bottom: 22px;
-  right: 36px;
-  animation-delay: 360ms;
-}
-
-.node-lantor-o {
-  bottom: 22px;
-  left: 36px;
-  animation-delay: 540ms;
-}
-
-.node-lantor-r {
-  top: 74px;
-  left: 6px;
-  animation-delay: 720ms;
-}
-
-.boot-link {
-  position: absolute;
-  z-index: 1;
-  height: 1px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  opacity: 0;
-  transform-origin: left center;
-  animation: bootLink 2400ms ease-in-out infinite;
-}
-
-.link-one {
-  top: 78px;
-  left: 110px;
-  width: 96px;
-  transform: rotate(30deg);
-}
-
-.link-two {
-  top: 150px;
-  left: 132px;
-  width: 74px;
-  transform: rotate(112deg);
-  animation-delay: 300ms;
-}
-
-.link-three {
-  top: 160px;
-  left: 54px;
-  width: 100px;
-  transform: rotate(-32deg);
-  animation-delay: 600ms;
-}
-
-.link-four {
-  top: 78px;
-  left: 40px;
-  width: 88px;
-  transform: rotate(-30deg);
-  animation-delay: 900ms;
 }
 
 .boot-copy {
@@ -309,18 +212,6 @@ button,
   font-weight: var(--type-weight-semibold);
 }
 
-@keyframes bootOrbit {
-  0%,
-  100% {
-    border-color: var(--border-subtle);
-    box-shadow: none;
-  }
-  50% {
-    border-color: var(--accent-soft-border);
-    box-shadow: 0 0 0 8px var(--accent-soft);
-  }
-}
-
 @keyframes bootCore {
   0%,
   100% {
@@ -330,32 +221,6 @@ button,
   50% {
     transform: scale(1.035);
     box-shadow: var(--state-selected-emphasis-shadow);
-  }
-}
-
-@keyframes bootNode {
-  0%,
-  100% {
-    color: var(--ink-primary);
-    border-color: var(--border-emphasis);
-  }
-  45% {
-    color: var(--accent);
-    border-color: var(--accent-soft-hover-border);
-  }
-}
-
-@keyframes bootLink {
-  0%,
-  20%,
-  100% {
-    opacity: 0;
-    clip-path: inset(0 100% 0 0);
-  }
-  45%,
-  68% {
-    opacity: 0.74;
-    clip-path: inset(0 0 0 0);
   }
 }
 
@@ -377,10 +242,7 @@ button,
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .boot-orbit,
   .boot-core,
-  .boot-node,
-  .boot-link,
   .boot-status span {
     animation: none;
   }
@@ -390,10 +252,6 @@ button,
     transform: none;
   }
 
-  .boot-link {
-    opacity: 0.42;
-    clip-path: none;
-  }
 }
 
 :root,
