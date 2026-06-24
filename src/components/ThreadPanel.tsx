@@ -116,6 +116,53 @@ type ThreadMessageExpansionState = {
 };
 
 const THREAD_MESSAGE_EXPANSION_TTL_MS = 24 * 60 * 60 * 1000;
+const THREAD_MESSAGE_EXPANSION_STORAGE_KEY = "lantor.threadMessageExpansion.v1";
+
+function isFreshThreadMessageExpansionState(entry: ThreadMessageExpansionState, now: number) {
+  return now - entry.lastTouchedAt <= THREAD_MESSAGE_EXPANSION_TTL_MS;
+}
+
+function readThreadMessageExpansionStateFromStorage() {
+  const next = new Map<string, ThreadMessageExpansionState>();
+  if (typeof window === "undefined") return next;
+  try {
+    const rawValue = window.localStorage.getItem(THREAD_MESSAGE_EXPANSION_STORAGE_KEY);
+    if (!rawValue) return next;
+    const parsedValue = JSON.parse(rawValue) as unknown;
+    if (!parsedValue || typeof parsedValue !== "object" || Array.isArray(parsedValue)) return next;
+    const now = Date.now();
+    Object.entries(parsedValue).forEach(([threadId, value]) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return;
+      const { messageIds, lastTouchedAt } = value as { messageIds?: unknown; lastTouchedAt?: unknown };
+      if (!Array.isArray(messageIds) || typeof lastTouchedAt !== "number") return;
+      const entry = {
+        messageIds: new Set(messageIds.filter((messageId): messageId is string => typeof messageId === "string")),
+        lastTouchedAt,
+      };
+      if (isFreshThreadMessageExpansionState(entry, now)) next.set(threadId, entry);
+    });
+  } catch {
+    return next;
+  }
+  return next;
+}
+
+function writeThreadMessageExpansionStateToStorage(entries: Map<string, ThreadMessageExpansionState>) {
+  if (typeof window === "undefined") return;
+  try {
+    const value: Record<string, { messageIds: string[]; lastTouchedAt: number }> = {};
+    entries.forEach((entry, threadId) => {
+      value[threadId] = { messageIds: Array.from(entry.messageIds), lastTouchedAt: entry.lastTouchedAt };
+    });
+    if (Object.keys(value).length === 0) {
+      window.localStorage.removeItem(THREAD_MESSAGE_EXPANSION_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(THREAD_MESSAGE_EXPANSION_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    // Ignore storage failures; the in-memory state still works for the current session.
+  }
+}
 
 export function ThreadPanel({
   channel,
@@ -155,7 +202,9 @@ export function ThreadPanel({
   const [showBackToBottom, setShowBackToBottom] = useState(false);
   const [messageMenu, setMessageMenu] = useState<MessageMenuState>(null);
   const [tapFocusedMessageId, setTapFocusedMessageId] = useState<string | null>(null);
-  const [expandedThreadMessageStateByThread, setExpandedThreadMessageStateByThread] = useState<Map<string, ThreadMessageExpansionState>>(() => new Map());
+  const [expandedThreadMessageStateByThread, setExpandedThreadMessageStateByThread] = useState<Map<string, ThreadMessageExpansionState>>(
+    readThreadMessageExpansionStateFromStorage,
+  );
   const [pendingCollapsedThreadMessageId, setPendingCollapsedThreadMessageId] = useState<string | null>(null);
   const threadPanelRef = useRef<HTMLElement | null>(null);
   const threadScrollRef = useRef<HTMLDivElement | null>(null);
@@ -179,7 +228,7 @@ export function ThreadPanel({
   const expandedThreadMessageIds = useMemo(() => {
     if (!activeThreadExpansionKey) return new Set<string>();
     const entry = expandedThreadMessageStateByThread.get(activeThreadExpansionKey);
-    if (!entry || Date.now() - entry.lastTouchedAt > THREAD_MESSAGE_EXPANSION_TTL_MS) return new Set<string>();
+    if (!entry || !isFreshThreadMessageExpansionState(entry, Date.now())) return new Set<string>();
     return entry.messageIds;
   }, [activeThreadExpansionKey, expandedThreadMessageStateByThread]);
   const surfaceLabel = channel
@@ -352,7 +401,7 @@ export function ThreadPanel({
       let changed = false;
       const next = new Map<string, ThreadMessageExpansionState>();
       current.forEach((entry, threadId) => {
-        if (now - entry.lastTouchedAt > THREAD_MESSAGE_EXPANSION_TTL_MS) {
+        if (!isFreshThreadMessageExpansionState(entry, now)) {
           changed = true;
           return;
         }
@@ -366,6 +415,10 @@ export function ThreadPanel({
       return changed ? next : current;
     });
   }, [activeThreadExpansionKey]);
+
+  useEffect(() => {
+    writeThreadMessageExpansionStateToStorage(expandedThreadMessageStateByThread);
+  }, [expandedThreadMessageStateByThread]);
 
   useEffect(() => {
     if (!pendingCollapsedThreadMessageId) return;
@@ -466,7 +519,7 @@ export function ThreadPanel({
       const now = Date.now();
       const next = new Map<string, ThreadMessageExpansionState>();
       current.forEach((entry, threadId) => {
-        if (now - entry.lastTouchedAt <= THREAD_MESSAGE_EXPANSION_TTL_MS) next.set(threadId, entry);
+        if (isFreshThreadMessageExpansionState(entry, now)) next.set(threadId, entry);
       });
       next.set(activeThreadExpansionKey, { messageIds: nextMessageIds, lastTouchedAt: now });
       return next;
@@ -478,13 +531,13 @@ export function ThreadPanel({
     setExpandedThreadMessageStateByThread((current) => {
       const now = Date.now();
       const currentEntry = current.get(activeThreadExpansionKey);
-      const currentMessageIds = currentEntry && now - currentEntry.lastTouchedAt <= THREAD_MESSAGE_EXPANSION_TTL_MS
+      const currentMessageIds = currentEntry && isFreshThreadMessageExpansionState(currentEntry, now)
         ? currentEntry.messageIds
         : new Set<string>();
       const nextMessageIds = updater(currentMessageIds);
       const next = new Map<string, ThreadMessageExpansionState>();
       current.forEach((entry, threadId) => {
-        if (now - entry.lastTouchedAt <= THREAD_MESSAGE_EXPANSION_TTL_MS) next.set(threadId, entry);
+        if (isFreshThreadMessageExpansionState(entry, now)) next.set(threadId, entry);
       });
       next.set(activeThreadExpansionKey, { messageIds: nextMessageIds, lastTouchedAt: now });
       return next;
