@@ -811,6 +811,9 @@ function App() {
   const messageDeltaBufferRef = useRef<Map<string, { append: string; deliveryState: Message["delivery_state"] }>>(new Map());
   const optimisticMessagesRef = useRef<Map<string, Message>>(new Map());
   const optimisticAttachmentUrlsRef = useRef<Map<string, string[]>>(new Map());
+  // Per-message latest-intent sequence for save/unsave, so a late-failing
+  // request cannot roll back over a newer toggle for the same message.
+  const savedToggleSeqRef = useRef<Map<string, number>>(new Map());
   const messageDeltaFlushTimerRef = useRef<number | null>(null);
   // Ephemeral event buffer (issue #82): coalesces high-frequency progress
   // upserts keyed by (kind, id) — latest-wins — and flushes in a single
@@ -3641,25 +3644,44 @@ function App() {
   // backend still emits `saved_message_updated`, which triggers a later refresh
   // that reconciles the optimistic entry with the authoritative row.
   async function toggleMessageSaved(messageId: string, saved: boolean, optimisticEntry?: SavedMessage) {
-    const snapshot = data?.saved_messages ?? null;
+    // Mark this as the latest intent for this message. A request that fails
+    // after a newer toggle landed must NOT roll back, or rapid save→unsave
+    // would be clobbered back to the stale state.
+    const seq = (savedToggleSeqRef.current.get(messageId) ?? 0) + 1;
+    savedToggleSeqRef.current.set(messageId, seq);
+
+    // Optimistically patch only this message's entry. Capture its prior entry
+    // (if any) so a failure can restore exactly this one message rather than
+    // overwriting the whole list (which could drop other in-flight toggles).
+    let priorEntry: SavedMessage | undefined;
     setData((current) => {
       if (!current) return current;
+      priorEntry = current.saved_messages.find((item) => item.message_id === messageId);
+      const without = current.saved_messages.filter((item) => item.message_id !== messageId);
       const next = saved
-        ? current.saved_messages.some((item) => item.message_id === messageId)
-          ? current.saved_messages
-          : optimisticEntry
-            ? [optimisticEntry, ...current.saved_messages]
-            : current.saved_messages
-        : current.saved_messages.filter((item) => item.message_id !== messageId);
+        ? optimisticEntry
+          ? [optimisticEntry, ...without]
+          : priorEntry
+            ? current.saved_messages // already saved, no entry to add — leave as-is
+            : without
+        : without;
       if (next === current.saved_messages) return current;
       return { ...current, saved_messages: next };
     });
+
     try {
       await apiInvoke("set_message_saved", { messageId, saved });
     } catch (err) {
-      // Roll back to the pre-click snapshot and surface the error.
-      setData((current) => (current && snapshot ? { ...current, saved_messages: snapshot } : current));
-      setAppError(errorMessage(err, "set_message_saved failed"));
+      // Only roll back if no newer toggle for this message superseded us.
+      if (savedToggleSeqRef.current.get(messageId) === seq) {
+        setData((current) => {
+          if (!current) return current;
+          const without = current.saved_messages.filter((item) => item.message_id !== messageId);
+          const restored = priorEntry ? [priorEntry, ...without] : without;
+          return { ...current, saved_messages: restored };
+        });
+        setAppError(errorMessage(err, "set_message_saved failed"));
+      }
       console.error(err);
     }
   }
