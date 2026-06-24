@@ -116,6 +116,18 @@ type ThreadMessageExpansionState = {
 };
 
 const THREAD_MESSAGE_EXPANSION_TTL_MS = 24 * 60 * 60 * 1000;
+const THREAD_MESSAGE_EXPANSION_MAX_ENTRIES = 100;
+
+function pruneThreadMessageExpansionState(
+  entries: Map<string, ThreadMessageExpansionState>,
+  now: number,
+) {
+  const freshEntries = Array.from(entries.entries())
+    .filter(([, entry]) => now - entry.lastTouchedAt <= THREAD_MESSAGE_EXPANSION_TTL_MS)
+    .sort((left, right) => right[1].lastTouchedAt - left[1].lastTouchedAt)
+    .slice(0, THREAD_MESSAGE_EXPANSION_MAX_ENTRIES);
+  return new Map(freshEntries);
+}
 
 export function ThreadPanel({
   channel,
@@ -349,21 +361,14 @@ export function ThreadPanel({
   useEffect(() => {
     const now = Date.now();
     setExpandedThreadMessageStateByThread((current) => {
-      let changed = false;
-      const next = new Map<string, ThreadMessageExpansionState>();
-      current.forEach((entry, threadId) => {
-        if (now - entry.lastTouchedAt > THREAD_MESSAGE_EXPANSION_TTL_MS) {
-          changed = true;
-          return;
+      const touched = new Map(current);
+      if (activeThreadExpansionKey) {
+        const entry = touched.get(activeThreadExpansionKey);
+        if (entry && now - entry.lastTouchedAt <= THREAD_MESSAGE_EXPANSION_TTL_MS) {
+          touched.set(activeThreadExpansionKey, { messageIds: entry.messageIds, lastTouchedAt: now });
         }
-        if (threadId === activeThreadExpansionKey) {
-          changed = true;
-          next.set(threadId, { messageIds: entry.messageIds, lastTouchedAt: now });
-          return;
-        }
-        next.set(threadId, entry);
-      });
-      return changed ? next : current;
+      }
+      return pruneThreadMessageExpansionState(touched, now);
     });
   }, [activeThreadExpansionKey]);
 
@@ -464,12 +469,9 @@ export function ThreadPanel({
     if (!activeThreadExpansionKey) return;
     setExpandedThreadMessageStateByThread((current) => {
       const now = Date.now();
-      const next = new Map<string, ThreadMessageExpansionState>();
-      current.forEach((entry, threadId) => {
-        if (now - entry.lastTouchedAt <= THREAD_MESSAGE_EXPANSION_TTL_MS) next.set(threadId, entry);
-      });
+      const next = pruneThreadMessageExpansionState(current, now);
       next.set(activeThreadExpansionKey, { messageIds: nextMessageIds, lastTouchedAt: now });
-      return next;
+      return pruneThreadMessageExpansionState(next, now);
     });
   }
 
@@ -482,12 +484,9 @@ export function ThreadPanel({
         ? currentEntry.messageIds
         : new Set<string>();
       const nextMessageIds = updater(currentMessageIds);
-      const next = new Map<string, ThreadMessageExpansionState>();
-      current.forEach((entry, threadId) => {
-        if (now - entry.lastTouchedAt <= THREAD_MESSAGE_EXPANSION_TTL_MS) next.set(threadId, entry);
-      });
+      const next = pruneThreadMessageExpansionState(current, now);
       next.set(activeThreadExpansionKey, { messageIds: nextMessageIds, lastTouchedAt: now });
-      return next;
+      return pruneThreadMessageExpansionState(next, now);
     });
   }
 
