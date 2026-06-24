@@ -110,6 +110,13 @@ type MessageMenuState = {
   message: Message;
 } | null;
 
+type ThreadMessageExpansionState = {
+  messageIds: Set<string>;
+  lastTouchedAt: number;
+};
+
+const THREAD_MESSAGE_EXPANSION_TTL_MS = 24 * 60 * 60 * 1000;
+
 export function ThreadPanel({
   channel,
   channels,
@@ -148,7 +155,7 @@ export function ThreadPanel({
   const [showBackToBottom, setShowBackToBottom] = useState(false);
   const [messageMenu, setMessageMenu] = useState<MessageMenuState>(null);
   const [tapFocusedMessageId, setTapFocusedMessageId] = useState<string | null>(null);
-  const [expandedThreadMessageIds, setExpandedThreadMessageIds] = useState<Set<string>>(() => new Set());
+  const [expandedThreadMessageStateByThread, setExpandedThreadMessageStateByThread] = useState<Map<string, ThreadMessageExpansionState>>(() => new Map());
   const [pendingCollapsedThreadMessageId, setPendingCollapsedThreadMessageId] = useState<string | null>(null);
   const threadPanelRef = useRef<HTMLElement | null>(null);
   const threadScrollRef = useRef<HTMLDivElement | null>(null);
@@ -168,6 +175,13 @@ export function ThreadPanel({
   const rootAgent = activeRoot ? agentForMessageSender(activeRoot, agents) : null;
   const deletedRootAgent = activeRoot && !rootAgent ? deletedAgentForMessageSender(activeRoot) : null;
   const rootSaved = activeRoot ? savedMessageIds.has(activeRoot.id) : false;
+  const activeThreadExpansionKey = activeRoot?.id ?? null;
+  const expandedThreadMessageIds = useMemo(() => {
+    if (!activeThreadExpansionKey) return new Set<string>();
+    const entry = expandedThreadMessageStateByThread.get(activeThreadExpansionKey);
+    if (!entry || Date.now() - entry.lastTouchedAt > THREAD_MESSAGE_EXPANSION_TTL_MS) return new Set<string>();
+    return entry.messageIds;
+  }, [activeThreadExpansionKey, expandedThreadMessageStateByThread]);
   const surfaceLabel = channel
     ? isDm
       ? `Thread in DM with @${dmAgent?.handle || "agent"}`
@@ -329,9 +343,29 @@ export function ThreadPanel({
   useEffect(() => {
     setMessageMenu(null);
     setTapFocusedMessageId(null);
-    setExpandedThreadMessageIds(new Set());
     setPendingCollapsedThreadMessageId(null);
   }, [activeRoot?.id]);
+
+  useEffect(() => {
+    const now = Date.now();
+    setExpandedThreadMessageStateByThread((current) => {
+      let changed = false;
+      const next = new Map<string, ThreadMessageExpansionState>();
+      current.forEach((entry, threadId) => {
+        if (now - entry.lastTouchedAt > THREAD_MESSAGE_EXPANSION_TTL_MS) {
+          changed = true;
+          return;
+        }
+        if (threadId === activeThreadExpansionKey) {
+          changed = true;
+          next.set(threadId, { messageIds: entry.messageIds, lastTouchedAt: now });
+          return;
+        }
+        next.set(threadId, entry);
+      });
+      return changed ? next : current;
+    });
+  }, [activeThreadExpansionKey]);
 
   useEffect(() => {
     if (!pendingCollapsedThreadMessageId) return;
@@ -426,12 +460,43 @@ export function ThreadPanel({
     setMessageMenu(null);
   }
 
+  function setActiveThreadExpandedMessageIds(nextMessageIds: Set<string>) {
+    if (!activeThreadExpansionKey) return;
+    setExpandedThreadMessageStateByThread((current) => {
+      const now = Date.now();
+      const next = new Map<string, ThreadMessageExpansionState>();
+      current.forEach((entry, threadId) => {
+        if (now - entry.lastTouchedAt <= THREAD_MESSAGE_EXPANSION_TTL_MS) next.set(threadId, entry);
+      });
+      next.set(activeThreadExpansionKey, { messageIds: nextMessageIds, lastTouchedAt: now });
+      return next;
+    });
+  }
+
+  function updateActiveThreadExpandedMessageIds(updater: (current: Set<string>) => Set<string>) {
+    if (!activeThreadExpansionKey) return;
+    setExpandedThreadMessageStateByThread((current) => {
+      const now = Date.now();
+      const currentEntry = current.get(activeThreadExpansionKey);
+      const currentMessageIds = currentEntry && now - currentEntry.lastTouchedAt <= THREAD_MESSAGE_EXPANSION_TTL_MS
+        ? currentEntry.messageIds
+        : new Set<string>();
+      const nextMessageIds = updater(currentMessageIds);
+      const next = new Map<string, ThreadMessageExpansionState>();
+      current.forEach((entry, threadId) => {
+        if (now - entry.lastTouchedAt <= THREAD_MESSAGE_EXPANSION_TTL_MS) next.set(threadId, entry);
+      });
+      next.set(activeThreadExpansionKey, { messageIds: nextMessageIds, lastTouchedAt: now });
+      return next;
+    });
+  }
+
   function toggleThreadMessageExpanded(messageId: string) {
     if (expandedThreadMessageIds.has(messageId)) {
       stopFollowingThread();
       setPendingCollapsedThreadMessageId(messageId);
     }
-    setExpandedThreadMessageIds((current) => {
+    updateActiveThreadExpandedMessageIds((current) => {
       const next = new Set(current);
       if (next.has(messageId)) next.delete(messageId);
       else next.add(messageId);
@@ -443,14 +508,14 @@ export function ThreadPanel({
     if (!hasCollapsibleThreadMessages || areAllThreadMessagesExpanded) return;
     stopFollowingThread();
     setPendingCollapsedThreadMessageId(null);
-    setExpandedThreadMessageIds(new Set(collapsibleThreadMessageIds));
+    setActiveThreadExpandedMessageIds(new Set(collapsibleThreadMessageIds));
   }
 
   function foldAllThreadMessages() {
     if (!hasCollapsibleThreadMessages || areAllThreadMessagesFolded) return;
     stopFollowingThread();
     setPendingCollapsedThreadMessageId(null);
-    setExpandedThreadMessageIds(new Set());
+    setActiveThreadExpandedMessageIds(new Set());
   }
 
   async function exportThreadVectorImage() {
@@ -460,14 +525,14 @@ export function ThreadPanel({
     const shouldTemporarilyExpand = collapsibleThreadMessageIds.some((messageId) => !previousExpandedMessageIds.has(messageId));
     if (shouldTemporarilyExpand) {
       setPendingCollapsedThreadMessageId(null);
-      setExpandedThreadMessageIds(new Set(collapsibleThreadMessageIds));
+      setActiveThreadExpandedMessageIds(new Set(collapsibleThreadMessageIds));
       await waitForNextFrame();
       await waitForNextFrame();
     }
     try {
       await downloadThreadPanelSvg(threadPanel, surfaceLabel);
     } finally {
-      if (shouldTemporarilyExpand) setExpandedThreadMessageIds(previousExpandedMessageIds);
+      if (shouldTemporarilyExpand) setActiveThreadExpandedMessageIds(previousExpandedMessageIds);
     }
   }
 
