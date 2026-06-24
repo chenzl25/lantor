@@ -83,19 +83,27 @@
       .constellation {
         position: relative;
         display: grid;
-        width: 124px;
+        width: 240px;
         aspect-ratio: 1;
         place-items: center;
       }
 
+      .orbit,
       .core {
+        position: absolute;
+        inset: 0;
         display: grid;
         place-items: center;
       }
 
+      .orbit {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        animation: orbit 2400ms ease-in-out infinite;
+      }
+
       .core {
-        width: 124px;
-        aspect-ratio: 1;
+        inset: 58px;
         border: 1px solid var(--line-strong);
         border-radius: 28px;
         background: var(--surface-floating);
@@ -113,6 +121,48 @@
         color: var(--accent);
         font-size: 34px;
         font-weight: 700;
+      }
+
+      .link {
+        position: absolute;
+        z-index: 1;
+        height: 1px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, transparent, var(--accent), transparent);
+        opacity: 0;
+        transform-origin: left center;
+        animation: link 2400ms ease-in-out infinite;
+      }
+
+      .link-one {
+        top: 78px;
+        left: 110px;
+        width: 96px;
+        transform: rotate(30deg);
+      }
+
+      .link-two {
+        top: 150px;
+        left: 132px;
+        width: 74px;
+        transform: rotate(112deg);
+        animation-delay: 300ms;
+      }
+
+      .link-three {
+        top: 160px;
+        left: 54px;
+        width: 100px;
+        transform: rotate(-32deg);
+        animation-delay: 600ms;
+      }
+
+      .link-four {
+        top: 78px;
+        left: 40px;
+        width: 88px;
+        transform: rotate(-30deg);
+        animation-delay: 900ms;
       }
 
       .copy {
@@ -155,6 +205,18 @@
         animation-delay: 2400ms;
       }
 
+      @keyframes orbit {
+        0%,
+        100% {
+          border-color: var(--line);
+          box-shadow: none;
+        }
+        50% {
+          border-color: var(--accent-border);
+          box-shadow: 0 0 0 8px var(--accent-soft);
+        }
+      }
+
       @keyframes core {
         0%,
         100% {
@@ -164,6 +226,20 @@
         50% {
           transform: scale(1.035);
           box-shadow: var(--shadow-active);
+        }
+      }
+
+      @keyframes link {
+        0%,
+        20%,
+        100% {
+          opacity: 0;
+          clip-path: inset(0 100% 0 0);
+        }
+        45%,
+        68% {
+          opacity: 0.74;
+          clip-path: inset(0 0 0 0);
         }
       }
 
@@ -185,7 +261,9 @@
       }
 
       @media (prefers-reduced-motion: reduce) {
+        .orbit,
         .core,
+        .link,
         .status span {
           animation: none;
         }
@@ -195,12 +273,22 @@
           transform: none;
         }
 
+        .link {
+          opacity: 0.42;
+          clip-path: none;
+        }
       }
     </style>
   </head>
   <body>
     <main class="shell" aria-label="Starting Lantor">
       <div class="constellation" aria-hidden="true">
+        <div class="orbit">
+          <span class="link link-one"></span>
+          <span class="link link-two"></span>
+          <span class="link link-three"></span>
+          <span class="link link-four"></span>
+        </div>
         <div class="core">
           <span class="mark">L</span>
         </div>
