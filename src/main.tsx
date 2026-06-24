@@ -814,6 +814,8 @@ function App() {
   // Per-message latest-intent sequence for save/unsave, so a late-failing
   // request cannot roll back over a newer toggle for the same message.
   const savedToggleSeqRef = useRef<Map<string, number>>(new Map());
+  const pendingSavedToggleOverridesRef = useRef<Map<string, { saved: boolean; entry?: SavedMessage; seq: number }>>(new Map());
+  const savedToggleRequestChainsRef = useRef<Map<string, Promise<void>>>(new Map());
   const messageDeltaFlushTimerRef = useRef<number | null>(null);
   // Ephemeral event buffer (issue #82): coalesces high-frequency progress
   // upserts keyed by (kind, id) — latest-wins — and flushes in a single
@@ -909,7 +911,7 @@ function App() {
   async function refresh(includeOptimistic = true, preferredActiveChannelId?: string) {
     const refreshInvalidation = refreshInvalidationRef.current;
     const next = normalizeBootstrap(await apiInvoke<Bootstrap>("bootstrap"));
-    const refreshed = includeOptimistic ? withOptimisticMessages(next) : next;
+    const refreshed = withPendingSavedToggles(includeOptimistic ? withOptimisticMessages(next) : next);
     setData((current) => {
       if (!current || refreshInvalidation === refreshInvalidationRef.current) return refreshed;
       const refreshedMessageIds = new Set(refreshed.messages.map((message) => message.id));
@@ -986,6 +988,24 @@ function App() {
       .filter((message) => !existingIds.has(message.id));
     if (optimisticMessages.length === 0) return next;
     return { ...next, messages: sortedMessages([...next.messages, ...optimisticMessages]) };
+  }
+
+  function savedMessagesWithState(savedMessages: SavedMessage[], messageId: string, saved: boolean, savedEntry?: SavedMessage) {
+    const withoutMessage = savedMessages.filter((item) => item.message_id !== messageId);
+    if (!saved) return withoutMessage.length === savedMessages.length ? savedMessages : withoutMessage;
+    const existing = savedMessages.find((item) => item.message_id === messageId) ?? null;
+    if (!savedEntry && existing) return savedMessages;
+    if (!savedEntry) return savedMessages;
+    return [savedEntry, ...withoutMessage];
+  }
+
+  function withPendingSavedToggles(next: Bootstrap): Bootstrap {
+    if (pendingSavedToggleOverridesRef.current.size === 0) return next;
+    let savedMessages = next.saved_messages;
+    for (const [messageId, override] of pendingSavedToggleOverridesRef.current) {
+      savedMessages = savedMessagesWithState(savedMessages, messageId, override.saved, override.entry);
+    }
+    return savedMessages === next.saved_messages ? next : { ...next, saved_messages: savedMessages };
   }
 
   function flushMessageDeltas() {
@@ -3643,7 +3663,7 @@ function App() {
   // instead of waiting for the backend command + a full bootstrap refresh. The
   // backend still emits `saved_message_updated`, which triggers a later refresh
   // that reconciles the optimistic entry with the authoritative row.
-  async function toggleMessageSaved(messageId: string, saved: boolean, optimisticEntry?: SavedMessage) {
+  function toggleMessageSaved(messageId: string, saved: boolean, optimisticEntry?: SavedMessage) {
     // Mark this as the latest intent for this message. A request that fails
     // after a newer toggle landed must NOT roll back, or rapid save→unsave
     // would be clobbered back to the stale state.
@@ -3657,33 +3677,43 @@ function App() {
     setData((current) => {
       if (!current) return current;
       priorEntry = current.saved_messages.find((item) => item.message_id === messageId);
-      const without = current.saved_messages.filter((item) => item.message_id !== messageId);
-      const next = saved
-        ? optimisticEntry
-          ? [optimisticEntry, ...without]
-          : priorEntry
-            ? current.saved_messages // already saved, no entry to add — leave as-is
-            : without
-        : without;
+      const next = savedMessagesWithState(current.saved_messages, messageId, saved, optimisticEntry ?? priorEntry);
       if (next === current.saved_messages) return current;
       return { ...current, saved_messages: next };
     });
+    pendingSavedToggleOverridesRef.current.set(messageId, {
+      saved,
+      entry: saved ? optimisticEntry ?? priorEntry : undefined,
+      seq,
+    });
 
-    try {
-      await apiInvoke("set_message_saved", { messageId, saved });
-    } catch (err) {
-      // Only roll back if no newer toggle for this message superseded us.
-      if (savedToggleSeqRef.current.get(messageId) === seq) {
-        setData((current) => {
-          if (!current) return current;
-          const without = current.saved_messages.filter((item) => item.message_id !== messageId);
-          const restored = priorEntry ? [priorEntry, ...without] : without;
-          return { ...current, saved_messages: restored };
-        });
-        setAppError(errorMessage(err, "set_message_saved failed"));
-      }
-      console.error(err);
-    }
+    const previousRequest = savedToggleRequestChainsRef.current.get(messageId) ?? Promise.resolve();
+    const request = previousRequest
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await apiInvoke("set_message_saved", { messageId, saved });
+        } catch (err) {
+          // Only roll back if no newer toggle for this message superseded us.
+          if (savedToggleSeqRef.current.get(messageId) === seq) {
+            setData((current) => current
+              ? { ...current, saved_messages: savedMessagesWithState(current.saved_messages, messageId, Boolean(priorEntry), priorEntry) }
+              : current);
+            setAppError(errorMessage(err, "set_message_saved failed"));
+          }
+          console.error(err);
+        } finally {
+          if (pendingSavedToggleOverridesRef.current.get(messageId)?.seq === seq) {
+            pendingSavedToggleOverridesRef.current.delete(messageId);
+          }
+        }
+      })
+      .finally(() => {
+        if (savedToggleRequestChainsRef.current.get(messageId) === request) {
+          savedToggleRequestChainsRef.current.delete(messageId);
+        }
+      });
+    savedToggleRequestChainsRef.current.set(messageId, request);
   }
 
   async function setMessageSaved(message: Message, saved: boolean) {
