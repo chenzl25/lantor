@@ -21,7 +21,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useState } from "react";
 import type { Agent, AgentActivity, AgentRun, AgentWorkItem, Message } from "../types";
-import { messageRunId } from "../message-grouping";
+import { messageHasVisibleContent, messageRunId } from "../message-grouping";
 import { formatClockTime } from "../ui-utils";
 import { AgentAvatar } from "./AgentAvatar";
 
@@ -350,7 +350,8 @@ export function activeProgressByAgent(
       runId
       && message.sender_role !== "owner"
       && message.sender_role !== "system"
-      && message.delivery_state === "streaming");
+      && message.delivery_state === "streaming"
+      && !messageHasVisibleContent(message));
 
   const activitiesByRun = new Map<string, AgentActivity[]>();
   activities

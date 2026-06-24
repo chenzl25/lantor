@@ -22,7 +22,7 @@ import { isImeComposing } from "../input-utils";
 import { mentionableAgentsForChannel } from "../mentions";
 import { copyText } from "../clipboard";
 import { APP_DISPLAY_NAME } from "../branding";
-import { isCompactFollowupMessage, wasEdited } from "../message-grouping";
+import { isCompactFollowupMessage, messageHasVisibleContent, wasEdited } from "../message-grouping";
 import { DESKTOP_MESSAGE_PREVIEW_CHARS, DESKTOP_MESSAGE_PREVIEW_LINES } from "../message-preview";
 import { messageShareLink, messageToMarkdown } from "../message-share";
 import { Agent, AgentActivity, AgentRun, AgentWorkItem, Artifact, Channel, DraftAttachment, Message, OwnerProfile, TASK_STATUSES, Task, ThreadReplySummary } from "../types";
@@ -1009,7 +1009,7 @@ export function Conversation({
                         <Bookmark size={14} />
                       </button>
                     </div>
-                    {message.delivery_state !== "streaming" && (
+                    {(message.delivery_state !== "streaming" || messageHasVisibleContent(message)) && (
                       <>
                         <div className={isLongChannelMessage && !isChannelMessageExpanded ? "message-long-preview collapsed" : "message-long-preview"}>
                           <MessageMarkdown body={message.body} onLocalAgentLink={openLinkedAgentDetail} scrollKey={`message:${message.id}`} />

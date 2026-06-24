@@ -7,7 +7,7 @@ import { APP_DISPLAY_NAME } from "../branding";
 import { isImeComposing } from "../input-utils";
 import { mentionableAgentsForChannel } from "../mentions";
 import { copyText } from "../clipboard";
-import { isCompactFollowupMessage, wasEdited } from "../message-grouping";
+import { isCompactFollowupMessage, messageHasVisibleContent, wasEdited } from "../message-grouping";
 import { DESKTOP_MESSAGE_PREVIEW_CHARS, DESKTOP_MESSAGE_PREVIEW_LINES } from "../message-preview";
 import { messageShareLink, messageToMarkdown } from "../message-share";
 import { downloadThreadPanelSvg } from "../thread-svg-export";
@@ -756,7 +756,7 @@ export function ThreadPanel({
                           <Bookmark size={14} />
                         </button>
                       </div>
-                      {activeRoot.delivery_state !== "streaming" && (() => {
+                      {(activeRoot.delivery_state !== "streaming" || messageHasVisibleContent(activeRoot)) && (() => {
                         const isLongThreadMessage = shouldCollapseThreadMessage(activeRoot.body);
                         const isThreadMessageExpanded = expandedThreadMessageIds.has(activeRoot.id);
                         return (
@@ -1026,7 +1026,7 @@ export function ThreadPanel({
                           <Bookmark size={14} />
                         </button>
                       </div>
-                      {reply.delivery_state !== "streaming" && (() => {
+                      {(reply.delivery_state !== "streaming" || messageHasVisibleContent(reply)) && (() => {
                         const isLongThreadMessage = shouldCollapseThreadMessage(reply.body);
                         const isThreadMessageExpanded = expandedThreadMessageIds.has(reply.id);
                         return (
