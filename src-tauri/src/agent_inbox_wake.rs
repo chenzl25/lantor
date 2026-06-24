@@ -463,6 +463,7 @@ fn inbox_wake_work_item_title(items: &[InboxWakeItem]) -> String {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn inbox_wake_context(
     items: &[InboxWakeItem],
     other_active: &[InboxWakeSummary],

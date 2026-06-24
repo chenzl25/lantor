@@ -79,7 +79,9 @@ use lifecycle_commands::{
     install_supervisor_service, start_agent, stop_agent, uninstall_supervisor_service,
 };
 use runtime::supervisor::run_supervisor;
-use system_commands::{check_runtime, download_attachment, open_external_url};
+use system_commands::{
+    check_runtime, complete_startup_splash, download_attachment, open_external_url,
+};
 use ui_notifications::{spawn_ui_events_pruner, spawn_ui_refresh_listener};
 
 const WINDOW_STATE_FILE: &str = "window-state.json";
@@ -357,6 +359,7 @@ pub fn run() {
             mark_all_inbox_read,
             mark_channel_read,
             open_dm_with_agent,
+            complete_startup_splash,
             download_attachment,
             open_external_url,
             retry_agent_work,

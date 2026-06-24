@@ -362,6 +362,18 @@ pub(crate) async fn download_attachment(
 }
 
 #[tauri::command]
+pub(crate) async fn complete_startup_splash(app: tauri::AppHandle) -> CommandResult<()> {
+    if let Some(window) = app.get_webview_window("main") {
+        window.show().map_err(to_string)?;
+        let _ = window.set_focus();
+    }
+    if let Some(splashscreen) = app.get_webview_window("splashscreen") {
+        splashscreen.close().map_err(to_string)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub(crate) async fn check_runtime(runtime: String) -> CommandResult<RuntimeCheck> {
     check_runtime_in_env(runtime).await
 }

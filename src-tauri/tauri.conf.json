@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Lantor",
         "width": 1440,
         "height": 920,
@@ -19,6 +20,20 @@
         "minHeight": 760,
         "center": true,
         "resizable": true,
+        "visible": false,
+        "dragDropEnabled": false
+      },
+      {
+        "label": "splashscreen",
+        "title": "Lantor",
+        "url": "splashscreen.html",
+        "width": 520,
+        "height": 520,
+        "center": true,
+        "decorations": false,
+        "resizable": false,
+        "skipTaskbar": true,
+        "visible": true,
         "dragDropEnabled": false
       }
     ],

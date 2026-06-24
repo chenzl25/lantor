@@ -14,7 +14,7 @@ import {
 } from "react";
 import { createRoot } from "react-dom/client";
 import { Bookmark, Home, Inbox, Search } from "lucide-react";
-import { apiInvoke, isTauriRuntime, subscribeBackendEvents } from "./apiClient";
+import { apiInvoke, completeStartupSplash, isTauriRuntime, subscribeBackendEvents } from "./apiClient";
 import { APP_DISPLAY_NAME } from "./branding";
 import { AgentDetailDrawer } from "./components/AgentDetailDrawer";
 import type { AgentPerformance } from "./components/AgentDetailDrawer";
@@ -691,6 +691,7 @@ function buildAgentPerformance(activities: AgentActivity[], runs: AgentRun[]): A
 function App() {
   const [bootStartedAt] = useState(() => performance.now());
   const [bootReady, setBootReady] = useState(false);
+  const startupSplashCompletedRef = useRef(false);
   const [data, setData] = useState<Bootstrap | null>(null);
   const [activeChannelId, setActiveChannelId] = useState<string>("");
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -1365,12 +1366,20 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!data || bootReady) return;
+    if ((!data && !appError) || bootReady) return;
     const elapsed = performance.now() - bootStartedAt;
     const delay = Math.max(0, MIN_BOOT_SPLASH_MS - elapsed);
     const timer = window.setTimeout(() => setBootReady(true), delay);
     return () => window.clearTimeout(timer);
-  }, [bootReady, bootStartedAt, data]);
+  }, [appError, bootReady, bootStartedAt, data]);
+
+  useEffect(() => {
+    if (!bootReady || (!data && !appError) || startupSplashCompletedRef.current) return;
+    startupSplashCompletedRef.current = true;
+    completeStartupSplash().catch((err) => {
+      console.error("Failed to complete startup splash", err);
+    });
+  }, [appError, bootReady, data]);
 
   useEffect(() => {
     if (!data || showOwnerProfileModal) return;

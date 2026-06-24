@@ -28,6 +28,11 @@ export async function downloadAttachment(storagePath: string, originalName: stri
   return tauriInvoke<string>("download_attachment", { storagePath, originalName });
 }
 
+export async function completeStartupSplash(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await tauriInvoke("complete_startup_splash");
+}
+
 function apiPath(command: string) {
   return `/api/${command}`;
 }

@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lantor</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --surface: #f0f3f7;
+        --surface-floating: #fbfcfd;
+        --ink: #20242b;
+        --muted: #68717d;
+        --line: rgba(32, 36, 44, 0.1);
+        --line-strong: rgba(32, 36, 44, 0.16);
+        --accent: #0a84ff;
+        --accent-soft: rgba(10, 132, 255, 0.1);
+        --accent-border: rgba(10, 132, 255, 0.28);
+        --selected:
+          linear-gradient(180deg, rgba(10, 132, 255, 0.13), rgba(10, 132, 255, 0.07)),
+          rgba(240, 243, 247, 0.92);
+        --shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.82),
+          0 1px 2px rgba(20, 23, 31, 0.05);
+        --shadow-active:
+          inset 0 0 0 1px rgba(10, 132, 255, 0.24),
+          0 1px 2px rgba(20, 23, 31, 0.05);
+        font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --surface: #222a35;
+          --surface-floating: #303844;
+          --ink: #f4f6fa;
+          --muted: #b3bdcc;
+          --line: rgba(226, 232, 240, 0.18);
+          --line-strong: rgba(226, 232, 240, 0.3);
+          --accent: #69aafc;
+          --accent-soft: rgba(105, 170, 252, 0.14);
+          --accent-border: rgba(105, 170, 252, 0.28);
+          --selected:
+            linear-gradient(180deg, rgba(105, 170, 252, 0.17), rgba(105, 170, 252, 0.09)),
+            rgba(43, 51, 63, 0.95);
+          --shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.08),
+            0 1px 2px rgba(0, 0, 0, 0.18);
+          --shadow-active:
+            inset 0 0 0 1px rgba(105, 170, 252, 0.28),
+            0 1px 2px rgba(0, 0, 0, 0.18);
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        display: grid;
+        min-height: 100vh;
+        margin: 0;
+        place-items: center;
+        overflow: hidden;
+        background:
+          linear-gradient(var(--line) 1px, transparent 1px),
+          linear-gradient(90deg, var(--line) 1px, transparent 1px),
+          var(--surface);
+        background-size: 42px 42px;
+        color: var(--ink);
+      }
+
+      .shell {
+        display: grid;
+        width: 440px;
+        min-height: 430px;
+        place-items: center;
+        align-content: center;
+        gap: 22px;
+        padding: 34px;
+        text-align: center;
+      }
+
+      .constellation {
+        position: relative;
+        display: grid;
+        width: 240px;
+        aspect-ratio: 1;
+        place-items: center;
+      }
+
+      .orbit,
+      .core {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+      }
+
+      .orbit {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        animation: orbit 2400ms ease-in-out infinite;
+      }
+
+      .core {
+        inset: 58px;
+        border: 1px solid var(--line-strong);
+        border-radius: 28px;
+        background: var(--surface-floating);
+        box-shadow: var(--shadow);
+        animation: core 1800ms ease-in-out infinite;
+      }
+
+      .mark {
+        display: grid;
+        width: 70px;
+        height: 70px;
+        place-items: center;
+        border-radius: 22px;
+        background: var(--selected);
+        color: var(--accent);
+        font-size: 34px;
+        font-weight: 700;
+      }
+
+      .node {
+        position: absolute;
+        z-index: 2;
+        display: grid;
+        width: 34px;
+        height: 34px;
+        place-items: center;
+        border: 1px solid var(--line-strong);
+        border-radius: 999px;
+        background: var(--surface-floating);
+        box-shadow: var(--shadow);
+        color: var(--ink);
+        font-size: 12px;
+        font-weight: 700;
+        animation: node 2400ms ease-in-out infinite;
+      }
+
+      .node-d {
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+      }
+
+      .node-b {
+        top: 88px;
+        right: 6px;
+        animation-delay: 180ms;
+      }
+
+      .node-a {
+        right: 44px;
+        bottom: 24px;
+        animation-delay: 360ms;
+      }
+
+      .node-m {
+        bottom: 56px;
+        left: 8px;
+        animation-delay: 540ms;
+      }
+
+      .link {
+        position: absolute;
+        z-index: 1;
+        height: 1px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, transparent, var(--accent), transparent);
+        opacity: 0;
+        transform-origin: left center;
+        animation: link 2400ms ease-in-out infinite;
+      }
+
+      .link-one {
+        top: 78px;
+        left: 110px;
+        width: 96px;
+        transform: rotate(30deg);
+      }
+
+      .link-two {
+        top: 150px;
+        left: 132px;
+        width: 74px;
+        transform: rotate(112deg);
+        animation-delay: 300ms;
+      }
+
+      .link-three {
+        top: 160px;
+        left: 54px;
+        width: 100px;
+        transform: rotate(-32deg);
+        animation-delay: 600ms;
+      }
+
+      .copy {
+        display: grid;
+        width: 100%;
+        min-height: 62px;
+        gap: 8px;
+        place-items: center;
+      }
+
+      strong {
+        font-size: 28px;
+        line-height: 1;
+      }
+
+      .status {
+        position: relative;
+        width: 260px;
+        min-height: 20px;
+        color: var(--muted);
+        font-size: 14px;
+        font-weight: 500;
+        line-height: 1.4;
+        white-space: nowrap;
+      }
+
+      .status span {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        transform: translateY(8px);
+        animation: status 3600ms ease-in-out infinite;
+      }
+
+      .status span:nth-child(2) {
+        animation-delay: 1200ms;
+      }
+
+      .status span:nth-child(3) {
+        animation-delay: 2400ms;
+      }
+
+      @keyframes orbit {
+        0%,
+        100% {
+          border-color: var(--line);
+          box-shadow: none;
+        }
+        50% {
+          border-color: var(--accent-border);
+          box-shadow: 0 0 0 8px var(--accent-soft);
+        }
+      }
+
+      @keyframes core {
+        0%,
+        100% {
+          transform: scale(1);
+          box-shadow: var(--shadow);
+        }
+        50% {
+          transform: scale(1.035);
+          box-shadow: var(--shadow-active);
+        }
+      }
+
+      @keyframes node {
+        0%,
+        100% {
+          border-color: var(--line-strong);
+          color: var(--ink);
+        }
+        45% {
+          border-color: var(--accent-border);
+          color: var(--accent);
+        }
+      }
+
+      @keyframes link {
+        0%,
+        20%,
+        100% {
+          opacity: 0;
+          clip-path: inset(0 100% 0 0);
+        }
+        45%,
+        68% {
+          opacity: 0.74;
+          clip-path: inset(0 0 0 0);
+        }
+      }
+
+      @keyframes status {
+        0%,
+        100% {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+        10%,
+        30% {
+          opacity: 1;
+          transform: translateY(0);
+        }
+        42% {
+          opacity: 0;
+          transform: translateY(-8px);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .orbit,
+        .core,
+        .node,
+        .link,
+        .status span {
+          animation: none;
+        }
+
+        .status span:first-child {
+          opacity: 1;
+          transform: none;
+        }
+
+        .link {
+          opacity: 0.42;
+          clip-path: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell" aria-label="Starting Lantor">
+      <div class="constellation" aria-hidden="true">
+        <div class="orbit">
+          <span class="node node-d">D</span>
+          <span class="node node-b">B</span>
+          <span class="node node-a">A</span>
+          <span class="node node-m">M</span>
+          <span class="link link-one"></span>
+          <span class="link link-two"></span>
+          <span class="link link-three"></span>
+        </div>
+        <div class="core">
+          <span class="mark">L</span>
+        </div>
+      </div>
+      <div class="copy">
+        <strong>Lantor</strong>
+        <div class="status">
+          <span>Waking agents...</span>
+          <span>Restoring workspace...</span>
+          <span>Syncing threads...</span>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>
