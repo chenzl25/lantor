@@ -140,28 +140,34 @@
         animation: node 2400ms ease-in-out infinite;
       }
 
-      .node-d {
+      .node-a {
         top: 12px;
         left: 50%;
         transform: translateX(-50%);
       }
 
-      .node-b {
-        top: 88px;
+      .node-n {
+        top: 74px;
         right: 6px;
         animation-delay: 180ms;
       }
 
-      .node-a {
-        right: 44px;
-        bottom: 24px;
+      .node-t {
+        right: 36px;
+        bottom: 22px;
         animation-delay: 360ms;
       }
 
-      .node-m {
-        bottom: 56px;
-        left: 8px;
+      .node-o {
+        bottom: 22px;
+        left: 36px;
         animation-delay: 540ms;
+      }
+
+      .node-r {
+        top: 74px;
+        left: 6px;
+        animation-delay: 720ms;
       }
 
       .link {
@@ -196,6 +202,14 @@
         width: 100px;
         transform: rotate(-32deg);
         animation-delay: 600ms;
+      }
+
+      .link-four {
+        top: 78px;
+        left: 40px;
+        width: 88px;
+        transform: rotate(-30deg);
+        animation-delay: 900ms;
       }
 
       .copy {
@@ -330,13 +344,15 @@
     <main class="shell" aria-label="Starting Lantor">
       <div class="constellation" aria-hidden="true">
         <div class="orbit">
-          <span class="node node-d">D</span>
-          <span class="node node-b">B</span>
           <span class="node node-a">A</span>
-          <span class="node node-m">M</span>
+          <span class="node node-n">N</span>
+          <span class="node node-t">T</span>
+          <span class="node node-o">O</span>
+          <span class="node node-r">R</span>
           <span class="link link-one"></span>
           <span class="link link-two"></span>
           <span class="link link-three"></span>
+          <span class="link link-four"></span>
         </div>
         <div class="core">
           <span class="mark">L</span>
