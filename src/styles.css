@@ -156,47 +156,6 @@ button,
   letter-spacing: 0;
 }
 
-.boot-node {
-  position: absolute;
-  z-index: 2;
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border: 1px solid var(--border-emphasis);
-  border-radius: 999px;
-  background: var(--surface-floating);
-  box-shadow: var(--state-selected-shadow);
-  color: var(--ink-primary);
-  font-size: var(--type-size-meta);
-  font-weight: var(--type-weight-bold);
-  animation: bootNode 2400ms ease-in-out infinite;
-}
-
-.node-dylan {
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-}
-
-.node-bugen {
-  top: 88px;
-  right: 6px;
-  animation-delay: 180ms;
-}
-
-.node-admin {
-  bottom: 24px;
-  right: 44px;
-  animation-delay: 360ms;
-}
-
-.node-owner {
-  bottom: 56px;
-  left: 8px;
-  animation-delay: 540ms;
-}
-
 .boot-link {
   position: absolute;
   z-index: 1;
@@ -319,18 +278,6 @@ button,
   }
 }
 
-@keyframes bootNode {
-  0%,
-  100% {
-    color: var(--ink-primary);
-    border-color: var(--border-emphasis);
-  }
-  45% {
-    color: var(--accent);
-    border-color: var(--accent-soft-hover-border);
-  }
-}
-
 @keyframes bootLink {
   0%,
   20%,
@@ -365,7 +312,6 @@ button,
 @media (prefers-reduced-motion: reduce) {
   .boot-orbit,
   .boot-core,
-  .boot-node,
   .boot-link,
   .boot-status span {
     animation: none;
