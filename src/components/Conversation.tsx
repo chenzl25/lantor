@@ -48,6 +48,7 @@ type ConversationProps = {
   agentActivities: AgentActivity[];
   agentRuns: AgentRun[];
   agentWorkItems: AgentWorkItem[];
+  supervisorStale: boolean;
   channelAgents: Agent[];
   activeTab: "chat" | "tasks";
   activeRoot: Message | null;
@@ -209,6 +210,7 @@ export function Conversation({
   agentActivities,
   agentRuns,
   agentWorkItems,
+  supervisorStale,
   channelAgents,
   activeTab,
   activeRoot,
@@ -808,6 +810,7 @@ export function Conversation({
               agents={agents}
               channelId={channel?.id ?? null}
               threadRootId={null}
+              supervisorStale={supervisorStale}
               onOpenWorkItem={openWorkItem}
             />
           </div>

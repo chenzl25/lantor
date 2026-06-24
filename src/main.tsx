@@ -31,6 +31,7 @@ import { SavedMessagesModal } from "./components/SavedMessagesModal";
 import { SearchModal } from "./components/SearchModal";
 import { SettingsModal, type ChatTextSize, type ThemePreference } from "./components/SettingsModal";
 import { Sidebar } from "./components/Sidebar";
+import { SupervisorBanner, useSupervisorHealth } from "./components/SupervisorBanner";
 import { ThreadPanel } from "./components/ThreadPanel";
 import { UnreadBadge } from "./components/UnreadBadge";
 import { isProgressOnlyMessage } from "./message-grouping";
@@ -3746,6 +3747,9 @@ function App() {
     await mutate("uninstall_supervisor_service");
   }
 
+  const supervisorHealth = useSupervisorHealth(data?.supervisor);
+  const supervisorStale = supervisorHealth.stale;
+
   if (!data || !bootReady) {
     return (
       <BootSplash
@@ -3758,6 +3762,7 @@ function App() {
   return (
     <main
       className={`app theme-liquid ${selectedAgent || showThread ? "" : "thread-hidden"} ${selectedAgent || activeThreadId ? "right-panel-active" : ""} ${showMobileSidebar ? "mobile-sidebar-open" : ""} ${mobileDragSurface === "sidebar" ? "mobile-sidebar-dragging" : ""} ${mobileDragSurface === "panel" ? "mobile-panel-dragging" : ""} ${mobileComposerFocused ? "mobile-composer-focused" : ""}`}
+      data-supervisor-stale={supervisorStale ? "true" : undefined}
       style={{
         "--sidebar-width": `${sidebarWidth}px`,
         "--thread-width": `${selectedAgent ? agentDrawerWidth : threadPanelWidth}px`,
@@ -3765,6 +3770,7 @@ function App() {
         ...UI_TYPE_SCALE[chatTextSize],
       } as CSSProperties}
     >
+      <SupervisorBanner health={supervisorHealth} />
       <Sidebar
         data={data}
         channel={channel}
@@ -3892,6 +3898,7 @@ function App() {
         agentActivities={data.agent_activities}
         agentRuns={data.agent_runs}
         agentWorkItems={data.agent_work_items}
+        supervisorStale={supervisorStale}
         channelAgents={channelAgents}
         activeTab={activeTab}
         activeRoot={activeRoot}
@@ -3969,6 +3976,7 @@ function App() {
           agentActivities={data.agent_activities}
           agentRuns={data.agent_runs}
           agentWorkItems={data.agent_work_items}
+          supervisorStale={supervisorStale}
           activeRoot={activeRoot}
           activeTask={activeTask}
           replies={replies}
