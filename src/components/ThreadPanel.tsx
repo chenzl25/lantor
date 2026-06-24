@@ -116,7 +116,7 @@ type ThreadMessageExpansionState = {
 };
 
 const THREAD_MESSAGE_EXPANSION_TTL_MS = 24 * 60 * 60 * 1000;
-const THREAD_MESSAGE_EXPANSION_MAX_ENTRIES = 100;
+const THREAD_MESSAGE_EXPANSION_MAX_ENTRIES = 50;
 
 function pruneThreadMessageExpansionState(
   entries: Map<string, ThreadMessageExpansionState>,
