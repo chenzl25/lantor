@@ -6,7 +6,7 @@ use uuid::Uuid;
 use super::{ClaudeSurface, WarmClaudeRuntime};
 use crate::events::activity::{record_agent_activity, work_status_title};
 use crate::runtime::{
-    process::upsert_runtime_thread_id,
+    process::{terminate_process_group, upsert_runtime_thread_id},
     streaming::{consume_streaming_agent_control_lines, finish_streaming_agent_message},
 };
 use crate::ui_notifications::{
@@ -85,11 +85,8 @@ pub(super) async fn finish_warm_claude_active_turn(
     } else {
         "failed"
     };
-    let agent_status = if success || was_cancelled {
-        "idle"
-    } else {
-        "error"
-    };
+    let should_reset_runtime = !success && !was_cancelled;
+    let agent_status = "idle";
     let log_line = if was_cancelled {
         "claude warm turn cancelled\n".to_owned()
     } else {
@@ -98,6 +95,15 @@ pub(super) async fn finish_warm_claude_active_turn(
             .map(|error| format!("claude warm turn failed: {error}\n"))
             .unwrap_or_else(|| format!("claude warm turn completed in {elapsed_ms} ms\n"))
     };
+    if should_reset_runtime {
+        {
+            let mut state = runtime.state.lock().await;
+            state.alive = false;
+        }
+        if let Some(pid) = runtime.pid {
+            let _ = terminate_process_group(pid).await;
+        }
+    }
     sqlx::query(
         r#"
         update agent_runs
@@ -188,7 +194,7 @@ pub(super) async fn finish_warm_claude_active_turn(
         if success || was_cancelled {
             "idle"
         } else {
-            "failed"
+            "stopped"
         },
     )
     .await?;
