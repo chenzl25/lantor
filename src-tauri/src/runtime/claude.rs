@@ -769,3 +769,182 @@ async fn remove_warm_claude_runtime_if_same(
         runtimes.remove(&agent_id);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{process::Stdio, sync::Arc, time::Instant};
+
+    use sqlx::Row;
+    use tokio::{process::Command, sync::Mutex as AsyncMutex};
+    use uuid::Uuid;
+
+    use crate::test_support::{
+        drop_test_schema, insert_test_agent, insert_test_channel, test_pool,
+    };
+
+    use super::{finish_warm_claude_active_turn, ClaudeActiveTurn, WarmClaudeRuntime};
+
+    async fn test_runtime_with_active_turn(
+        run_id: Uuid,
+        work_item_id: Uuid,
+        channel_id: Uuid,
+        stream_key: String,
+    ) -> Result<Arc<WarmClaudeRuntime>, String> {
+        let mut command = Command::new("sleep");
+        command.arg("60").stdin(Stdio::piped());
+        #[cfg(unix)]
+        command.process_group(0);
+        let mut child = command.spawn().map_err(|err| err.to_string())?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "test process stdin unavailable".to_owned())?;
+        Ok(Arc::new(WarmClaudeRuntime {
+            stdin: AsyncMutex::new(stdin),
+            state: AsyncMutex::new(super::WarmClaudeState {
+                alive: true,
+                active: Some(ClaudeActiveTurn {
+                    run_id,
+                    started_at: Instant::now(),
+                    first_delta_at: None,
+                    work_item_id: Some(work_item_id),
+                    channel_id: Some(channel_id),
+                    thread_root_id: None,
+                    stream_key,
+                }),
+                session_id: Some("test-claude-session".to_owned()),
+                last_surface: None,
+                last_activity: Instant::now(),
+            }),
+            pid: child.id().map(|id| id as i32),
+            environment_variables: String::new(),
+        }))
+    }
+
+    #[tokio::test]
+    async fn failed_warm_claude_turn_keeps_agent_routable_and_stops_runtime() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let agent_id = insert_test_agent(&pool, "claude-failure-agent").await?;
+            sqlx::query("update agents set status = 'running', runtime = 'claude' where id = $1")
+                .bind(agent_id)
+                .execute(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+            let channel_id = insert_test_channel(&pool, "claude-failure-channel").await?;
+            let work_item_id: Uuid = sqlx::query_scalar(
+                r#"
+                insert into agent_work_items (agent_id, channel_id, title, status)
+                values ($1, $2, 'warm claude failure', 'running')
+                returning id
+                "#,
+            )
+            .bind(agent_id)
+            .bind(channel_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            let run_id: Uuid = sqlx::query_scalar(
+                r#"
+                insert into agent_runs (agent_id, work_item_id, command, status)
+                values ($1, $2, 'claude stream-json', 'running')
+                returning id
+                "#,
+            )
+            .bind(agent_id)
+            .bind(work_item_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            let stream_key = format!("{run_id}:warm-claude");
+            sqlx::query(
+                r#"
+                insert into messages (
+                    channel_id, sender_agent_id, sender_name, sender_role,
+                    body, delivery_state, stream_key
+                )
+                values ($1, $2, 'claude-failure-agent', 'agent', 'partial', 'streaming', $3)
+                "#,
+            )
+            .bind(channel_id)
+            .bind(agent_id)
+            .bind(&stream_key)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+
+            let runtime =
+                test_runtime_with_active_turn(run_id, work_item_id, channel_id, stream_key.clone())
+                    .await?;
+            finish_warm_claude_active_turn(
+                &pool,
+                agent_id,
+                &runtime,
+                false,
+                Some("Not logged in · Please run /login".to_owned()),
+            )
+            .await?;
+
+            let agent_status: String =
+                sqlx::query_scalar("select status from agents where id = $1")
+                    .bind(agent_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            assert_eq!(agent_status, "idle");
+
+            let run = sqlx::query("select status, log, stopped_at from agent_runs where id = $1")
+                .bind(run_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+            assert_eq!(run.get::<String, _>("status"), "failed");
+            assert!(run
+                .get::<String, _>("log")
+                .contains("Not logged in · Please run /login"));
+            assert!(run.get::<Option<String>, _>("stopped_at").is_some());
+
+            let work_status: String =
+                sqlx::query_scalar("select status from agent_work_items where id = $1")
+                    .bind(work_item_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            assert_eq!(work_status, "failed");
+
+            let delivery_state: String =
+                sqlx::query_scalar("select delivery_state from messages where stream_key = $1")
+                    .bind(&stream_key)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            assert_eq!(delivery_state, "error");
+
+            let runtime_status: String = sqlx::query_scalar(
+                "select status from runtime_sessions where agent_id = $1 and runtime = 'claude'",
+            )
+            .bind(agent_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            assert_eq!(runtime_status, "stopped");
+            assert!(!runtime.state.lock().await.alive);
+
+            let run_error_count: i64 = sqlx::query_scalar(
+                "select count(*) from agent_activities where agent_id = $1 and run_id = $2 and kind = 'run_error'",
+            )
+            .bind(agent_id)
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            assert_eq!(run_error_count, 1);
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        result.unwrap();
+    }
+}
