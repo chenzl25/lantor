@@ -379,7 +379,7 @@ async fn missing_dist(dist_dir: PathBuf) -> impl IntoResponse {
         r#"<!doctype html>
 <html>
   <head><title>Lantor Web</title></head>
-  <body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 32px;">
+  <body style="font-family: &quot;Space Grotesk Variable&quot;, &quot;Space Grotesk&quot;, -apple-system, BlinkMacSystemFont, sans-serif; padding: 32px;">
     <h1>Lantor Web build not found</h1>
     <p>Expected <code>{}</code>.</p>
     <p>Run <code>npm run build</code>, then restart Lantor.</p>

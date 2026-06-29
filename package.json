@@ -29,6 +29,8 @@
     "@dicebear/personas": "^9.4.2",
     "@dicebear/pixel-art": "^9.4.2",
     "@dicebear/shapes": "^9.4.2",
+    "@fontsource-variable/space-grotesk": "^5.2.10",
+    "@fontsource/space-mono": "^5.2.9",
     "@tauri-apps/api": "^2.5.0",
     "@vitejs/plugin-react": "^4.4.1",
     "katex": "^0.16.47",
