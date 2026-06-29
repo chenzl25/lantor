@@ -1,4 +1,11 @@
+/* Font preset: "system" restores the original native font stack (pre-typography-update). */
+:root[data-font-preset="system"] {
+  --font-sans: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 :root {
+  /* Default font preset: "Space Grotesk" (new app typeface + Space Mono code). */
   --font-sans: "Space Grotesk Variable", "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
   --font-mono: "Space Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --type-weight-regular: 400;
@@ -6180,6 +6187,10 @@ body.resizing-column * {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
+}
+
+.font-preset-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .theme-choice-grid button {

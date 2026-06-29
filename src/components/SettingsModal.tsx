@@ -3,14 +3,17 @@ import { Modal } from "./Modal";
 
 export type ThemePreference = "auto" | "light" | "dark";
 export type ChatTextSize = "compact" | "default" | "large" | "xlarge";
+export type FontPreset = "space-grotesk" | "system";
 
 type SettingsModalProps = {
   open: boolean;
   themePreference: ThemePreference;
   chatTextSize: ChatTextSize;
+  fontPreset: FontPreset;
   showImageThumbnails: boolean;
   onThemePreferenceChange: (value: ThemePreference) => void;
   onChatTextSizeChange: (value: ChatTextSize) => void;
+  onFontPresetChange: (value: FontPreset) => void;
   onShowImageThumbnailsChange: (value: boolean) => void;
   onClose: () => void;
 };
@@ -37,13 +40,24 @@ const CHAT_TEXT_SIZE_OPTIONS: Array<{
   { value: "xlarge", label: "Extra", detail: "Largest" },
 ];
 
+const FONT_PRESET_OPTIONS: Array<{
+  value: FontPreset;
+  label: string;
+  detail: string;
+}> = [
+  { value: "space-grotesk", label: "Space Grotesk", detail: "New · Space Mono code" },
+  { value: "system", label: "System", detail: "Original · native fonts" },
+];
+
 export function SettingsModal({
   open,
   themePreference,
   chatTextSize,
+  fontPreset,
   showImageThumbnails,
   onThemePreferenceChange,
   onChatTextSizeChange,
+  onFontPresetChange,
   onShowImageThumbnailsChange,
   onClose,
 }: SettingsModalProps) {
@@ -97,6 +111,27 @@ export function SettingsModal({
             ))}
           </div>
           <p className="settings-hint">Applies across messages, inputs, panels, and modals. Use Command +/- or Ctrl +/- to adjust without opening Settings. Command/Ctrl+0 resets.</p>
+        </fieldset>
+        <fieldset className="settings-fieldset">
+          <legend>Font</legend>
+          <div className="theme-choice-grid font-preset-grid">
+            {FONT_PRESET_OPTIONS.map((option) => (
+              <button
+                type="button"
+                key={option.value}
+                className={fontPreset === option.value ? "selected" : ""}
+                aria-pressed={fontPreset === option.value}
+                onClick={() => onFontPresetChange(option.value)}
+              >
+                <Type size={17} />
+                <span>
+                  <strong>{option.label}</strong>
+                  <small>{option.detail}</small>
+                </span>
+              </button>
+            ))}
+          </div>
+          <p className="settings-hint">Space Grotesk is the new app typeface (with Space Mono for code). System uses your platform&rsquo;s native fonts.</p>
         </fieldset>
         <fieldset className="settings-fieldset settings-attachments-fieldset">
           <legend>Attachments</legend>
