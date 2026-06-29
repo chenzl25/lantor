@@ -354,6 +354,14 @@ export function Conversation({
       previous.clientHeight !== element.clientHeight;
   }
 
+  function isMessageListComposerResize(element: HTMLDivElement) {
+    const previous = messageListMetricsRef.current;
+    if (previous.scrollHeight === 0 && previous.clientHeight === 0) return false;
+    const clientHeightDelta = element.clientHeight - previous.clientHeight;
+    const scrollHeightDelta = element.scrollHeight - previous.scrollHeight;
+    return clientHeightDelta < 0 && scrollHeightDelta <= 0;
+  }
+
   function cancelPendingMessageBottomScroll() {
     if (bottomScrollFrameRef.current !== null) {
       window.cancelAnimationFrame(bottomScrollFrameRef.current);
@@ -569,6 +577,10 @@ export function Conversation({
     function keepBottomVisible(source: "viewport" | "content") {
       const list = messageListRef.current;
       if (!list) return;
+      if (isMessageListComposerResize(list)) {
+        rememberMessageListMetrics(list);
+        return;
+      }
       if (source === "viewport" && isMessageListViewportOnlyResize(list)) {
         rememberMessageListMetrics(list);
         return;
