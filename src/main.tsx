@@ -554,7 +554,7 @@ function getStoredChatTextSize(): ChatTextSize {
 
 function getStoredFontPreset(): FontPreset {
   const stored = window.localStorage.getItem(FONT_PRESET_STORAGE_KEY);
-  return stored === "system" || stored === "space-grotesk" ? stored : "space-grotesk";
+  return stored === "system" || stored === "space-grotesk" ? stored : "system";
 }
 
 function getStoredShowImageThumbnails() {

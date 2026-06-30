@@ -45,8 +45,8 @@ const FONT_PRESET_OPTIONS: Array<{
   label: string;
   detail: string;
 }> = [
-  { value: "space-grotesk", label: "Space Grotesk", detail: "New · Space Mono code" },
   { value: "system", label: "System", detail: "Original · native fonts" },
+  { value: "space-grotesk", label: "Space Grotesk", detail: "New · Space Mono code" },
 ];
 
 export function SettingsModal({
