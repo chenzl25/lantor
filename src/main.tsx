@@ -43,6 +43,7 @@ import {
   AgentWorkItem,
   Artifact,
   Bootstrap,
+  Channel,
   ChannelMember,
   DraftAttachment,
   EMPTY_AGENT_FORM,
@@ -820,6 +821,16 @@ function App() {
   const refreshInvalidationRef = useRef(0);
   const messageDeltaBufferRef = useRef<Map<string, { append: string; deliveryState: Message["delivery_state"] }>>(new Map());
   const optimisticMessagesRef = useRef<Map<string, Message>>(new Map());
+  // Channels created locally but not yet reflected by an authoritative bootstrap.
+  // Merged back in `refresh()` so an in-flight bootstrap can't drop the new
+  // channel and fall the active channel back to another one before the backend
+  // catches up. Entries self-evict once bootstrap returns the channel.
+  const optimisticChannelsRef = useRef<Map<string, Channel>>(new Map());
+  // Channels deleted locally but possibly still present in an in-flight
+  // bootstrap. Filtered out in `refresh()` so a stale bootstrap that predates
+  // the deletion can't resurrect the channel in the sidebar. Entries self-evict
+  // once an authoritative bootstrap no longer returns the channel.
+  const optimisticRemovedChannelsRef = useRef<Set<string>>(new Set());
   const optimisticAttachmentUrlsRef = useRef<Map<string, string[]>>(new Map());
   // Per-message latest-intent sequence for save/unsave, so a late-failing
   // request cannot roll back over a newer toggle for the same message.
@@ -862,6 +873,8 @@ function App() {
       });
       optimisticAttachmentUrlsRef.current.clear();
       optimisticMessagesRef.current.clear();
+      optimisticChannelsRef.current.clear();
+      optimisticRemovedChannelsRef.current.clear();
     };
   }, []);
 
@@ -921,7 +934,9 @@ function App() {
   async function refresh(includeOptimistic = true, preferredActiveChannelId?: string) {
     const refreshInvalidation = refreshInvalidationRef.current;
     const next = normalizeBootstrap(await apiInvoke<Bootstrap>("bootstrap"));
-    const refreshed = withPendingSavedToggles(includeOptimistic ? withOptimisticMessages(next) : next);
+    const refreshed = withPendingSavedToggles(
+      includeOptimistic ? withOptimisticChannels(withOptimisticMessages(next)) : next,
+    );
     setData((current) => {
       if (!current || refreshInvalidation === refreshInvalidationRef.current) return refreshed;
       const refreshedMessageIds = new Set(refreshed.messages.map((message) => message.id));
@@ -933,11 +948,15 @@ function App() {
       };
     });
     setActiveChannelId((prev) => {
-      if (preferredActiveChannelId && next.channels.some((item) => item.id === preferredActiveChannelId)) {
+      // Use the merged list so a still-optimistic channel keeps the active
+      // selection instead of falling back to channels[0] when a stale bootstrap
+      // that predates its creation lands.
+      const channels = refreshed.channels;
+      if (preferredActiveChannelId && channels.some((item) => item.id === preferredActiveChannelId)) {
         return preferredActiveChannelId;
       }
-      if (next.channels.some((item) => item.id === prev)) return prev;
-      return next.channels[0]?.id || "";
+      if (channels.some((item) => item.id === prev)) return prev;
+      return channels[0]?.id || "";
     });
     setActiveThreadId((prev) => {
       const rootIds = new Set(next.messages.filter((item) => !item.thread_root_id).map((item) => item.id));
@@ -989,6 +1008,55 @@ function App() {
         : [...current.messages, message];
       return { ...current, messages: sortedMessages(messages) };
     });
+  }
+
+  function withOptimisticChannels(next: Bootstrap): Bootstrap {
+    if (optimisticChannelsRef.current.size === 0 && optimisticRemovedChannelsRef.current.size === 0) {
+      return next;
+    }
+    let refreshed = next;
+    let channels = refreshed.channels;
+    // Drop channels we deleted locally but that a stale in-flight bootstrap
+    // still carries. Once bootstrap itself no longer lists the id, the pending
+    // removal has been reconciled and self-evicts.
+    if (optimisticRemovedChannelsRef.current.size > 0) {
+      const stillPresent = new Set(channels.map((channel) => channel.id));
+      for (const id of optimisticRemovedChannelsRef.current) {
+        if (!stillPresent.has(id)) optimisticRemovedChannelsRef.current.delete(id);
+      }
+      if (optimisticRemovedChannelsRef.current.size > 0) {
+        refreshed = bootstrapWithoutChannels(refreshed, optimisticRemovedChannelsRef.current);
+        channels = refreshed.channels;
+      }
+    }
+    if (optimisticChannelsRef.current.size > 0) {
+      const existingIds = new Set(channels.map((channel) => channel.id));
+      const pending: Channel[] = [];
+      for (const [id, channel] of optimisticChannelsRef.current) {
+        // Authoritative bootstrap now knows this channel — stop shadowing it.
+        if (existingIds.has(id)) optimisticChannelsRef.current.delete(id);
+        else pending.push(channel);
+      }
+      if (pending.length > 0) channels = [...channels, ...pending];
+    }
+    if (channels === refreshed.channels) return refreshed;
+    return { ...refreshed, channels };
+  }
+
+  function bootstrapWithoutChannels(next: Bootstrap, channelIds: ReadonlySet<string>): Bootstrap {
+    return {
+      ...next,
+      channels: next.channels.filter((item) => !channelIds.has(item.id)),
+      thread_activities: next.thread_activities.filter((item) => !channelIds.has(item.channel_id)),
+      channel_members: next.channel_members.filter((item) => !channelIds.has(item.channel_id)),
+      messages: next.messages.filter((item) => !channelIds.has(item.channel_id)),
+      saved_messages: next.saved_messages.filter((item) => !channelIds.has(item.channel_id)),
+      artifacts: next.artifacts.filter((item) => !channelIds.has(item.channel_id)),
+      tasks: next.tasks.filter((item) => !channelIds.has(item.channel_id)),
+      reminders: next.reminders.filter((item) => !item.channel_id || !channelIds.has(item.channel_id)),
+      agent_schedules: next.agent_schedules.filter((item) => !channelIds.has(item.channel_id)),
+      agent_work_items: next.agent_work_items.filter((item) => !item.channel_id || !channelIds.has(item.channel_id)),
+    };
   }
 
   function withOptimisticMessages(next: Bootstrap): Bootstrap {
@@ -2596,7 +2664,6 @@ function App() {
         name,
         agentIds: agentIds.length > 0 ? agentIds : undefined,
       });
-      await refresh(true, shouldReturnToMobileHome ? undefined : result.channelId);
     } catch (err) {
       const message = errorMessage(err, "create_channel failed");
       if (isDuplicateChannelNameError(message)) {
@@ -2616,15 +2683,40 @@ function App() {
     setNewChannelAgentIds(new Set());
     setShowCreateChannelModal(false);
     createChannelOpenedFromMobileHomeRef.current = false;
+    // Optimistically insert the new channel so navigation is instant instead of
+    // waiting on a full `bootstrap` reload. The backend already emits a
+    // `channel_created` refresh event, and we also kick a background refresh
+    // below to reconcile ordering / membership.
+    if (result.channelId) {
+      const channelId = result.channelId;
+      const optimisticChannel: Channel = {
+        id: channelId,
+        name,
+        description: "",
+        kind: "channel",
+        dm_agent_id: null,
+        unread_count: 0,
+      };
+      // Track it so any in-flight/subsequent `refresh()` re-merges the channel
+      // instead of clobbering it back to the old list (and fallback-navigating
+      // away). It self-evicts once an authoritative bootstrap includes it.
+      optimisticChannelsRef.current.set(channelId, optimisticChannel);
+      // A `bootstrap` dispatched before create committed must not overwrite the
+      // optimistic insert with a stale channel list when it lands.
+      invalidatePendingRefreshResult();
+      setData((current) => {
+        if (!current || current.channels.some((item) => item.id === channelId)) return current;
+        return { ...current, channels: [...current.channels, optimisticChannel] };
+      });
+    }
     if (shouldReturnToMobileHome) {
       returnToMobileHome();
-      return;
-    }
-    if (result.channelId) {
+    } else if (result.channelId) {
       setActiveChannelId(result.channelId);
       setShowMobileSidebar(false);
       openThread(null, result.channelId);
     }
+    requestRefresh();
   }
 
   async function saveChannel() {
@@ -2667,7 +2759,23 @@ function App() {
       body: "This removes the channel timeline, tasks, threads, agent memberships, schedules, and attachments for this channel. This cannot be undone.",
       confirmLabel: "Delete channel",
       onConfirm: async () => {
-        await mutate("delete_channel", { channelId: channelToDelete.id });
+        // Delete on the backend first, then update the UI optimistically instead
+        // of blocking on a full `bootstrap` reload (the old `mutate` path awaited
+        // `refresh()`, which caused the multi-second stall). Track a tombstone so
+        // an in-flight stale bootstrap can't resurrect the channel; reconcile via
+        // a background refresh, and roll back if the delete failed.
+        try {
+          await apiInvoke("delete_channel", { channelId: channelToDelete.id });
+        } catch (err) {
+          const message = errorMessage(err, "delete_channel failed");
+          setAppError(message);
+          console.error(err);
+          throw err;
+        }
+        optimisticChannelsRef.current.delete(channelToDelete.id);
+        optimisticRemovedChannelsRef.current.add(channelToDelete.id);
+        invalidatePendingRefreshResult();
+        setData((current) => current ? bootstrapWithoutChannels(current, optimisticRemovedChannelsRef.current) : current);
         setShowChannelSettingsModal(false);
         forgetChannelThread(channelToDelete.id);
         if (activeChannelId === channelToDelete.id) {
@@ -2677,6 +2785,7 @@ function App() {
             returnToMobileHome();
           }
         }
+        requestRefresh();
       },
     });
   }
