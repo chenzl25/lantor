@@ -2,6 +2,7 @@ import {
   Children,
   ReactNode,
   isValidElement,
+  memo,
   type MouseEvent,
   type PointerEvent,
   type UIEvent,
@@ -209,7 +210,7 @@ function MarkdownTableScroll({ children, scrollKey }: { children?: ReactNode; sc
   );
 }
 
-export function MessageMarkdown({
+export const MessageMarkdown = memo(function MessageMarkdown({
   body,
   onLocalAgentLink,
   messages,
@@ -270,4 +271,11 @@ export function MessageMarkdown({
       </ReactMarkdown>
     </div>
   );
-}
+}, (prev, next) => (
+  prev.body === next.body
+  && prev.messages === next.messages
+  && prev.channels === next.channels
+  && prev.onOpenReference === next.onOpenReference
+  && prev.onLocalAgentLink === next.onLocalAgentLink
+  && prev.scrollKey === next.scrollKey
+));

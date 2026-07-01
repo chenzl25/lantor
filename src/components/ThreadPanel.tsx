@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowLeft, Bookmark, CheckCircle2, Crosshair, FileImage, Hash, Maximize2, MessageSquare, Minimize2, Paperclip, Quote, RotateCcw, Send, X } from "lucide-react";
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TextareaHTMLAttributes, type WheelEvent as ReactWheelEvent } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TextareaHTMLAttributes, type WheelEvent as ReactWheelEvent } from "react";
 import { useAutoGrowTextarea } from "../hooks/useAutoGrowTextarea";
 import { useMentionPicker } from "../hooks/useMentionPicker";
 import { useMobileViewport } from "../hooks/useMobileViewport";
@@ -116,6 +116,38 @@ type ThreadPanelProps = {
   onResizeStart: (event: ReactPointerEvent<HTMLButtonElement>) => void;
 };
 
+type ThreadMessageBodyProps = {
+  message: Message;
+  messages: Message[];
+  channels: Channel[];
+  onReferenceOpen: (sourceMessage: Message, reference: ResolvedMessageReference) => void;
+  onLocalAgentLink: (handle: string) => void;
+};
+
+function ThreadMessageBody({
+  message,
+  messages,
+  channels,
+  onReferenceOpen,
+  onLocalAgentLink,
+}: ThreadMessageBodyProps) {
+  const handleOpenReference = useCallback((reference: ResolvedMessageReference) => {
+    onReferenceOpen(message, reference);
+  }, [message, onReferenceOpen]);
+
+  if (!message.body.trim()) return null;
+  return (
+    <MessageMarkdown
+      body={message.body}
+      messages={messages}
+      channels={channels}
+      onOpenReference={handleOpenReference}
+      onLocalAgentLink={onLocalAgentLink}
+      scrollKey={`message:${message.id}`}
+    />
+  );
+}
+
 type MessageMenuState = {
   x: number;
   y: number;
@@ -218,10 +250,10 @@ export function ThreadPanel({
   const threadScrollMetricsRef = useRef({ scrollHeight: 0, scrollTop: 0, clientHeight: 0 });
   const threadScrollStateByThreadRef = useRef<Map<string, ThreadScrollState>>(new Map());
   const threadScrollAnchorRef = useRef<ThreadScrollAnchor | null>(null);
-  function openLinkedAgentDetail(handle: string) {
+  const openLinkedAgentDetail = useCallback((handle: string) => {
     const agent = agents.find((candidate) => candidate.handle.toLowerCase() === handle.toLowerCase());
     if (agent) openAgentDetail(agent);
-  }
+  }, [agents, openAgentDetail]);
   const isDm = channel?.kind === "dm";
   const dmAgent = isDm ? agents.find((agent) => agent.id === channel?.dm_agent_id) ?? null : null;
   const rootAgent = activeRoot ? agentForMessageSender(activeRoot, agents) : null;
@@ -279,7 +311,7 @@ export function ThreadPanel({
     ));
   }
 
-  function handleReferenceOpen(sourceMessage: Message, reference: ResolvedMessageReference) {
+  const handleReferenceOpen = useCallback((sourceMessage: Message, reference: ResolvedMessageReference) => {
     if (reference.kind === "thread") {
       onReferenceThreadJump(sourceMessage.id, reference.id);
       return;
@@ -288,18 +320,16 @@ export function ThreadPanel({
     if (!target) return;
     onReferenceMessageJump(sourceMessage.id, target.id);
     targetMessageIntoView(target.id);
-  }
+  }, [onReferenceMessageJump, onReferenceThreadJump, threadMessageById]);
 
   function renderMessageBody(message: Message) {
-    if (!message.body.trim()) return null;
     return (
-      <MessageMarkdown
-        body={message.body}
+      <ThreadMessageBody
+        message={message}
         messages={messages}
         channels={channels}
-        onOpenReference={(reference) => handleReferenceOpen(message, reference)}
+        onReferenceOpen={handleReferenceOpen}
         onLocalAgentLink={openLinkedAgentDetail}
-        scrollKey={`message:${message.id}`}
       />
     );
   }

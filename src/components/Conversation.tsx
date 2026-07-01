@@ -15,7 +15,7 @@ import {
   Trash2,
   UserPlus,
 } from "lucide-react";
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FocusEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TextareaHTMLAttributes, type WheelEvent as ReactWheelEvent } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FocusEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TextareaHTMLAttributes, type WheelEvent as ReactWheelEvent } from "react";
 import { useAutoGrowTextarea } from "../hooks/useAutoGrowTextarea";
 import { useMentionPicker } from "../hooks/useMentionPicker";
 import { useMobileViewport } from "../hooks/useMobileViewport";
@@ -95,6 +95,38 @@ type ConversationProps = {
   showImageThumbnails: boolean;
   onToggleMessageSaved: (message: Message, saved: boolean) => void;
 };
+
+type ConversationMessageBodyProps = {
+  message: Message;
+  messages: Message[];
+  channels: Channel[];
+  onReferenceOpen: (sourceMessage: Message, reference: ResolvedMessageReference) => void;
+  onLocalAgentLink: (handle: string) => void;
+};
+
+function ConversationMessageBody({
+  message,
+  messages,
+  channels,
+  onReferenceOpen,
+  onLocalAgentLink,
+}: ConversationMessageBodyProps) {
+  const handleOpenReference = useCallback((reference: ResolvedMessageReference) => {
+    onReferenceOpen(message, reference);
+  }, [message, onReferenceOpen]);
+
+  if (!message.body.trim()) return null;
+  return (
+    <MessageMarkdown
+      body={message.body}
+      messages={messages}
+      channels={channels}
+      onOpenReference={handleOpenReference}
+      onLocalAgentLink={onLocalAgentLink}
+      scrollKey={`message:${message.id}`}
+    />
+  );
+}
 
 type MessageMenuState = {
   x: number;
@@ -283,10 +315,10 @@ export function Conversation({
   const channelActionsRef = useRef<HTMLDivElement | null>(null);
   const isDm = channel?.kind === "dm";
   const dmAgent = isDm ? agents.find((agent) => agent.id === channel?.dm_agent_id) ?? null : null;
-  function openLinkedAgentDetail(handle: string) {
+  const openLinkedAgentDetail = useCallback((handle: string) => {
     const agent = agents.find((candidate) => candidate.handle.toLowerCase() === handle.toLowerCase());
     if (agent) openAgentDetail(agent);
-  }
+  }, [agents, openAgentDetail]);
   const activeReplyProgressByRoot = useMemo<Record<string, ReturnType<typeof activeProgressByAgent>>>(() => {
     if (!channel) return {};
     return Object.fromEntries(
@@ -383,25 +415,23 @@ export function Conversation({
     ));
   }
 
-  function handleReferenceOpen(sourceMessage: Message, reference: ResolvedMessageReference) {
+  const handleReferenceOpen = useCallback((sourceMessage: Message, reference: ResolvedMessageReference) => {
     if (reference.kind === "thread") {
       onReferenceThreadJump(sourceMessage.id, reference.id);
       return;
     }
     onReferenceMessageJump(sourceMessage.id, reference.id);
     targetRootMessageIntoView(reference.id);
-  }
+  }, [onReferenceMessageJump, onReferenceThreadJump]);
 
   function renderMessageBody(message: Message) {
-    if (!message.body.trim()) return null;
     return (
-      <MessageMarkdown
-        body={message.body}
+      <ConversationMessageBody
+        message={message}
         messages={messages}
         channels={channels}
-        onOpenReference={(reference) => handleReferenceOpen(message, reference)}
+        onReferenceOpen={handleReferenceOpen}
         onLocalAgentLink={openLinkedAgentDetail}
-        scrollKey={`message:${message.id}`}
       />
     );
   }

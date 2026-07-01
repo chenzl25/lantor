@@ -3054,7 +3054,7 @@ function App() {
     }
   }
 
-  function pushReferenceMessageHistory(originMessageId: string, targetMessageId: string) {
+  const pushReferenceMessageHistory = useCallback((originMessageId: string, targetMessageId: string) => {
     if (isMobileViewport() || !appHistoryReadyRef.current) return;
     const existingState = window.history.state;
     if (!isAppHistoryState(existingState)) return;
@@ -3071,17 +3071,17 @@ function App() {
     historyFocusedMessageIdRef.current = targetMessageId;
     setAppHistoryPosition(targetState.index, targetState.index);
     lastAppHistoryKeyRef.current = appHistoryKey(targetState);
-  }
+  }, [activeChannelId, activeMobileModal, activeTab, activeThreadId, selectedAgentId, showMobileSidebar, showThread]);
 
-  function navigateToReferencedMessage(originMessageId: string, targetMessageId: string) {
+  const navigateToReferencedMessage = useCallback((originMessageId: string, targetMessageId: string) => {
     pushReferenceMessageHistory(originMessageId, targetMessageId);
     setFocusedMessageId(null);
     window.requestAnimationFrame(() => {
       setFocusedMessageId(targetMessageId);
     });
-  }
+  }, [pushReferenceMessageHistory]);
 
-  function navigateToReferencedThread(originMessageId: string, threadId: string) {
+  const navigateToReferencedThread = useCallback((originMessageId: string, threadId: string) => {
     // Record the chip's source message in the current history entry before we
     // switch threads, so Lantor's built-in back button returns to the message
     // that contained the chip (the thread switch itself pushes the target entry).
@@ -3097,7 +3097,11 @@ function App() {
       }
     }
     revealThread(threadId);
-  }
+  }, [activeChannelId, activeMobileModal, activeTab, activeThreadId, selectedAgentId, showMobileSidebar, showThread]);
+
+  const openConversationAgentDetail = useCallback((agent: Agent) => {
+    setSelectedAgentId(agent.id);
+  }, []);
 
   function openMobileSidebarFromContent() {
     setMobileSidebarFocus("home");
@@ -4180,7 +4184,7 @@ function App() {
           attachments: current.attachments.filter((item) => item.id !== id),
         }))}
         sendRootMessage={sendRootMessage}
-        openAgentDetail={(agent) => setSelectedAgentId(agent.id)}
+        openAgentDetail={openConversationAgentDetail}
         openArtifact={openArtifact}
         openWorkItem={openWorkItem}
         onReferenceMessageJump={navigateToReferencedMessage}
@@ -4244,7 +4248,7 @@ function App() {
             attachments: current.attachments.filter((item) => item.id !== id),
           }))}
           sendReply={sendReply}
-          openAgentDetail={(agent) => setSelectedAgentId(agent.id)}
+          openAgentDetail={openConversationAgentDetail}
           openArtifact={openArtifact}
           openWorkItem={openWorkItem}
           onReferenceMessageJump={navigateToReferencedMessage}
