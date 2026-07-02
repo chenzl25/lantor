@@ -62,26 +62,25 @@ desktop window:
 npm run web:dev
 ```
 
-This builds the web bundle, starts the same local SQLite database, supervisor,
-reminder worker, event pruning, and web server, then serves Lantor at
-`http://127.0.0.1:8787/` by default. Set `LANTOR_WEB_BIND` to choose another
-bind address, for example `LANTOR_WEB_BIND=127.0.0.1:8787 npm run web:dev` for
-loopback-only access.
+This starts the same local SQLite database, supervisor, reminder worker, event
+pruning, and web server, then starts the Vite dev server with hot reload. Open
+`http://127.0.0.1:5173/` for the web UI; Vite proxies `/api` and `/api/events`
+to the local backend. Frontend changes hot-update in the browser, and
+`src-tauri` backend changes restart the web backend automatically.
 
-For frontend hot reload in browser-only development, run two terminals:
+To verify the built/static web path instead of the hot-reload dev path:
 
 ```bash
-# Terminal 1: local backend and API/SSE server, no desktop window
-npm run web:backend
-
-# Terminal 2: Vite frontend with /api proxied to the backend above
-npm run dev
+npm run web:serve
 ```
 
-Open `http://127.0.0.1:5173/` for the hot-reload UI. The Vite dev server
-proxies `/api` and `/api/events` to `http://127.0.0.1:8787/` by default. If
-the backend uses a non-default bind, set `LANTOR_WEB_BIND` in both terminals
-or set `LANTOR_WEB_PROXY_TARGET=http://127.0.0.1:<port>` for the Vite terminal.
+`web:serve` builds the web bundle and serves Lantor from the backend at
+`http://127.0.0.1:8787/` by default, without hot reload. Set `LANTOR_WEB_BIND`
+to choose another bind address, for example
+`LANTOR_WEB_BIND=127.0.0.1:8787 npm run web:serve` for loopback-only access.
+If the backend uses a non-default bind during development, set
+`LANTOR_WEB_BIND` and `LANTOR_WEB_PROXY_TARGET=http://127.0.0.1:<port>` so Vite
+proxies to the correct backend.
 
 Do not run `npm run tauri:dev` and `npm run web:dev` / `npm run web:backend`
 at the same time against the same SQLite database. Use one backend-owning
@@ -171,10 +170,9 @@ shares the same SQLite database and attachment store. There is still no
 separate hosted Lantor service in the path.
 
 If you do not need the desktop window, run `npm run web:dev` instead. Web-only
-mode starts the same local backend and serves the same browser UI, but skips
-the Tauri window and desktop-only event listener. Browser refreshes continue
-to use the web SSE stream. During frontend development, use `npm run
-web:backend` plus `npm run dev` for Vite hot reload.
+mode starts the same local backend and serves the same browser UI through Vite
+hot reload, but skips the Tauri window and desktop-only event listener. Browser
+refreshes continue to use the web SSE stream.
 
 ## Mobile
 
@@ -251,9 +249,10 @@ npm run build                                              # frontend bundle
 cargo check --manifest-path src-tauri/Cargo.toml           # rust typecheck
 cargo test  --manifest-path src-tauri/Cargo.toml --no-run  # compile tests
 npm run tauri:dev                                          # desktop app
-npm run web:dev                                            # built web UI + backend, no desktop window
-npm run web:backend                                        # backend only for Vite hot reload
-npm run dev                                                # Vite frontend; proxies /api to web backend
+npm run web:dev                                            # web UI + backend with hot reload
+npm run web:serve                                          # built web UI + backend, no hot reload
+npm run web:backend                                        # backend only
+npm run dev                                                # Vite frontend only; proxies /api to web backend
 ```
 
 Composer input latency benchmarks live in
