@@ -21,6 +21,7 @@ import { APP_DISPLAY_NAME } from "./branding";
 import { AgentDetailDrawer } from "./components/AgentDetailDrawer";
 import type { AgentPerformance } from "./components/AgentDetailDrawer";
 import { AgentFormModal } from "./components/AgentFormModal";
+import { ArtifactModal } from "./components/ArtifactModal";
 import { randomDylanAvatarSpec } from "./avatar-utils";
 import { ChannelAgentsModal } from "./components/ChannelAgentsModal";
 import { ChannelSettingsModal } from "./components/ChannelSettingsModal";
@@ -777,6 +778,7 @@ function App() {
   const [showSavedModal, setShowSavedModal] = useState(false);
   const [showOwnerProfileModal, setShowOwnerProfileModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [openArtifactPreview, setOpenArtifactPreview] = useState<Artifact | null>(null);
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => getStoredThemePreference());
   const [chatTextSize, setChatTextSize] = useState<ChatTextSize>(() => getStoredChatTextSize());
   const [fontPreset, setFontPreset] = useState<FontPreset>(() => getStoredFontPreset());
@@ -1715,13 +1717,17 @@ function App() {
   async function openArtifact(artifact: Artifact) {
     try {
       const fullArtifact = await apiInvoke<Artifact>("artifact_read", { artifactId: artifact.id });
-      const blob = new Blob([fullArtifact.content], { type: "text/plain;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      window.open(url, "_blank", "noopener,noreferrer");
-      window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      setOpenArtifactPreview(fullArtifact);
     } catch (err) {
       setAppError(errorMessage(err, "Failed to open artifact"));
     }
+  }
+
+  function openRawArtifact(artifact: Artifact) {
+    const blob = new Blob([artifact.content], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank", "noopener,noreferrer");
+    window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
   }
 
   function handleBackendEvent(payload: unknown) {
@@ -4546,6 +4552,12 @@ function App() {
         onFontPresetChange={setFontPreset}
         onShowImageThumbnailsChange={setShowImageThumbnails}
         onClose={() => setShowSettingsModal(false)}
+      />
+
+      <ArtifactModal
+        artifact={openArtifactPreview}
+        onClose={() => setOpenArtifactPreview(null)}
+        onOpenRaw={openRawArtifact}
       />
 
       <Conversation

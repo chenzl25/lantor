@@ -3785,6 +3785,52 @@ mark {
   white-space: pre-wrap;
 }
 
+.artifact-modal {
+  display: grid;
+  gap: 14px;
+}
+
+.artifact-modal-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: var(--type-size-caption);
+}
+
+.artifact-modal-meta button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--type-size-caption);
+}
+
+.artifact-modal-meta button:hover {
+  border-color: var(--accent);
+}
+
+.artifact-modal-summary {
+  margin: 0;
+  color: var(--muted);
+}
+
+.artifact-modal-content {
+  min-width: 0;
+}
+
+.artifact-modal-raw {
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .attachment-meta {
   display: grid;
   width: 100%;
