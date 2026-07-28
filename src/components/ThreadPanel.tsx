@@ -86,6 +86,7 @@ type ThreadPanelProps = {
   agentActivities: AgentActivity[];
   agentRuns: AgentRun[];
   agentWorkItems: AgentWorkItem[];
+  supervisorStale: boolean;
   activeRoot: Message | null;
   activeTask: Task | null;
   replies: Message[];
@@ -175,6 +176,7 @@ export function ThreadPanel({
   agentActivities,
   agentRuns,
   agentWorkItems,
+  supervisorStale,
   activeRoot,
   activeTask,
   replies,
@@ -959,6 +961,7 @@ export function ThreadPanel({
               agents={agents}
               channelId={activeRoot ? channel?.id ?? null : null}
               threadRootId={activeRoot?.id ?? null}
+              supervisorStale={supervisorStale}
               onOpenWorkItem={openWorkItem}
             />
           </div>

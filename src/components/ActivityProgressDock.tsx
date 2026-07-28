@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowRightLeft,
   AtSign,
   Bell,
@@ -33,6 +34,7 @@ type ActivityProgressDockProps = {
   agents: Agent[];
   channelId: string | null;
   threadRootId: string | null;
+  supervisorStale?: boolean;
   onOpenWorkItem?: (item: AgentWorkItem, focusedMessageIdOverride?: string | null) => void;
 };
 
@@ -477,6 +479,7 @@ function ActivityProgressDockContent({
   agents,
   channelId,
   threadRootId,
+  supervisorStale = false,
   onOpenWorkItem,
 }: ActivityProgressDockProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -519,6 +522,10 @@ function ActivityProgressDockContent({
     .sort((left, right) => timestamp(right.activity.created_at) - timestamp(left.activity.created_at))
     .slice(0, MAX_PROGRESS_HISTORY_ITEMS);
   const state = providerRetrying ? "provider-retrying" : latestWorking ? "working" : "queued";
+  // While the supervisor heartbeat is stale/offline, queued work won't be
+  // claimed — surface the root cause instead of letting it read as normal queueing.
+  const supervisorBlocked = supervisorStale && (state === "queued" || queuedCount > 0);
+  const supervisorBlockedHint = "backend supervisor unavailable — 排队的 agent 暂停调度，直到 supervisor 恢复。";
 
   const handleJump = () => {
     if (!latestSourceWorkItem || !onOpenWorkItem) return;
@@ -527,7 +534,12 @@ function ActivityProgressDockContent({
 
   return (
     <div className="activity-progress-dock" data-source-kind={latestKindMeta.tone}>
-      <div className="activity-progress-summary" data-state={state}>
+      <div
+        className="activity-progress-summary"
+        data-state={state}
+        data-supervisor-stale={supervisorBlocked ? "true" : undefined}
+        title={supervisorBlocked ? supervisorBlockedHint : undefined}
+      >
         <button
           type="button"
           className="activity-progress-summary-main"
@@ -556,6 +568,11 @@ function ActivityProgressDockContent({
               <span>{latestTitle}</span>
               {latestDetail && <em>{compact(latestDetail, 80)}</em>}
               {queuedCount > 0 && <em>{queuedCount} queued on this surface</em>}
+              {supervisorBlocked && (
+                <em className="activity-progress-supervisor-hint">
+                  <AlertTriangle size={12} aria-hidden="true" /> supervisor 不可用 · 调度暂停
+                </em>
+              )}
             </small>
           </span>
           {jumpable && (
