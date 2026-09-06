@@ -1150,3 +1150,213 @@ async fn streaming_unsupported_artifact_control_line_keeps_status_message() {
     drop_test_schema(pool, schema).await;
     assert!(result.is_ok(), "{:?}", result.err());
 }
+
+#[tokio::test]
+async fn split_control_payload_never_enters_message_body_or_outbox() {
+    let (pool, database) = test_pool().await.expect("isolated database");
+    let agent = insert_test_agent(&pool, "gate-agent").await.unwrap();
+    let channel = insert_test_channel(&pool, "gate-channel").await.unwrap();
+    let run: Uuid = sqlx::query_scalar("insert into agent_runs (agent_id, command, status) values ($1, 'fixture', 'running') returning id")
+        .bind(agent).fetch_one(&pool).await.unwrap();
+    let key = format!("{run}:gate-regression");
+    let message_id =
+        append_streaming_agent_message(&pool, agent, channel, None, &key, "Visible before.\n\n")
+            .await
+            .unwrap();
+    let content = "中文🦊 with \"quoted braces }\" and a new line\n".repeat(160);
+    let control = json!({"type":"artifact_create", "channel_id":channel, "kind":"markdown", "title":"Gated artifact", "content":content});
+    let rest = format!("LANTOR_EVENT {control}\n\nVisible after.");
+    let expected = "Visible before.\n\n\n\nVisible after.";
+    let mut cursor = 0_i64;
+    let mut deliveries = 0;
+    for chunk in rest.chars().collect::<Vec<_>>().chunks(47) {
+        append_streaming_agent_message(
+            &pool,
+            agent,
+            channel,
+            None,
+            &key,
+            &chunk.iter().collect::<String>(),
+        )
+        .await
+        .unwrap();
+        let body: String = sqlx::query_scalar("select body from messages where id=$1")
+            .bind(message_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(
+            expected.starts_with(&body),
+            "raw control entered messages.body: {body}"
+        );
+        let rows = sqlx::query("select id,event_json from ui_events where id>$1 order by id")
+            .bind(cursor)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        for row in rows {
+            cursor = row.get("id");
+            let event: Value = serde_json::from_str(row.get::<&str, _>("event_json")).unwrap();
+            let visible = if event["type"] == "message_delta"
+                && event["message_id"] == message_id.to_string()
+            {
+                event["append"].as_str()
+            } else if event["type"] == "message_upsert"
+                && event["message"]["id"] == message_id.to_string()
+            {
+                event["message"]["body"].as_str()
+            } else {
+                None
+            };
+            if let Some(visible) = visible {
+                deliveries += 1;
+                assert!(!visible.contains("LANT"));
+                assert!(!visible.contains("artifact_create"));
+                assert!(!visible.contains("quoted braces"));
+            }
+        }
+    }
+    finish_streaming_agent_message(&pool, &key, "complete")
+        .await
+        .unwrap();
+    let body: String = sqlx::query_scalar("select body from messages where id=$1")
+        .bind(message_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(body, expected);
+    let artifacts: i64 = sqlx::query_scalar(
+        "select count(*) from artifacts where title='Gated artifact' and content=$1",
+    )
+    .bind(content.trim())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(artifacts, 1);
+    assert!(deliveries > 0);
+    assert!(!super::stream_buffers()
+        .lock()
+        .unwrap()
+        .contains_key(&super::stream_buffer_key(&pool, &key)));
+    drop_test_schema(pool, database).await;
+}
+
+#[tokio::test]
+async fn literal_control_reference_survives_finalization_and_cancel_discards_pending() {
+    let (pool, database) = test_pool().await.expect("isolated database");
+    let agent = insert_test_agent(&pool, "literal-agent").await.unwrap();
+    let channel = insert_test_channel(&pool, "literal-channel").await.unwrap();
+    let run: Uuid = sqlx::query_scalar("insert into agent_runs (agent_id, command, status) values ($1, 'fixture', 'running') returning id")
+        .bind(agent).fetch_one(&pool).await.unwrap();
+    let key = format!("{run}:literal-regression");
+    let expected = format!("正文引用 `LANTOR_EVENT {{`，{}\n```json\nLANTOR_EVENT {{\"type\":\"activity\",\"title\":\"Example only\"}}\n```", "后续说明必须完整保留。".repeat(120));
+    let message = append_streaming_agent_message(&pool, agent, channel, None, &key, &expected)
+        .await
+        .unwrap();
+    finish_streaming_agent_message(&pool, &key, "complete")
+        .await
+        .unwrap();
+    let body: String = sqlx::query_scalar("select body from messages where id=$1")
+        .bind(message)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(body, expected);
+    let receipts: i64 =
+        sqlx::query_scalar("select count(*) from agent_event_receipts where run_id=$1")
+            .bind(run)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(receipts, 0, "quoted examples are never executed");
+    let key = format!("{run}:cancel-regression");
+    append_streaming_agent_message(
+        &pool,
+        agent,
+        channel,
+        None,
+        &key,
+        "Before cancel\nLANTOR_EVENT {\"type\":\"activity\"",
+    )
+    .await
+    .unwrap();
+    assert!(!streaming_message_body_is_empty(&pool, &key).await.unwrap());
+    finish_streaming_agent_message(&pool, &key, "error")
+        .await
+        .unwrap();
+    let body: String = sqlx::query_scalar("select body from messages where stream_key=$1")
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(body, "Before cancel");
+    assert!(!super::stream_buffers()
+        .lock()
+        .unwrap()
+        .contains_key(&super::stream_buffer_key(&pool, &key)));
+    let key = format!("{run}:superseded-regression");
+    append_streaming_agent_message(&pool, agent, channel, None, &key, "LANTOR_EVENT {")
+        .await
+        .unwrap();
+    assert!(
+        !streaming_message_body_is_empty(&pool, &key).await.unwrap(),
+        "item/completed must not append its full text again"
+    );
+    super::delete_streaming_agent_message_by_key(&pool, &key, "superseded_intermediate_reply")
+        .await
+        .unwrap();
+    assert!(!super::stream_buffers()
+        .lock()
+        .unwrap()
+        .contains_key(&super::stream_buffer_key(&pool, &key)));
+    drop_test_schema(pool, database).await;
+}
+
+#[tokio::test]
+async fn text_block_boundary_keeps_next_control_out_of_prior_prose() {
+    let (pool, database) = test_pool().await.expect("isolated database");
+    let agent = insert_test_agent(&pool, "block-agent").await.unwrap();
+    let channel = insert_test_channel(&pool, "block-channel").await.unwrap();
+    let run: Uuid = sqlx::query_scalar("insert into agent_runs (agent_id, command, status) values ($1, 'fixture', 'running') returning id")
+        .bind(agent).fetch_one(&pool).await.unwrap();
+    let key = format!("{run}:claude-assistant");
+    append_streaming_agent_message(&pool, agent, channel, None, &key, "移动端。")
+        .await
+        .unwrap();
+    super::start_streaming_agent_text_block(&pool, agent, channel, None, &key)
+        .await
+        .unwrap();
+    append_streaming_agent_message(
+        &pool,
+        agent,
+        channel,
+        None,
+        &key,
+        "LANTOR_EVENT {\"type\":\"activity\",\"title\":\"Separate block\"}",
+    )
+    .await
+    .unwrap();
+    super::start_streaming_agent_text_block(&pool, agent, channel, None, &key)
+        .await
+        .unwrap();
+    append_streaming_agent_message(&pool, agent, channel, None, &key, "审计完成。")
+        .await
+        .unwrap();
+    finish_streaming_agent_message(&pool, &key, "complete")
+        .await
+        .unwrap();
+    let body: String = sqlx::query_scalar("select body from messages where stream_key=$1")
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(body, "移动端。\n\n\n\n审计完成。");
+    let accepted: i64 =
+        sqlx::query_scalar("select count(*) from agent_event_receipts where run_id=$1")
+            .bind(run)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(accepted, 1);
+    drop_test_schema(pool, database).await;
+}

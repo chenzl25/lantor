@@ -1,5 +1,6 @@
 import { Bookmark, CheckCircle2, MessageSquare, Quote } from "lucide-react";
 import { memo, useCallback } from "react";
+import { useAgentReplyMode } from "../hooks/useAgentReplyMode";
 import { useStreamingMessage } from "../hooks/useStreamingMessage";
 import type { MessageRowData } from "../hooks/useMessageRows";
 import type { MessageReferenceStore } from "../message-reference-store";
@@ -52,7 +53,8 @@ export const MessageRow = memo(function MessageRow({
   replyCount = 0, unreadReplyCount = 0, taskNumber, taskStatus,
 }: MessageRowProps) {
   const { agent, deletedAgent, ownerAvatar, references, reply } = data;
-  const message = useStreamingMessage(data.message);
+  const finalOnly = useAgentReplyMode() === "final";
+  const message = useStreamingMessage(data.message, finalOnly);
   const channel = variant === "channel";
   const root = variant === "thread-root";
   const system = message.sender_role === "system";
@@ -108,6 +110,7 @@ export const MessageRow = memo(function MessageRow({
       </>}
       <MessageAttachments attachments={message.attachments} showImageThumbnails={showImageThumbnails} />
       <MessageArtifacts artifacts={message.artifacts} onOpenArtifact={actions.onArtifact} />
+      {message.delivery_state === "streaming" && !message.body.trim() && <div className="message-stream-state" role="status">{finalOnly ? "Waiting for final reply…" : "Responding…"}</div>}
       {message.delivery_state === "sending" && <div className="message-stream-state sending">Sending...</div>}
       {message.delivery_state === "error" && <div className="message-stream-state error">Response interrupted</div>}
       {channel && reply && <MessageReplySummary reply={reply} replyCount={replyCount} unreadReplyCount={unreadReplyCount} onOpenThread={() => act("thread")} />}

@@ -1,0 +1,21 @@
+# Streaming control framing and final-only replies
+
+Control payloads are filtered **before** writing a message body or enqueueing a message delta/upsert. `StreamControlGate` retains ambiguous line prefixes and unfinished JSON per database/stream key. Ordinary prose is emitted immediately. A closed control goes directly to the existing dispatcher and receipt deduplication; the raw control never becomes message text. Control buffers are capped at 4MiB for unfinished input, with a visible activity error if exceeded.
+
+The parser follows the standalone-line output contract: optional leading whitespace and stdout/stderr wrappers are accepted. An event can follow another event directly. Markers inside ordinary prose, inline quotes, or fenced code examples remain literal, including valid complete JSON; such examples are neither executed nor stripped. This intentionally retires the old compatibility behavior that searched for controls anywhere in a sentence. Incomplete line-start controls are discarded at terminal completion, while ambiguous ordinary text is flushed. Visible paragraph whitespace is preserved between deltas.
+
+Runtime state is removed at completion/error and explicit deletion, and moved when a pending stream key is adopted. Received-but-withheld input counts as existing text for the Codex completed-item fallback, preventing the full item text from being appended again. Legacy callers without an inferred run context retain closed events in the private buffer until terminal processing provides the context; they still never publish raw controls. Existing artifact/message suppression, silent work-item status, freshness checks, and deferred final-message completion remain in place.
+
+Claude uses one stream key across several assistant text blocks. Text-block starts flush the previous framing state and preserve a paragraph boundary before new content. This prevents a new control from becoming part of the preceding prose and avoids concatenating paragraphs around tool work.
+
+Settings → **Agent replies** offers **Live streaming** (default) and **Final result only**. This is a local browser/Tauri display preference, persisted with the other local UI preferences and synchronized across tabs. In final-only mode, channel and thread rows show a waiting indicator while the delivery state is streaming. They do not subscribe to token updates, and a reload/bootstrap cannot reveal a partial body. Final or interrupted output remains readable. Server event delivery and activity progress continue normally; changing this preference does not change other devices or the runtime's execution.
+
+## Verification
+
+- Parser tests split a control at every UTF-8 character boundary, including wrapper/marker/JSON/string escapes and emoji. Character-at-a-time quoted/fenced examples retain exact text; ordinary tokens remain immediate.
+- A SQLite-backed regression streams a large artifact in 47-character chunks. After every chunk, it verifies that `messages.body` is a prefix of the expected prose and that every message delta/upsert in `ui_events` contains no control fragment. The artifact is created once, and paragraph boundaries survive.
+- Regression tests preserve a long inline reference (the original terminal-truncation failure), reject execution of fenced examples, discard incomplete control tails on interruption, clean up deleted/superseded buffers, retain silent work-item behavior, and handle Claude text-block boundaries.
+- `npm run test:streaming` exercises the actual App with native EventSource: final-only mode in channel/thread rows, zero token-driven row renders, setting persistence/reload, final upsert, interruption, and return to streaming. Existing following/scroll-pause, replay, hydration, terminal delta, and render isolation checks also run.
+- `npm run test:sse-push` retains real cross-process/browser latency and query-scaling coverage. `npm test`, `npm run build`, `npm run test:web-sync`, and the full Rust suite cover compatibility.
+
+Activation requires rebuilding the frontend/backend and restarting the app/supervisor. Tests use isolated fixtures; they do not restart the supervisor hosting an active agent turn. Existing historical rows/events are not rewritten.

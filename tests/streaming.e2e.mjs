@@ -229,8 +229,45 @@ try {
   publish({ type: "message_delete", message_id: unseen.id });
   await page.waitForTimeout(250);
   assert.equal(await page.evaluate((key) => window.__streamProbe.store.get(key), unseen.id), undefined);
+  // The preference hides both an already-streaming body and new deltas in
+  // channel/thread rows, persists across reload, then reveals terminal output.
+  await page.getByRole("button", { name: "Open settings", exact: true }).click();
+  await page.getByRole("button", { name: "Final result only", exact: true }).click();
+  if (process.env.LANTOR_STREAMING_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.LANTOR_STREAMING_EVIDENCE_DIR, "reply-settings.png") });
+  assert.equal(await page.evaluate(() => localStorage.getItem("lantor.agentReplyMode")), "final");
+  await page.keyboard.press("Escape");
+  const held = message(204, { body: "Unfinished draft", sender_role: "agent", delivery_state: "streaming", stream_key: `${id(8004)}:response` });
+  const heldReply = message(206, { body: "Unfinished thread", thread_root_id: id(1), sender_role: "agent", delivery_state: "streaming", stream_key: `${id(8006)}:response` });
+  state.messages.push(held, heldReply);
+  publish({ type: "message_upsert", message: held });
+  publish({ type: "message_upsert", message: heldReply });
+  const heldRow = page.locator(`.conversation [data-message-id="${held.id}"]`);
+  const heldReplyRow = page.locator(`.thread [data-message-id="${heldReply.id}"]`);
+  await heldRow.getByText("Waiting for final reply…", { exact: true }).waitFor();
+  await heldReplyRow.getByText("Waiting for final reply…", { exact: true }).waitFor();
+  await reset();
+  for (let n = 0; n < 5; n++) { await chunk(held, " partial"); await chunk(heldReply, " partial"); }
+  assert.equal(await heldRow.locator(".markdown-body").count(), 0);
+  assert.equal(await heldReplyRow.locator(".markdown-body").count(), 0);
+  const finalOnlyStats = await stats();
+  assert.deepEqual(finalOnlyStats.rows, [], "final-only rows do not subscribe to per-token renders");
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await heldRow.getByText("Waiting for final reply…", { exact: true }).waitFor();
+  assert.equal(await heldRow.locator(".markdown-body").count(), 0, "reload cannot expose a partial bootstrap body");
+  Object.assign(held, { body: "Only the complete reply is visible.", delivery_state: "complete" });
+  publish({ type: "message_upsert", message: held });
+  await heldRow.getByText(held.body, { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Open settings", exact: true }).click();
+  await page.getByRole("button", { name: "Live streaming", exact: true }).click();
+  await page.keyboard.press("Escape");
+  // Switching back reveals the current server snapshot; failed replies also
+  // remain readable instead of being hidden forever.
+  Object.assign(heldReply, { body: "Partial reply retained after interruption.", delivery_state: "error" });
+  publish({ type: "message_upsert", message: heldReply });
+  await page.locator(`.conversation [data-message-id="${id(1)}"] .thread-reply-summary`).click();
+  await page.getByText(heldReply.body, { exact: true }).waitFor();
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ sameLine, channel: channelStats, thread: threadStats, forcedLayouts: forced.length + threadForced.length, checks: "bottom-follow, pause/resume, stale snapshot, cursor replay, final upsert, terminal delta, emoji hydration, delete" }));
+  console.log(JSON.stringify({ sameLine, channel: channelStats, thread: threadStats, finalOnly: finalOnlyStats, forcedLayouts: forced.length + threadForced.length, checks: "bottom-follow, pause/resume, stale snapshot, cursor replay, final upsert, terminal delta, emoji hydration, delete" }));
 } finally {
   await browser?.close();
   for (const client of clients) client.end();

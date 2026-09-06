@@ -325,41 +325,17 @@ fn strip_agent_event_prefix(text: &str) -> Option<&str> {
     }
 }
 
-fn find_agent_event_prefix(text: &str) -> Option<(usize, &str)> {
-    let mut offset = 0usize;
-    while let Some(found) = text[offset..].find(AGENT_EVENT_PREFIX) {
-        let marker_index = offset + found;
-        let candidate = &text[marker_index..];
-        if let Some(payload) = strip_agent_event_prefix(candidate) {
-            return Some((marker_index, payload));
-        }
-        offset = marker_index + AGENT_EVENT_PREFIX.len();
-    }
-    None
-}
+#[path = "stream_gate.rs"]
+mod stream_gate;
+pub(crate) use stream_gate::StreamControlGate;
 
-fn split_agent_event_jsons_from_text(
-    text: &str,
-    strip_incomplete_tail: bool,
-) -> (String, Vec<String>) {
-    let mut visible = String::new();
-    let mut events = Vec::new();
-    let mut rest = text;
-
-    while let Some((marker_index, payload)) = find_agent_event_prefix(rest) {
-        visible.push_str(&rest[..marker_index]);
-        let Some(end) = complete_json_object_end(payload) else {
-            if !strip_incomplete_tail {
-                visible.push_str(&rest[marker_index..]);
-            }
-            return (visible.trim().to_owned(), events);
-        };
-        events.push(payload[..end].to_owned());
-        rest = &payload[end..];
-    }
-
-    visible.push_str(rest);
-    (visible.trim().to_owned(), events)
+fn split_agent_event_jsons_from_text(text: &str, strip_incomplete_tail: bool) -> (String, Vec<String>) {
+    let mut gate = StreamControlGate::new(false);
+    let mut output = gate.push(text);
+    let tail = gate.finish(!strip_incomplete_tail);
+    output.visible.push_str(&tail.visible);
+    output.events.extend(tail.events);
+    (output.visible.trim().to_owned(), output.events)
 }
 
 fn complete_json_object_end(value: &str) -> Option<usize> {
@@ -399,7 +375,7 @@ fn complete_json_object_end(value: &str) -> Option<usize> {
 }
 
 pub(crate) fn silent_reply_reason(body: &str) -> Option<String> {
-    let first_line = body.trim().lines().next()?.trim().trim_matches('`').trim();
+    let first_line = body.trim().lines().next()?.trim();
     let rest = first_line.strip_prefix(SILENT_REPLY_PREFIX)?;
     if !rest.is_empty()
         && !rest.starts_with(':')
@@ -1350,35 +1326,19 @@ mod tests {
     }
 
     #[test]
-    fn consumes_inline_streaming_control_events_without_newlines() {
-        let (visible, events) = split_streaming_agent_event_lines(
-            r#"Working patch.LANTOR_EVENT {"type":"activity","title":"Step","detail":"one"}LANTOR_EVENT {"type":"memory_append","body":"saved"}  Final result"#,
-        );
-
-        assert_eq!(
-            events,
-            vec![
-                r#"{"type":"activity","title":"Step","detail":"one"}"#,
-                r#"{"type":"memory_append","body":"saved"}"#,
-            ]
-        );
-        assert_eq!(visible, "Working patch.  Final result");
-    }
-
-    #[test]
-    fn complete_split_consumes_inline_control_events_only_after_newline() {
-        let (visible, events) = split_complete_streaming_agent_event_lines(
-            "Working patch.LANTOR_EVENT {\"type\":\"activity\",\"title\":\"Step\",\"detail\":\"one\"}\npartial LANTOR_EVENT {\"type\":\"activity\",\"title\":\"Later\",\"detail\":\"two\"}",
-        );
-
-        assert_eq!(
-            events,
-            vec![
-                r#"{"type":"activity","title":"Step","detail":"one"}"#,
-                r#"{"type":"activity","title":"Later","detail":"two"}"#,
-            ]
-        );
-        assert_eq!(visible, "Working patch.\npartial");
+    fn inline_control_examples_are_literal_even_with_complete_json() {
+        for body in [
+            r#"Working patch.LANTOR_EVENT {"type":"activity","title":"Step"} Final result"#,
+            "说明 `LANTOR_EVENT {` 后面的文字必须保留。",
+            "引用 LANTOR_EVENT {\"type\":\"activity\"，这是不完整的示例。",
+        ] {
+            let (visible, events) = split_complete_streaming_agent_event_lines(body);
+            let (terminal_visible, terminal_events) = split_terminal_streaming_agent_event_lines(body);
+            assert_eq!(visible, body);
+            assert_eq!(terminal_visible, body);
+            assert!(events.is_empty());
+            assert!(terminal_events.is_empty());
+        }
     }
 
     #[test]
@@ -1464,5 +1424,6 @@ mod tests {
             Some(String::new())
         );
         assert_eq!(silent_reply_reason("LANTOR_SILENT_REPLYING"), None);
+        assert_eq!(silent_reply_reason("`LANTOR_SILENT_REPLY`"), None);
     }
 }

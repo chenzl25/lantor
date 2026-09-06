@@ -24,7 +24,8 @@ use crate::runtime::{
     },
     runtime_environment_changed,
     streaming::{
-        append_streaming_agent_message, ensure_streaming_agent_message, streaming_message_exists,
+        append_streaming_agent_message, ensure_streaming_agent_message,
+        start_streaming_agent_text_block, streaming_message_exists,
     },
 };
 use crate::subscription_status::{
@@ -680,6 +681,32 @@ async fn handle_claude_warm_stdout_line(
                 kind,
                 title,
                 detail,
+            )
+            .await?;
+        }
+    }
+
+    if value.get("type").and_then(Value::as_str) == Some("stream_event")
+        && value.pointer("/event/type").and_then(Value::as_str) == Some("content_block_start")
+        && value
+            .pointer("/event/content_block/type")
+            .and_then(Value::as_str)
+            == Some("text")
+    {
+        let active = runtime.state.lock().await.active.as_ref().map(|active| {
+            (
+                active.channel_id,
+                active.thread_root_id,
+                active.stream_key.clone(),
+            )
+        });
+        if let Some((Some(channel_id), thread_root_id, stream_key)) = active {
+            start_streaming_agent_text_block(
+                pool,
+                agent_id,
+                channel_id,
+                thread_root_id,
+                &stream_key,
             )
             .await?;
         }

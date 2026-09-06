@@ -1,4 +1,5 @@
-import { Image, Monitor, Moon, Sun, Type } from "lucide-react";
+import { Image, MessageSquare, Monitor, Moon, Sun, Type } from "lucide-react";
+import { setAgentReplyMode, useAgentReplyMode } from "../hooks/useAgentReplyMode";
 import { Modal } from "./Modal";
 
 export type ThemePreference = "auto" | "light" | "dark";
@@ -58,6 +59,7 @@ export function SettingsModal({
   onShowImageThumbnailsChange,
   onClose,
 }: SettingsModalProps) {
+  const agentReplyMode = useAgentReplyMode();
   return (
     <Modal open={open} title="Settings" onClose={onClose} width={560}>
       <section className="settings-panel">
@@ -114,6 +116,18 @@ export function SettingsModal({
               >
                 <Type size={17} />
                 <strong>{option.label}</strong>
+              </button>
+            ))}
+          </div>
+        </fieldset>
+        <fieldset className="settings-fieldset">
+          <legend>Agent replies</legend>
+          <div className="theme-choice-grid font-preset-grid">
+            {([ ["streaming", "Live streaming"], ["final", "Final result only"] ] as const).map(([value, label]) => (
+              <button type="button" key={value} className={agentReplyMode === value ? "selected" : ""}
+                aria-pressed={agentReplyMode === value} onClick={() => setAgentReplyMode(value)}>
+                <MessageSquare size={17} />
+                <strong>{label}</strong>
               </button>
             ))}
           </div>

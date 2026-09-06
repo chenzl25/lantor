@@ -1,3 +1,9 @@
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Mutex, OnceLock},
+};
+
 use serde_json::json;
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
@@ -8,8 +14,7 @@ use crate::events::{
     activity::record_agent_activity,
     control::{
         control_event_hides_empty_streaming_reply, handle_streaming_agent_event_json,
-        silent_reply_reason, split_complete_streaming_agent_event_lines,
-        split_terminal_streaming_agent_event_lines,
+        silent_reply_reason, split_terminal_streaming_agent_event_lines, StreamControlGate,
     },
 };
 use crate::freshness::{
@@ -20,6 +25,28 @@ use crate::message_store::load_message_patch_in_tx;
 use crate::ui_notifications::{
     enqueue_ui_event_in_tx, enqueue_ui_work_item_changed_in_tx, reconcile_work_item_change, UiEvent,
 };
+
+struct PendingStream {
+    gate: StreamControlGate,
+    agent_id: Uuid,
+    channel_id: Uuid,
+    thread_root_id: Option<Uuid>,
+    hide_empty_reply: bool,
+    has_visible_text: bool,
+    queued_events: Vec<String>,
+}
+
+type StreamBufferKey = (PathBuf, String);
+fn stream_buffers() -> &'static Mutex<HashMap<StreamBufferKey, PendingStream>> {
+    static BUFFERS: OnceLock<Mutex<HashMap<StreamBufferKey, PendingStream>>> = OnceLock::new();
+    BUFFERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+fn stream_buffer_key(pool: &SqlitePool, stream_key: &str) -> StreamBufferKey {
+    (
+        pool.connect_options().get_filename().to_path_buf(),
+        stream_key.to_owned(),
+    )
+}
 
 pub(crate) const STREAMING_MESSAGE_BODY_LIMIT: usize = 200_000;
 pub(crate) const STREAMING_TRUNCATION_MARKER: &str = "\n\n[stream truncated by Lantor]";
@@ -95,6 +122,94 @@ async fn append_streaming_agent_message_inner(
     if stream_key.trim().is_empty() {
         return Err("stream_key is empty".to_owned());
     }
+    let control_context = load_streaming_control_context(pool, stream_key).await?;
+    if let Some(row) = sqlx::query("select id, delivery_state from messages where stream_key = $1")
+        .bind(stream_key)
+        .fetch_optional(pool)
+        .await
+        .map_err(to_string)?
+    {
+        if row.get::<String, _>("delivery_state") != "streaming" {
+            return Ok(row.get("id"));
+        }
+    }
+    if delta.is_empty() {
+        return ensure_streaming_agent_message(
+            pool,
+            agent_id,
+            channel_id,
+            thread_root_id,
+            stream_key,
+        )
+        .await;
+    }
+    let (output, hide_empty_reply) = {
+        let mut buffers = stream_buffers().lock().unwrap();
+        let state = buffers
+            .entry(stream_buffer_key(pool, stream_key))
+            .or_insert_with(|| PendingStream {
+                gate: StreamControlGate::new(true),
+                agent_id,
+                channel_id,
+                thread_root_id,
+                hide_empty_reply: false,
+                has_visible_text: false,
+                queued_events: Vec::new(),
+            });
+        let mut output = state.gate.push(delta);
+        state.has_visible_text |= !output.visible.trim().is_empty();
+        if !state.has_visible_text {
+            output.visible.clear();
+        }
+        state.hide_empty_reply |= output
+            .events
+            .iter()
+            .any(|json| control_event_hides_empty_streaming_reply(json));
+        if control_context.is_none() {
+            state.queued_events.append(&mut output.events);
+        } else {
+            output.events.splice(..0, state.queued_events.drain(..));
+        }
+        (output, state.hide_empty_reply)
+    };
+    // Persist and broadcast only visible text. Pending controls never touch the
+    // message body or message outbox, even when split across arbitrary deltas.
+    let message_id = append_visible_streaming_agent_message(
+        pool,
+        agent_id,
+        channel_id,
+        thread_root_id,
+        stream_key,
+        &output.visible,
+        complete_on_truncation,
+    )
+    .await?;
+    if let Some((control_agent_id, run_id, _)) = control_context {
+        for json in output.events {
+            handle_streaming_agent_event_json(pool, control_agent_id, run_id, &json).await?;
+        }
+    }
+    if control_context.is_some()
+        && hide_empty_reply
+        && stored_streaming_message_body_is_empty(pool, stream_key).await?
+    {
+        delete_streaming_agent_message(pool, message_id, "stream_event_consumed").await?;
+    }
+    Ok(message_id)
+}
+
+async fn append_visible_streaming_agent_message(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    channel_id: Uuid,
+    thread_root_id: Option<Uuid>,
+    stream_key: &str,
+    delta: &str,
+    complete_on_truncation: bool,
+) -> CommandResult<Uuid> {
+    if stream_key.trim().is_empty() {
+        return Err("stream_key is empty".to_owned());
+    }
     if delta.is_empty() {
         return ensure_streaming_agent_message(
             pool,
@@ -152,17 +267,6 @@ async fn append_streaming_agent_message_inner(
         )
         .await?;
         transaction.commit().await.map_err(to_string)?;
-        if let Some((control_agent_id, run_id, _)) =
-            load_streaming_control_context(pool, stream_key).await?
-        {
-            let _ = consume_complete_streaming_agent_control_lines(
-                pool,
-                control_agent_id,
-                run_id,
-                stream_key,
-            )
-            .await;
-        }
         if truncated && complete_on_truncation {
             queue_agent_message_mentions(pool, message_id).await?;
         }
@@ -232,21 +336,36 @@ async fn append_streaming_agent_message_inner(
     )
     .await?;
     transaction.commit().await.map_err(to_string)?;
-    if let Some((control_agent_id, run_id, _)) =
-        load_streaming_control_context(pool, stream_key).await?
-    {
-        let _ = consume_complete_streaming_agent_control_lines(
-            pool,
-            control_agent_id,
-            run_id,
-            stream_key,
-        )
-        .await;
-    }
     if truncated && complete_on_truncation {
         queue_agent_message_mentions(pool, message_id).await?;
     }
     Ok(message_id)
+}
+
+/// Claude reuses a stream key across separate text blocks. Retain the logical
+/// boundary so a control at the next block's start cannot join prior prose.
+pub(crate) async fn start_streaming_agent_text_block(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    channel_id: Uuid,
+    thread_root_id: Option<Uuid>,
+    stream_key: &str,
+) -> CommandResult<()> {
+    let context = load_streaming_control_context(pool, stream_key).await?;
+    flush_stream_control_buffer(pool, context, stream_key).await?;
+    if !stored_streaming_message_body_is_empty(pool, stream_key).await? {
+        append_visible_streaming_agent_message(
+            pool,
+            agent_id,
+            channel_id,
+            thread_root_id,
+            stream_key,
+            "\n\n",
+            false,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 pub(crate) async fn ensure_streaming_agent_message(
@@ -359,10 +478,30 @@ pub(crate) async fn adopt_streaming_agent_message_key(
         .await?;
     }
     transaction.commit().await.map_err(to_string)?;
+    if message_id.is_some() {
+        let mut buffers = stream_buffers().lock().unwrap();
+        if let Some(pending) = buffers.remove(&stream_buffer_key(pool, pending_stream_key)) {
+            buffers.insert(stream_buffer_key(pool, stream_key), pending);
+        }
+    }
     Ok(message_id)
 }
 
 pub(crate) async fn streaming_message_body_is_empty(
+    pool: &SqlitePool,
+    stream_key: &str,
+) -> CommandResult<bool> {
+    if stream_buffers()
+        .lock()
+        .unwrap()
+        .contains_key(&stream_buffer_key(pool, stream_key))
+    {
+        return Ok(false);
+    }
+    stored_streaming_message_body_is_empty(pool, stream_key).await
+}
+
+async fn stored_streaming_message_body_is_empty(
     pool: &SqlitePool,
     stream_key: &str,
 ) -> CommandResult<bool> {
@@ -380,6 +519,20 @@ async fn delete_streaming_agent_message(
     message_id: Uuid,
     reason: &str,
 ) -> CommandResult<()> {
+    if reason != "stream_event_consumed" {
+        if let Some(key) =
+            sqlx::query_scalar::<_, String>("select stream_key from messages where id=$1")
+                .bind(message_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(to_string)?
+        {
+            stream_buffers()
+                .lock()
+                .unwrap()
+                .remove(&stream_buffer_key(pool, &key));
+        }
+    }
     let mut transaction = pool.begin().await.map_err(to_string)?;
     sqlx::query("delete from messages where id = $1")
         .bind(message_id)
@@ -400,6 +553,10 @@ pub(crate) async fn delete_streaming_agent_message_by_key(
     stream_key: &str,
     reason: &str,
 ) -> CommandResult<()> {
+    stream_buffers()
+        .lock()
+        .unwrap()
+        .remove(&stream_buffer_key(pool, stream_key));
     let message_id: Option<Uuid> =
         sqlx::query_scalar("select id from messages where stream_key = $1")
             .bind(stream_key)
@@ -495,6 +652,8 @@ async fn finish_streaming_agent_message_inner(
             {
                 return Ok(());
             }
+        } else {
+            flush_stream_control_buffer(pool, None, stream_key).await?;
         }
     }
 
@@ -719,6 +878,10 @@ pub(crate) async fn maybe_hide_silent_streaming_reply(
     work_item_id: Option<Uuid>,
     stream_key: &str,
 ) -> CommandResult<bool> {
+    if flush_stream_control_buffer(pool, Some((agent_id, run_id, work_item_id)), stream_key).await?
+    {
+        return Ok(true);
+    }
     let Some(row) = sqlx::query("select id, body from messages where stream_key = $1")
         .bind(stream_key)
         .fetch_optional(pool)
@@ -750,58 +913,73 @@ pub(crate) async fn maybe_hide_silent_streaming_reply(
     Ok(true)
 }
 
-async fn consume_complete_streaming_agent_control_lines(
+async fn flush_stream_control_buffer(
     pool: &SqlitePool,
-    agent_id: Uuid,
-    run_id: Uuid,
+    context: Option<(Uuid, Uuid, Option<Uuid>)>,
     stream_key: &str,
 ) -> CommandResult<bool> {
-    let Some(row) = sqlx::query("select id, body from messages where stream_key = $1")
-        .bind(stream_key)
-        .fetch_optional(pool)
-        .await
-        .map_err(to_string)?
-    else {
+    let pending = stream_buffers()
+        .lock()
+        .unwrap()
+        .remove(&stream_buffer_key(pool, stream_key));
+    let Some(mut state) = pending else {
         return Ok(false);
     };
-    let message_id: Uuid = row.get("id");
-    let body: String = row.get("body");
-    let (visible_body, event_jsons) = split_complete_streaming_agent_event_lines(&body);
-    if event_jsons.is_empty() {
-        return Ok(false);
+    let mut output = state.gate.finish(false);
+    state.has_visible_text |= !output.visible.trim().is_empty();
+    if !state.has_visible_text {
+        output.visible.clear();
     }
-
-    for json in &event_jsons {
-        handle_streaming_agent_event_json(pool, agent_id, run_id, json).await?;
+    state.hide_empty_reply |= output
+        .events
+        .iter()
+        .any(|json| control_event_hides_empty_streaming_reply(json));
+    if !output.visible.is_empty() {
+        // Avoid recursively completing a capped message while flushing its gate.
+        Box::pin(append_visible_streaming_agent_message(
+            pool,
+            state.agent_id,
+            state.channel_id,
+            state.thread_root_id,
+            stream_key,
+            &output.visible,
+            false,
+        ))
+        .await?;
     }
-
-    if visible_body.is_empty()
-        && event_jsons
-            .iter()
-            .any(|json| control_event_hides_empty_streaming_reply(json))
+    if let Some((agent_id, run_id, work_item_id)) = context {
+        for json in state.queued_events.into_iter().chain(output.events) {
+            handle_streaming_agent_event_json(pool, agent_id, run_id, &json).await?;
+            // Legacy callers supply a work item explicitly even when the run
+            // has no work_item_id link. Preserve that silent-reply contract.
+            if let Some(work_item_id) = work_item_id {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) {
+                    if value["type"] == "silent" {
+                        let already_silent: bool = sqlx::query_scalar("select exists(select 1 from agent_work_items where id=$1 and status='silent')")
+                            .bind(work_item_id).fetch_one(pool).await.map_err(to_string)?;
+                        if !already_silent {
+                            mark_work_item_silent(
+                                pool,
+                                agent_id,
+                                run_id,
+                                work_item_id,
+                                value["reason"].as_str().unwrap_or(""),
+                            )
+                            .await?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if context.is_some()
+        && state.hide_empty_reply
+        && stored_streaming_message_body_is_empty(pool, stream_key).await?
     {
-        delete_streaming_agent_message(pool, message_id, "stream_event_consumed").await?;
+        delete_streaming_agent_message_by_key(pool, stream_key, "stream_event_consumed").await?;
         return Ok(true);
     }
-
-    let mut transaction = pool.begin().await.map_err(to_string)?;
-    sqlx::query("update messages set body = $2, updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where id = $1")
-        .bind(message_id)
-        .bind(&visible_body)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-    let message = load_message_patch_in_tx(&mut transaction, message_id).await?;
-    enqueue_ui_event_in_tx(
-        &mut transaction,
-        &UiEvent::MessageUpsert {
-            reason: "stream_event_consumed",
-            message: &message,
-        },
-    )
-    .await?;
-    transaction.commit().await.map_err(to_string)?;
-    Ok(true)
+    Ok(false)
 }
 
 pub(crate) async fn consume_streaming_agent_control_lines(
@@ -811,6 +989,10 @@ pub(crate) async fn consume_streaming_agent_control_lines(
     work_item_id: Option<Uuid>,
     stream_key: &str,
 ) -> CommandResult<bool> {
+    if flush_stream_control_buffer(pool, Some((agent_id, run_id, work_item_id)), stream_key).await?
+    {
+        return Ok(true);
+    }
     if maybe_hide_silent_streaming_reply(pool, agent_id, run_id, work_item_id, stream_key).await? {
         return Ok(true);
     }
