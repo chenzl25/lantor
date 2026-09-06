@@ -22,10 +22,13 @@ import {
   resolveMessageReference,
 } from "../message-references";
 import type { Channel, Message } from "../types";
+import type { MessageReferenceStore } from "../message-reference-store";
+import { StreamingReferenceCard } from "./StreamingReferenceCard";
 import { MessageReferenceCard } from "./MessageReferenceCard";
 
 export type MessageMarkdownProps = {
   body: string;
+  streamingReferenceStore?: MessageReferenceStore;
   references?: Record<string, ResolvedMessageReference>;
   onLocalAgentLink?: (handle: string) => void;
   messages?: Message[];
@@ -205,6 +208,7 @@ function MarkdownTableScroll({ children, scrollKey }: { children?: ReactNode; sc
 export function MarkdownRenderer({
   body,
   references,
+  streamingReferenceStore,
   onLocalAgentLink,
   messages,
   channels,
@@ -227,6 +231,11 @@ export function MarkdownRenderer({
   }, [onOpenReference, sourceMessageId]);
   const markdownComponents = useMemo<Components>(() => ({
     a: ({ children, href, node: _node, ...props }) => {
+      const [, kind, id] = href?.match(/^\/lantor\/reference\/(message|thread)\/([0-9a-fA-F-]{8,36})/) ?? [];
+      if (streamingReferenceStore && (kind === "message" || kind === "thread")) {
+        return <StreamingReferenceCard store={streamingReferenceStore} reference={{ kind, id, token: `[[${kind}:${id}]]` }}
+          onOpen={sourceMessageId && onOpenReference ? handleOpenReference : undefined} />;
+      }
       const reference = referenceFromHref(href, messages, channels, references);
       if (reference) {
         return (
@@ -261,7 +270,7 @@ export function MarkdownRenderer({
       tableIndexRef.current += 1;
       return <MarkdownTableScroll scrollKey={tableScrollKey}>{children}</MarkdownTableScroll>;
     },
-  }), [references, channels, handleOpenReference, messages, onLocalAgentLink, onOpenReference, scrollKey, sourceMessageId]);
+  }), [streamingReferenceStore, references, channels, handleOpenReference, messages, onLocalAgentLink, onOpenReference, scrollKey, sourceMessageId]);
 
   return (
     <div className="markdown-body">

@@ -1,6 +1,8 @@
 import { Bookmark, CheckCircle2, MessageSquare, Quote } from "lucide-react";
 import { memo, useCallback } from "react";
+import { useStreamingMessage } from "../hooks/useStreamingMessage";
 import type { MessageRowData } from "../hooks/useMessageRows";
+import type { MessageReferenceStore } from "../message-reference-store";
 import type { ResolvedMessageReference } from "../message-references";
 import { isPrimaryUnmodifiedClick } from "../message-interactions";
 import { messageHasVisibleContent, wasEdited } from "../message-grouping";
@@ -15,6 +17,7 @@ import { MessageReplySummary } from "./MessageReplySummary";
 
 export type MessageRowAction = "reference" | "save" | "thread" | "expand" | "focus";
 export type MessageRowActions = {
+  referenceStore: MessageReferenceStore;
   onAction: (message: Message, action: MessageRowAction) => void;
   onMenu: (message: Message, x: number, y: number) => void;
   onAgent: (handle: string) => void;
@@ -48,19 +51,21 @@ export const MessageRow = memo(function MessageRow({
   focused = false, jumpFocused, tapFocused = false, showImageThumbnails,
   replyCount = 0, unreadReplyCount = 0, taskNumber, taskStatus,
 }: MessageRowProps) {
-  const { message, agent, deletedAgent, ownerAvatar, references, reply } = data;
+  const { agent, deletedAgent, ownerAvatar, references, reply } = data;
+  const message = useStreamingMessage(data.message);
   const channel = variant === "channel";
   const root = variant === "thread-root";
   const system = message.sender_role === "system";
-  const collapsible = shouldCollapseMessage(message.body);
+  const collapsible = message.delivery_state !== "streaming" && shouldCollapseMessage(message.body);
   const onMount = actions.onMount;
   const setNode = useCallback((node: HTMLElement | null) => onMount?.(message.id, node), [message.id, onMount]);
   const act = (action: MessageRowAction) => actions.onAction(message, action);
   const body = message.body.trim() ? <MessageMarkdown
     body={message.body}
     references={references}
-    sourceMessageId={references ? message.id : undefined}
-    onOpenReference={references ? actions.onReference : undefined}
+    streamingReferenceStore={data.message.delivery_state === "streaming" ? actions.referenceStore : undefined}
+    sourceMessageId={message.id}
+    onOpenReference={actions.onReference}
     onLocalAgentLink={actions.onAgent}
     scrollKey={`message:${message.id}`}
   /> : null;

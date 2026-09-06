@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "test": "tsx --test tests/*.test.ts",
+    "test:streaming": "node tests/streaming.e2e.mjs",
     "test:web-sync": "node tests/web-sync.e2e.mjs",
     "test:web-math": "node tests/web-math.e2e.mjs",
     "test:message-rows": "node tests/message-rows.e2e.mjs",

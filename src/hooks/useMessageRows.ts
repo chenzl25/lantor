@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useLayoutEffect, useMemo, useState } from "react";
+import { MessageReferenceStore } from "../message-reference-store";
 import { parseMessageReferences, type ResolvedMessageReference } from "../message-references";
 import type { Agent, Channel, Message, OwnerProfile, ThreadReplySummary } from "../types";
 import { agentForMessageSender, deletedAgentForMessageSender, ownerAsAvatarAgent } from "../ui-utils";
@@ -28,6 +29,8 @@ export function useMessageRows(
   summaries: Record<string, ThreadReplySummary> = NO_SUMMARIES,
   progressByRoot: Record<string, ActiveAgentProgress[]> = NO_PROGRESS,
 ) {
+  const [referenceStore] = useState(() => new MessageReferenceStore(messages, channels));
+  useLayoutEffect(() => { referenceStore.update(messages, channels); }, [referenceStore, messages, channels]);
   const index = useMemo(() => {
     const replyCounts = new Map<string, number>();
     for (const message of messages) {
@@ -86,8 +89,8 @@ export function useMessageRows(
         reply: summary || progress.length ? { latestAt: summary?.latest?.created_at ?? null, participants, progress } : null,
       }];
     }));
-  }, [visibleMessages, index, agents, owner, hideAgent, summaries, progressByRoot]);
+  }, [visibleMessages, messages, channels, index, agents, owner, hideAgent, summaries, progressByRoot]);
   // Bootstrap replaces JSON objects. Share unchanged rows (and Markdown reference
   // slices) by content; only affected rows cross the memo boundary.
-  return useRetainedValue(rows);
+  return { rows: useRetainedValue(rows), referenceStore };
 }

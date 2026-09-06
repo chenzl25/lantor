@@ -26,6 +26,7 @@ import {
 } from "./apiClient";
 import type { ApiArgsTuple, ApiCommand, ApiResult } from "./api-contract";
 import { applyUiStatePatch, scopesForRefresh, type UiStateScope } from "./ui-state-sync";
+import { streamingMessages, type StreamingMessageSnapshot } from "./streaming-message-store";
 import type { EventSubscription } from "./web-event-stream";
 import { APP_DISPLAY_NAME } from "./branding";
 import {
@@ -96,7 +97,6 @@ import {
 import {
   applyBackendEvent,
   applyBackendEvents,
-  applyMessageDeltas,
   applyOptimisticMutation,
   applySnapshot,
   mergeMessages,
@@ -1577,7 +1577,7 @@ function App() {
     let shouldRetry = false;
 
     try {
-      const message = await apiInvoke("load_message", { messageId });
+      let message = await apiInvoke("load_message", { messageId });
       if (messageHydrationEpochRef.current.get(messageId) === hydrationEpoch) {
         const buffered = messageDeltaBufferRef.current.get(messageId);
         let preserveBufferedDeltas = false;
@@ -1585,6 +1585,7 @@ function App() {
         if (buffered) {
           const reconciliation = reconcileHydratedMessageDelta(message.body, buffered);
           if (reconciliation === "covered") {
+            if (buffered.deliveryState !== "streaming") message = { ...message, delivery_state: buffered.deliveryState };
             messageDeltaBufferRef.current.delete(messageId);
             messageHydrationAttemptsRef.current.delete(messageId);
           } else if (reconciliation === "append") {
@@ -1638,7 +1639,8 @@ function App() {
     const ready = new Map<string, MessageDelta>();
     const waiting = new Map<string, MessageDelta>();
     for (const [messageId, delta] of messageDeltaBufferRef.current) {
-      const baselineBody = hydratedMessageBodiesRef.current.get(messageId);
+      const hydratedBody = hydratedMessageBodiesRef.current.get(messageId);
+      const baselineBody = hydratedBody === undefined ? undefined : streamingMessages.body(messageId, hydratedBody);
       const canApply =
         hydratedMessageIdsRef.current.has(messageId)
         && baselineBody !== undefined
@@ -1649,7 +1651,13 @@ function App() {
         hydratedMessageBodiesRef.current.set(messageId, `${baselineBody}${delta.append}`);
       } else if (canApply) {
         const reconciliation = reconcileHydratedMessageDelta(baselineBody, delta);
-        if (reconciliation === "covered") continue;
+        if (reconciliation === "covered") {
+          if (delta.deliveryState !== "streaming") {
+            ready.set(messageId, delta);
+            hydratedMessageBodiesRef.current.set(messageId, baselineBody);
+          }
+          continue;
+        }
         if (reconciliation === "append") {
           ready.set(messageId, delta);
           hydratedMessageBodiesRef.current.set(messageId, `${baselineBody}${delta.append}`);
@@ -1666,13 +1674,24 @@ function App() {
     if (ready.size === 0) return;
 
     invalidatePendingRefreshResult();
-    setEphemeralData((current) => {
-      const result = applyMessageDeltas(current, ready);
-      if (result.needsRefresh) {
-        requestRefresh(`Failed to refresh ${APP_DISPLAY_NAME} state after message delta`);
-      }
-      return result.data;
-    });
+    const completed = new Map<string, StreamingMessageSnapshot>();
+    for (const [messageId, delta] of ready) {
+      const body = hydratedMessageBodiesRef.current.get(messageId)!;
+      const snapshot = { body, delivery_state: delta.deliveryState };
+      streamingMessages.publish(messageId, snapshot);
+      if (delta.deliveryState !== "streaming") completed.set(messageId, snapshot);
+    }
+    // Some transports end with a terminal delta instead of a full upsert. Merge
+    // the accumulated body once, never map Bootstrap.messages for each token.
+    if (completed.size) {
+      setData((current) => current ? {
+        ...current,
+        messages: current.messages.map((message) => {
+          const snapshot = completed.get(message.id);
+          return snapshot ? { ...message, ...snapshot } : message;
+        }),
+      } : current);
+    }
   }
 
   function queueMessageDelta(
@@ -1944,12 +1963,13 @@ function App() {
     });
   }, [appError, bootReady, data]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    streamingMessages.reconcile(data?.messages ?? []);
     hydratedMessageIdsRef.current = new Set(
       data?.messages.map((message) => message.id) ?? [],
     );
     hydratedMessageBodiesRef.current = new Map(
-      data?.messages.map((message) => [message.id, message.body]) ?? [],
+      data?.messages.map((message) => [message.id, streamingMessages.body(message.id, message.body)]) ?? [],
     );
   }, [data?.messages]);
 
@@ -2725,10 +2745,12 @@ function App() {
     return (data?.messages ?? []).filter((message) => !isProgressOnlyMessage(message));
   }, [data?.messages]);
 
+  const conversationMessages = useMemo(() => (data?.messages ?? []).filter((message) =>
+    message.delivery_state === "streaming" || !isProgressOnlyMessage(message)), [data?.messages]);
   const rootMessages = useMemo(() => {
     if (!channel) return [];
-    return visibleMessages.filter((m) => m.channel_id === channel.id && !m.thread_root_id);
-  }, [visibleMessages, channel]);
+    return conversationMessages.filter((m) => m.channel_id === channel.id && !m.thread_root_id);
+  }, [conversationMessages, channel]);
   const hasMoreRootMessages = Boolean(
     channel &&
     olderChannelBeforeSeqRef.current.has(channel.id) &&
@@ -2773,8 +2795,8 @@ function App() {
 
   const replies = useMemo(() => {
     if (!activeRoot) return [];
-    return visibleMessages.filter((m) => m.thread_root_id === activeRoot.id);
-  }, [visibleMessages, activeRoot]);
+    return conversationMessages.filter((m) => m.thread_root_id === activeRoot.id);
+  }, [conversationMessages, activeRoot]);
 
   const threadReplySummaries = useMemo(() => {
     return visibleMessages.reduce<Record<string, ThreadReplySummary>>((summaries, message) => {

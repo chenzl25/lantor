@@ -26,6 +26,7 @@ import { isImeComposing, isInputComposing } from "../input-utils";
 import { mentionableAgentsForChannel } from "../mentions";
 import { copyText } from "../clipboard";
 import { APP_DISPLAY_NAME } from "../branding";
+import { observeScrollGeometry } from "../scroll-geometry";
 import { isCompactFollowupMessage } from "../message-grouping";
 import { messageShareLink, messageToMarkdown } from "../message-share";
 import { appendMessageReferenceToken, messageReferenceToken, parseMessageReferences, removeMessageReferenceToken, withoutMessageReferenceTokens, type MessageReferenceKind, type ResolvedMessageReference } from "../message-references";
@@ -116,7 +117,6 @@ function taskStatusLabel(status: string) {
   return status.replace("_", " ");
 }
 
-const MESSAGE_LIST_COMPOSER_RESIZE_SUPPRESS_MS = 200;
 
 function compactReferencePreview(body: string) {
   const text = withoutMessageReferenceTokens(body).replace(/\s+/g, " ").trim();
@@ -187,11 +187,10 @@ export function Conversation({
   const messageListContentRef = useRef<HTMLDivElement | null>(null);
   const messageListBottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const bottomScrollFrameRef = useRef<number | null>(null);
-  const bottomScrollTimeoutRef = useRef<number | null>(null);
+  const messageListGeometryRef = useRef({ scrollHeight: 0, clientHeight: 0 });
   const shouldFollowMessagesRef = useRef(true);
   const focusedMessageScrollKeyRef = useRef<string | null>(null);
   const userMessageScrollUntilRef = useRef(0);
-  const messageListFollowSuppressUntilRef = useRef(0);
   const messageListMetricsRef = useRef({ scrollHeight: 0, scrollTop: 0, clientHeight: 0 });
   const olderMessagesLoadInFlightRef = useRef(false);
   const messageListContextEpochRef = useRef(0);
@@ -218,7 +217,7 @@ export function Conversation({
     }
     return { byRoot, dock: activeProgressByAgent(rootMessages, progressIndex, channelId, null) };
   }, [progressIndex, rootMessages, channelId]));
-  const rows = useMessageRows(rootMessages, messages, channels, agents, ownerProfile, isDm, threadReplySummaries, progressState.byRoot);
+  const { rows, referenceStore } = useMessageRows(rootMessages, messages, channels, agents, ownerProfile, isDm, threadReplySummaries, progressState.byRoot);
   const lastRootMessage = rootMessages[rootMessages.length - 1] ?? null;
   const { activeTasks, reviewTasks, unassignedTasks, assignedTasks } = useMemo(() => ({
     activeTasks: visibleTasks.filter((task) => task.status !== "done"),
@@ -297,9 +296,10 @@ export function Conversation({
   const onRowMenu = useEventCallback((message: Message, x: number, y: number) => setMessageMenu({ message, x, y }));
   const onRowArtifact = useEventCallback(openArtifact);
   const rowActions = useMemo<MessageRowActions>(() => ({
+    referenceStore,
     onAction: onRowAction, onMenu: onRowMenu, onArtifact: onRowArtifact,
     onAgent: openLinkedAgentDetail, onReference: handleReferenceOpen,
-  }), [onRowAction, onRowMenu, onRowArtifact, openLinkedAgentDetail, handleReferenceOpen]);
+  }), [onRowAction, onRowMenu, onRowArtifact, openLinkedAgentDetail, handleReferenceOpen, referenceStore]);
 
   function insertMessageReference(message: Message, kind: MessageReferenceKind) {
     const referenceId = kind === "thread" ? (message.thread_root_id ?? message.id) : message.id;
@@ -317,12 +317,6 @@ export function Conversation({
     return messageListDistanceFromBottom(element) < 32;
   }
 
-  function wasMessageListPreviouslyAtBottom() {
-    const metrics = messageListMetricsRef.current;
-    if (metrics.scrollHeight === 0 && metrics.clientHeight === 0) return true;
-    return metrics.scrollHeight - metrics.scrollTop - metrics.clientHeight < 32;
-  }
-
   function messageListDistanceFromBottom(element: HTMLDivElement) {
     return element.scrollHeight - element.scrollTop - element.clientHeight;
   }
@@ -335,43 +329,10 @@ export function Conversation({
     };
   }
 
-  function isMessageListViewportOnlyResize(element: HTMLDivElement) {
-    const previous = messageListMetricsRef.current;
-    return previous.scrollHeight > 0 &&
-      previous.scrollHeight === element.scrollHeight &&
-      previous.clientHeight !== element.clientHeight;
-  }
-
-  function isMessageListComposerResize(element: HTMLDivElement) {
-    const previous = messageListMetricsRef.current;
-    if (previous.scrollHeight === 0 && previous.clientHeight === 0) return false;
-    const clientHeightDelta = element.clientHeight - previous.clientHeight;
-    const scrollHeightDelta = element.scrollHeight - previous.scrollHeight;
-    return clientHeightDelta < 0 && scrollHeightDelta <= 0;
-  }
-
-  function suppressMessageListFollowForComposerResize(element: HTMLDivElement) {
-    if (!isMessageListComposerResize(element)) return false;
-    messageListFollowSuppressUntilRef.current = Date.now() + MESSAGE_LIST_COMPOSER_RESIZE_SUPPRESS_MS;
-    rememberMessageListMetrics(element);
-    return true;
-  }
-
-  function isMessageListFollowSuppressed(element: HTMLDivElement) {
-    if (Date.now() >= messageListFollowSuppressUntilRef.current) return false;
-    if (element.scrollHeight > messageListMetricsRef.current.scrollHeight) return false;
-    rememberMessageListMetrics(element);
-    return true;
-  }
-
   function cancelPendingMessageBottomScroll() {
     if (bottomScrollFrameRef.current !== null) {
       window.cancelAnimationFrame(bottomScrollFrameRef.current);
       bottomScrollFrameRef.current = null;
-    }
-    if (bottomScrollTimeoutRef.current !== null) {
-      window.clearTimeout(bottomScrollTimeoutRef.current);
-      bottomScrollTimeoutRef.current = null;
     }
   }
 
@@ -393,41 +354,19 @@ export function Conversation({
     return event.clientX >= element.getBoundingClientRect().right - scrollbarWidth - 2;
   }
 
-  function shouldSuppressMessageListFollow(element: HTMLDivElement) {
-    return suppressMessageListFollowForComposerResize(element) || isMessageListFollowSuppressed(element);
-  }
-
-  function scrollMessagesToBottomNow(behavior: ScrollBehavior = "auto") {
-    const element = messageListRef.current;
-    if (!element) return false;
-    if (behavior === "auto" && shouldSuppressMessageListFollow(element)) return false;
-    userMessageScrollUntilRef.current = 0;
-    element.scrollTo({ top: element.scrollHeight, behavior });
-    if (behavior === "auto") {
-      shouldFollowMessagesRef.current = true;
-      rememberMessageListMetrics(element);
-    }
-    return true;
-  }
-
-  function scrollMessagesToBottom(behavior: ScrollBehavior = "auto") {
-    if (!scrollMessagesToBottomNow(behavior)) return;
-    if (behavior !== "auto") return;
-    cancelPendingMessageBottomScroll();
+  function scrollMessagesToBottom() {
+    if (bottomScrollFrameRef.current !== null) return;
     bottomScrollFrameRef.current = window.requestAnimationFrame(() => {
       bottomScrollFrameRef.current = null;
-      if (shouldFollowMessagesRef.current) scrollMessagesToBottomNow();
+      const element = messageListRef.current;
+      if (!element || !shouldFollowMessagesRef.current) return;
+      element.scrollTop = messageListGeometryRef.current.scrollHeight || element.scrollHeight;
     });
-    bottomScrollTimeoutRef.current = window.setTimeout(() => {
-      bottomScrollTimeoutRef.current = null;
-      if (shouldFollowMessagesRef.current) scrollMessagesToBottomNow();
-    }, 50);
   }
 
   function handleMessageListScroll() {
     const element = messageListRef.current;
     if (!element) return;
-    if (shouldSuppressMessageListFollow(element)) return;
     if (
       activeTab === "chat" &&
       channel &&
@@ -462,14 +401,15 @@ export function Conversation({
         });
     }
     const atBottom = isMessageListAtBottom(element);
-    const layoutChanged =
-      messageListMetricsRef.current.scrollHeight !== element.scrollHeight
-      || messageListMetricsRef.current.clientHeight !== element.clientHeight;
-    const userScrolling = isUserScrollingMessages();
-    if (atBottom && !userScrolling) {
+    const previous = messageListMetricsRef.current;
+    const layoutChanged = previous.scrollHeight !== element.scrollHeight || previous.clientHeight !== element.clientHeight;
+    const reachedEnd = Math.abs(messageListDistanceFromBottom(element)) <= 1;
+    if (atBottom && (!isUserScrollingMessages() || reachedEnd)) {
       shouldFollowMessagesRef.current = true;
-    } else if (!userScrolling && shouldFollowMessagesRef.current && layoutChanged && wasMessageListPreviouslyAtBottom()) {
-      scrollMessagesToBottom();
+      userMessageScrollUntilRef.current = 0;
+    } else if (!layoutChanged && element.scrollTop < previous.scrollTop) {
+      // Includes keyboard, scrollbar and assistive scrolling, beyond wheel/touch.
+      stopFollowingMessages(element);
     }
     rememberMessageListMetrics(element);
   }
@@ -501,8 +441,6 @@ export function Conversation({
   }
 
   function handleMessageListContentLoad() {
-    const element = messageListRef.current;
-    if (element && shouldSuppressMessageListFollow(element)) return;
     if (!shouldFollowMessagesRef.current) return;
     scrollMessagesToBottom();
   }
@@ -567,6 +505,7 @@ export function Conversation({
   }
 
   useLayoutEffect(() => {
+    messageListGeometryRef.current = { scrollHeight: 0, clientHeight: 0 };
     shouldFollowMessagesRef.current = true;
     scrollMessagesToBottom();
   }, [channel?.id]);
@@ -578,58 +517,19 @@ export function Conversation({
 
   useEffect(() => () => {
     if (bottomScrollFrameRef.current !== null) window.cancelAnimationFrame(bottomScrollFrameRef.current);
-    if (bottomScrollTimeoutRef.current !== null) window.clearTimeout(bottomScrollTimeoutRef.current);
   }, []);
 
   useEffect(() => {
     if (activeTab !== "chat") return;
     const root = messageListRef.current;
     const content = messageListContentRef.current;
-    const bottomAnchor = messageListBottomAnchorRef.current;
-    if (!root || !content || !bottomAnchor) return;
-    function keepBottomVisible(source: "viewport" | "content") {
-      const list = messageListRef.current;
-      if (!list) return;
-      if (shouldSuppressMessageListFollow(list)) return;
-      if (source === "viewport" && isMessageListViewportOnlyResize(list)) {
-        rememberMessageListMetrics(list);
-        return;
-      }
-      if (shouldFollowMessagesRef.current && !isUserScrollingMessages()) {
-        scrollMessagesToBottom();
-      } else {
-        rememberMessageListMetrics(list);
-      }
-    }
-    const observer = typeof ResizeObserver === "undefined"
-      ? null
-      : new ResizeObserver((entries) => {
-        const hasContentResize = entries.some((entry) => entry.target === content);
-        keepBottomVisible(hasContentResize ? "content" : "viewport");
-      });
-    const intersectionObserver = typeof IntersectionObserver === "undefined"
-      ? null
-      : new IntersectionObserver((entries) => {
-        if (!shouldFollowMessagesRef.current) return;
-        if (entries.some((entry) => !entry.isIntersecting || entry.intersectionRatio < 1)) {
-          keepBottomVisible("viewport");
-        }
-      }, { root, threshold: 1 });
-    const mutationObserver = typeof MutationObserver === "undefined"
-      ? null
-      : new MutationObserver(() => keepBottomVisible("content"));
-    observer?.observe(root);
-    observer?.observe(content);
-    intersectionObserver?.observe(bottomAnchor);
-    mutationObserver?.observe(content, { childList: true, characterData: true, subtree: true });
-    const handleWindowResize = () => keepBottomVisible("viewport");
-    window.addEventListener("resize", handleWindowResize);
-    return () => {
-      observer?.disconnect();
-      intersectionObserver?.disconnect();
-      mutationObserver?.disconnect();
-      window.removeEventListener("resize", handleWindowResize);
-    };
+    if (!root || !content) return;
+    return observeScrollGeometry(root, content, (geometry, viewportOnly) => {
+      messageListGeometryRef.current = geometry;
+      // Composer resizing must keep the reading position. Follow the next
+      // content growth using the user's existing stick-to-bottom choice.
+      if (!viewportOnly && shouldFollowMessagesRef.current) scrollMessagesToBottom();
+    });
   }, [activeTab, channel?.id]);
 
   useEffect(() => {
