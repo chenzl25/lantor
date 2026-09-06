@@ -84,6 +84,8 @@ fn model_cost_micros(runtime: &str, model: &str, input_tokens: i64, output_token
         } else {
             (3_000_000_i64, 15_000_000_i64)
         }
+    } else if runtime == "codex" && model == "gpt-6-astra" {
+        (10_000_000_i64, 50_000_000_i64)
     } else if model.contains("mini") {
         (150_000_i64, 600_000_i64)
     } else if model.contains("codex") {
@@ -257,6 +259,14 @@ pub(crate) async fn agent_budget_exhausted(
 mod tests {
     use super::*;
     use crate::test_support::{drop_test_schema, insert_test_agent, test_pool};
+
+    #[test]
+    fn gpt_6_astra_usage_uses_current_public_rate() {
+        assert_eq!(
+            model_cost_micros("codex", "gpt-6-astra", 1_000_000, 1_000_000),
+            60_000_000
+        );
+    }
 
     #[test]
     fn claude_fable_usage_uses_current_public_rate() {

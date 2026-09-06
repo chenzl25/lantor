@@ -70,7 +70,8 @@ fn normalize_reasoning_effort(
             .to_ascii_lowercase();
         let model = model.trim().to_ascii_lowercase();
         let supports_ultra = matches!(model.as_str(), "gpt-5.6" | "gpt-5.6-sol" | "gpt-5.6-terra");
-        let supports_max = supports_ultra || model == "gpt-5.6-luna";
+        let supports_max =
+            supports_ultra || matches!(model.as_str(), "gpt-6-astra" | "gpt-5.6-luna");
         return match effort.as_str() {
             "low" | "medium" | "high" | "xhigh" => Ok(effort),
             "max" if supports_max => Ok(effort),
@@ -585,6 +586,7 @@ mod tests {
     #[test]
     fn codex_reasoning_effort_is_limited_by_model_capability() {
         for (model, effort) in [
+            ("gpt-6-astra", "max"),
             ("gpt-5.6", "ultra"),
             ("gpt-5.6-sol", "max"),
             ("gpt-5.6-sol", "ultra"),
@@ -600,6 +602,7 @@ mod tests {
         }
 
         for (model, effort) in [
+            ("gpt-6-astra", "ultra"),
             ("gpt-5.6-luna", "ultra"),
             ("gpt-5.5", "max"),
             ("gpt-5.5", "ultra"),

@@ -602,6 +602,7 @@ export const RUNTIME_PRESETS: Record<string, { label: string; defaultModel: stri
     defaultModel: "gpt-5.6-sol",
     commandName: "codex",
     models: [
+      "gpt-6-astra",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
@@ -623,6 +624,7 @@ export const RUNTIME_PRESETS: Record<string, { label: string; defaultModel: stri
 const MODEL_LABELS: Record<string, string> = {
   fable: "Claude Fable 5.1",
   "claude-fable-5-1": "Claude Fable 5.1",
+  "gpt-6-astra": "GPT-6 Astra",
   "gpt-5.6-sol": "GPT-5.6 Sol",
   "gpt-5.6-terra": "GPT-5.6 Terra",
   "gpt-5.6-luna": "GPT-5.6 Luna",
@@ -651,7 +653,7 @@ function maxCodexReasoningEffort(model: string) {
   ) {
     return "ultra";
   }
-  if (normalizedModel === "gpt-5.6-luna") {
+  if (normalizedModel === "gpt-6-astra" || normalizedModel === "gpt-5.6-luna") {
     return "max";
   }
   return "xhigh";
