@@ -25,6 +25,8 @@ import {
   subscribeBackendEvents,
 } from "./apiClient";
 import type { ApiArgsTuple, ApiCommand, ApiResult } from "./api-contract";
+import { applyUiStatePatch, scopesForRefresh, type UiStateScope } from "./ui-state-sync";
+import type { EventSubscription } from "./web-event-stream";
 import { APP_DISPLAY_NAME } from "./branding";
 import {
   resolveAppModalHistoryPop,
@@ -916,6 +918,12 @@ function App() {
   const activityFeedRequestRef = useRef(0);
   const messageSearchRequestRef = useRef(0);
   const wikiSearchRequestRef = useRef(0);
+  const backendSubscriptionRef = useRef<EventSubscription | null>(null);
+  const uiStateScopesRef = useRef(new Set<UiStateScope>());
+  const uiStateLoadingScopesRef = useRef(new Set<UiStateScope>());
+  const uiStateVersionsRef = useRef(new Map<UiStateScope, number>());
+  const uiStatePromiseRef = useRef<Promise<void> | null>(null);
+  const uiStateTimerRef = useRef<number | null>(null);
   const refreshTimerRef = useRef<number | null>(null);
   const refreshInFlightRef = useRef(false);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
@@ -1116,6 +1124,7 @@ function App() {
   async function refresh(includeOptimistic = true, preferredActiveChannelId?: string) {
     const perf = shouldEnablePerfTelemetry() ? createPerfDraft("full-refresh") : null;
     const refreshInvalidation = refreshInvalidationRef.current;
+    const scopeVersions = new Map(uiStateVersionsRef.current);
     const bootstrapChannelId = preferredActiveChannelId || activeChannelIdRef.current;
     const bootstrapArgs = {
       currentChannelOnly: true,
@@ -1201,7 +1210,11 @@ function App() {
       for (const messageId of reconciled.retainedHistoricalMessageIds) {
         loadedHistoricalMessageIdsRef.current.add(messageId);
       }
-      return reconciled.data;
+      if (!current) return reconciled.data;
+      const liveScopes = Object.fromEntries(Array.from(uiStateVersionsRef.current)
+        .filter(([scope, version]) => version !== scopeVersions.get(scope))
+        .map(([scope]) => [scope, current[scope]]));
+      return { ...reconciled.data, ...liveScopes };
     });
     setActiveChannelId((prev) => {
       // Use the merged list so a still-optimistic channel keeps the active
@@ -1221,7 +1234,7 @@ function App() {
     }
   }
 
-  // Single-flight refresh shared by SSE fallbacks and mutations. If a refresh
+  // Single-flight snapshot recovery for expired cursors or unsupported events. If a refresh
   // is already running, mark a follow-up as queued and return the in-flight
   // promise instead of starting a concurrent full bootstrap.
   function refreshExclusive(fallback = `Failed to refresh ${APP_DISPLAY_NAME} state`): Promise<void> {
@@ -1259,6 +1272,76 @@ function App() {
     refreshTimerRef.current = window.setTimeout(() => {
       refreshTimerRef.current = null;
       refreshWithError(fallback);
+    }, UI_REFRESH_DEBOUNCE_MS);
+  }
+
+  function queueUiState(scopes: UiStateScope[]) {
+    for (const scope of scopes) {
+      uiStateScopesRef.current.add(scope);
+      uiStateVersionsRef.current.set(scope, (uiStateVersionsRef.current.get(scope) ?? 0) + 1);
+    }
+  }
+
+  function flushUiState(): Promise<void> {
+    if (uiStatePromiseRef.current) return uiStatePromiseRef.current;
+    const pending = (async () => {
+      while (uiStateScopesRef.current.size > 0) {
+        const scopes = Array.from(uiStateScopesRef.current);
+        uiStateScopesRef.current.clear();
+        const versions = new Map(uiStateVersionsRef.current);
+        uiStateLoadingScopesRef.current = new Set(scopes);
+        let patch;
+        try {
+          patch = await apiInvoke("load_ui_state", { scopes });
+        } catch (err) {
+          // Retain failed invalidations for the next foreground/periodic retry.
+          for (const scope of scopes) uiStateScopesRef.current.add(scope);
+          throw err;
+        } finally {
+          uiStateLoadingScopesRef.current.clear();
+        }
+        for (const scope of scopes) {
+          if (versions.get(scope) !== uiStateVersionsRef.current.get(scope)) delete patch[scope];
+        }
+        const optimistic = {
+          messages: new Map(optimisticMessagesRef.current),
+          channels: new Map(optimisticChannelsRef.current),
+          removedChannelIds: new Set(optimisticRemovedChannelsRef.current),
+          savedToggles: new Map(pendingSavedToggleOverridesRef.current),
+        };
+        setData((current) => current ? applyUiStatePatch(current, patch, optimistic) : current);
+        if (patch.channels) {
+          const channels = patch.channels;
+          for (const channel of channels) optimisticChannelsRef.current.delete(channel.id);
+          for (const id of optimisticRemovedChannelsRef.current) {
+            if (!channels.some((channel) => channel.id === id)) optimisticRemovedChannelsRef.current.delete(id);
+          }
+          const selectable = channels.filter((channel) => !optimistic.removedChannelIds.has(channel.id));
+          for (const channel of optimistic.channels.values()) {
+            if (!selectable.some((item) => item.id === channel.id) && !optimistic.removedChannelIds.has(channel.id)) selectable.push(channel);
+          }
+          setActiveChannelId((current) => resolveActiveChannelId(selectable, current));
+        }
+      }
+    })().finally(() => { uiStatePromiseRef.current = null; });
+    uiStatePromiseRef.current = pending;
+    return pending;
+  }
+
+  function reloadUiState(scopes: UiStateScope[]): Promise<void> {
+    queueUiState(scopes);
+    return flushUiState();
+  }
+
+  function requestUiState(scopes: UiStateScope[]) {
+    queueUiState(scopes);
+    if (uiStateTimerRef.current !== null) return;
+    uiStateTimerRef.current = window.setTimeout(() => {
+      uiStateTimerRef.current = null;
+      void flushUiState().catch((err) => {
+        setAppError(errorMessage(err, "Failed to synchronize updates"));
+        console.error(err);
+      });
     }, UI_REFRESH_DEBOUNCE_MS);
   }
 
@@ -1468,7 +1551,10 @@ function App() {
         activityFeedMessageIdsRef.current.delete(messageId);
         knownMessageIdsRef.current?.delete(messageId);
       }
-      if (result.needsRefresh) requestRefresh(refreshFallback);
+      if (result.needsRefresh) {
+        if (event.type === "agent_subscription_status_upsert") requestUiState(["agents"]);
+        else requestRefresh(refreshFallback);
+      }
       return result.data;
     };
     setData(update);
@@ -1725,6 +1811,25 @@ function App() {
   function handleBackendEvent(payload: unknown) {
     try {
       for (const event of parseBackendEventPayload(payload)) {
+        // A collection read begun before a live entity update cannot overwrite
+        // that update. Re-read only collections already in flight.
+        const changedScopes: Partial<Record<UiBackendEvent["type"], UiStateScope>> = {
+          activity_upsert: "agent_activities",
+          agent_run_upsert: "agent_runs",
+          agent_subscription_status_upsert: "agents",
+          work_item_upsert: "agent_work_items",
+          artifact_upsert: "artifacts",
+          channel_member_upsert: "channel_members",
+          channel_member_remove: "channel_members",
+        };
+        const changedScope = changedScopes[event.type];
+        if (changedScope && uiStateLoadingScopesRef.current.has(changedScope)) queueUiState([changedScope]);
+        if (event.type === "refresh") {
+          const scopes = scopesForRefresh(event.reason);
+          if (scopes) requestUiState(scopes);
+          else requestRefresh(`Failed to recover ${APP_DISPLAY_NAME} state (${event.reason ?? "unknown event"})`);
+          continue;
+        }
         if (event.type === "message_upsert") {
           // Semantic message events (final body, owner/system messages, errors)
           // bypass the ephemeral buffer; they are decisive and inexpensive.
@@ -1732,6 +1837,9 @@ function App() {
           // the existing message_delta path, not here, so re-batching them
           // would race with deltas on the same message id.
           applyMessageUpsert(event.message);
+          if (event.message.delivery_state !== "streaming") {
+            requestUiState(["channels", "thread_activities", ...(event.message.is_task ? ["tasks" as const] : [])]);
+          }
           continue;
         }
         if (event.type === "message_delta") {
@@ -1746,6 +1854,7 @@ function App() {
         }
         if (event.type === "message_delete") {
           applyMessageDelete(event.message_id);
+          requestUiState(["channels", "thread_activities", "tasks", "saved_messages", "artifacts"]);
           continue;
         }
         if (event.type === "activity_upsert") {
@@ -1797,13 +1906,8 @@ function App() {
   ): Promise<ApiResult<C>> {
     try {
       const result = await apiInvoke(command, ...args);
-      // Wait out any refresh that was already running (it may predate this
-      // mutation), then run one through the shared single-flight guard so the
-      // caller still observes post-mutation state without concurrent bootstraps.
-      if (refreshInFlightRef.current && refreshPromiseRef.current) {
-        await refreshPromiseRef.current.catch(() => {});
-      }
-      await refreshExclusive(`${command} refresh failed`);
+      // Committed mutations publish entity events or scoped invalidations.
+      // Replay/foreground reconciliation also uses those same durable events.
       return result;
     } catch (err) {
       const message = errorMessage(err, `${command} failed`);
@@ -1989,82 +2093,76 @@ function App() {
 
   useEffect(() => {
     if (backendEventStartCursor === null) return;
-    let unlisten: (() => void) | null = null;
     let disposed = false;
+    let generation = 0;
+    let connecting = false;
+    let foregroundTimer: number | null = null;
 
-    function connect() {
-      if (disposed || unlisten) return;
-      subscribeBackendEvents(handleBackendEvent, {
-        cursor: uiEventCursorRef.current ?? backendEventStartCursor,
-        onCursor: (cursor) => {
-          uiEventCursorRef.current = Math.max(uiEventCursorRef.current ?? 0, cursor);
-        },
-        onReconnect: () => {
-          requestRefresh(`Failed to refresh ${APP_DISPLAY_NAME} state after event stream reconnect`);
-        },
-      })
-        .then((handler) => {
-          if (disposed) {
-            handler();
-            return;
-          }
-          unlisten = handler;
-        })
-        .catch((err) => {
-          if (disposed) return;
-          setAppError(errorMessage(err, `Failed to subscribe to ${APP_DISPLAY_NAME} updates`));
-          console.error(err);
+    async function connect() {
+      if (disposed || connecting || backendSubscriptionRef.current) return;
+      connecting = true;
+      const connectionGeneration = ++generation;
+      try {
+        const subscription = await subscribeBackendEvents(handleBackendEvent, {
+          cursor: uiEventCursorRef.current ?? backendEventStartCursor,
+          onCursor: (cursor) => { uiEventCursorRef.current = cursor; },
         });
+        if (disposed || connectionGeneration !== generation) { subscription(); return; }
+        backendSubscriptionRef.current = subscription;
+      } catch (err) {
+        if (!disposed) console.error("Failed to subscribe to backend updates", err);
+      } finally {
+        if (connectionGeneration === generation) connecting = false;
+      }
     }
 
     function disconnect() {
-      unlisten?.();
-      unlisten = null;
+      generation += 1;
+      connecting = false;
+      backendSubscriptionRef.current?.();
+      backendSubscriptionRef.current = null;
     }
 
-    function onPageHide() {
-      disconnect();
+    async function reconcile() {
+      if (disposed || document.visibilityState !== "visible") return;
+      await connect();
+      await backendSubscriptionRef.current?.reconcile();
+      if (uiStateScopesRef.current.size > 0) await flushUiState();
     }
 
-    function onPageShow() {
-      connect();
-      requestRefresh(`Failed to refresh ${APP_DISPLAY_NAME} state after page restore`);
+    function onForeground() {
+      if (document.visibilityState !== "visible" || foregroundTimer !== null) return;
+      foregroundTimer = window.setTimeout(() => {
+        foregroundTimer = null;
+        void reconcile().catch((err) => console.error("Failed to reconcile foreground state", err));
+      }, 100);
     }
 
-    connect();
-    window.addEventListener("pagehide", onPageHide);
-    window.addEventListener("pageshow", onPageShow);
+    void connect();
+    window.addEventListener("pagehide", disconnect);
+    window.addEventListener("pageshow", onForeground);
+    window.addEventListener("focus", onForeground);
+    window.addEventListener("online", onForeground);
+    document.addEventListener("visibilitychange", onForeground);
+    const timer = window.setInterval(() => {
+      if (!isTextInput(document.activeElement)) onForeground();
+    }, UI_RECONCILE_INTERVAL_MS);
     return () => {
       disposed = true;
-      window.removeEventListener("pagehide", onPageHide);
-      window.removeEventListener("pageshow", onPageShow);
-      if (refreshTimerRef.current !== null) {
-        window.clearTimeout(refreshTimerRef.current);
-      }
-      if (messageDeltaFlushTimerRef.current !== null) {
-        window.clearTimeout(messageDeltaFlushTimerRef.current);
-      }
+      window.clearInterval(timer);
+      window.removeEventListener("pagehide", disconnect);
+      window.removeEventListener("pageshow", onForeground);
+      window.removeEventListener("focus", onForeground);
+      window.removeEventListener("online", onForeground);
+      document.removeEventListener("visibilitychange", onForeground);
+      if (foregroundTimer !== null) window.clearTimeout(foregroundTimer);
+      if (uiStateTimerRef.current !== null) window.clearTimeout(uiStateTimerRef.current);
+      if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current);
+      if (messageDeltaFlushTimerRef.current !== null) window.clearTimeout(messageDeltaFlushTimerRef.current);
       cancelEphemeralFlushTimers();
       disconnect();
     };
   }, [backendEventStartCursor]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      // Live backend events are the primary synchronization path. Keep only a
-      // slow safety-net reconciliation for missed events, and never run it while
-      // the user is editing text: even a compact snapshot should not contend
-      // with keystrokes on the WebKit main thread.
-      if (
-        document.visibilityState !== "visible"
-        || isTextInput(document.activeElement)
-      ) {
-        return;
-      }
-      requestRefresh(`Failed to refresh ${APP_DISPLAY_NAME} state`);
-    }, UI_RECONCILE_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     if (!data) return;
@@ -3275,13 +3373,27 @@ function App() {
     void loadChannelMessages(activeChannelId);
   }, [activeChannelId, activeChannelExists]);
 
-  // Depend on primitives only: re-run on channel switch, on new local messages,
-  // or when the snapshot reports unread — never on a mere array-identity change
-  // from a bootstrap refresh. The backend additionally skips the refresh event
-  // when the read marker does not move, so this converges instead of looping.
+  // Coalesce bursts, skip channels already read, and never mark a hidden tab read.
   useEffect(() => {
-    if (!activeChannelId || !activeChannelExists) return;
-    apiInvoke("mark_channel_read", { channelId: activeChannelId }).catch((err) => console.error(err));
+    if (!activeChannelId || !activeChannelExists || activeChannelUnreadCount <= 0) return;
+    let timer: number | null = null;
+    function scheduleRead() {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = null;
+      if (document.visibilityState !== "visible") return;
+      timer = window.setTimeout(() => {
+        timer = null;
+        if (document.visibilityState !== "visible") return;
+        void apiInvoke("mark_channel_read", { channelId: activeChannelId })
+          .catch((err) => console.error(err));
+      }, 300);
+    }
+    scheduleRead();
+    document.addEventListener("visibilitychange", scheduleRead);
+    return () => {
+      if (timer !== null) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", scheduleRead);
+    };
   }, [activeChannelId, activeChannelExists, activeChannelMessageCount, activeChannelUnreadCount]);
 
   useEffect(() => {
@@ -3371,7 +3483,7 @@ function App() {
       setShowMobileSidebar(false);
       openThread(null, result.channelId);
     }
-    requestRefresh();
+    requestUiState(["channels", "channel_members"]);
   }
 
   async function saveChannel() {
@@ -3453,7 +3565,7 @@ function App() {
             returnToMobileHome();
           }
         }
-        requestRefresh();
+        requestUiState(["channels"]);
       },
     });
   }
@@ -4054,13 +4166,7 @@ function App() {
       });
     });
     try {
-      // Bypass `mutate`'s blocking `await refresh()` — the backend emits a
-      // targeted `channel_member_upsert` / `channel_member_remove` event
-      // which `handleBackendEvent` patches into `channel_members` locally,
-      // so the full bootstrap round-trip is no longer needed to confirm
-      // the state. Avoiding it removes the ~hundred-ms tail that made the
-      // ChannelAgentsModal Add button feel laggy on mobile after the
-      // optimistic flip.
+      // Membership events confirm this optimistic update by entity id.
       await apiInvoke("set_channel_agent_membership", {
         channelId,
         agentId,
@@ -4072,7 +4178,7 @@ function App() {
       // Refresh in the background to revert the optimistic flip back to
       // whatever the backend actually persisted; we deliberately do not
       // await it so the error toast renders immediately.
-      refresh().catch(() => undefined);
+      void reloadUiState(["channel_members"]).catch(() => undefined);
     }
   }
 
@@ -4105,7 +4211,7 @@ function App() {
       workingDirectory: nextForm.workingDirectory,
       dailyBudgetMicros: budgetMicrosFromForm(nextForm.dailyBudgetUsd),
     });
-    await refresh();
+    await reloadUiState(["agents", "channel_members"]);
     setAgentDraft(newAgentDraft());
     setShowCreateAgentModal(false);
     setReturnToCreateChannelAfterAgent(false);
@@ -4273,7 +4379,7 @@ function App() {
   async function openDmWithAgent(agent: Agent) {
     try {
       const channelId = await apiInvoke("open_dm_with_agent", { agentId: agent.id });
-      await refresh();
+      await reloadUiState(["channels", "channel_members"]);
       setSelectedAgentId(null);
       setActiveChannelId(channelId);
       restoreRememberedThreadForChannel(channelId);
@@ -4542,14 +4648,14 @@ function App() {
       operations.push(apiInvoke("mark_channel_read", { channelId: item.channelId }));
     }
     await Promise.all(operations);
-    await refresh();
+    await reloadUiState(["read_inbox_items", "dismissed_inbox_items", "channels"]);
   }
 
   async function dismissActivityFeedItem(item: ActivityFeedItem) {
     const dismissedUntil = activityFeedItemCutoff(item);
     setDismissedActivityFeedItems((current) => ({ ...current, [item.dismissId]: dismissedUntil }));
     await persistDismissedActivityFeedItems([item], dismissedUntil);
-    await refresh();
+    await reloadUiState(["read_inbox_items", "dismissed_inbox_items", "channels"]);
   }
 
   async function dismissActivityFeedItems(items: ActivityFeedItem[]) {
@@ -4570,7 +4676,7 @@ function App() {
       return next;
     });
     await persistDismissedActivityFeedItems(items, (item) => cutoffByDismissId.get(item.dismissId) ?? item.timestamp);
-    await refresh();
+    await reloadUiState(["read_inbox_items", "dismissed_inbox_items", "channels"]);
   }
 
   async function markAllActivityFeedRead(items: ActivityFeedItem[]) {
@@ -4617,7 +4723,7 @@ function App() {
         (channelId) => apiInvoke("mark_channel_read", { channelId }),
       ),
     ]);
-    await refresh();
+    await reloadUiState(["read_inbox_items", "dismissed_inbox_items", "channels"]);
   }
 
   function startSidebarResize(event: ReactPointerEvent<HTMLButtonElement>) {

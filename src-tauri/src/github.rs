@@ -2068,6 +2068,16 @@ pub(crate) async fn create_github_issue_task_record(
     .execute(&mut *transaction)
     .await
     .map_err(to_string)?;
+    let message =
+        crate::message_store::load_message_patch_in_tx(&mut transaction, thread_root_id).await?;
+    enqueue_ui_event_in_tx(
+        &mut transaction,
+        &UiEvent::MessageUpsert {
+            reason: "github_issue_task_created",
+            message: &message,
+        },
+    )
+    .await?;
     enqueue_ui_event_in_tx(
         &mut transaction,
         &UiEvent::Refresh {
@@ -2200,6 +2210,16 @@ pub(crate) async fn rereview_github_review_task_record(
     .execute(&mut *transaction)
     .await
     .map_err(to_string)?;
+    let message =
+        crate::message_store::load_message_patch_in_tx(&mut transaction, source_message_id).await?;
+    enqueue_ui_event_in_tx(
+        &mut transaction,
+        &UiEvent::MessageUpsert {
+            reason: "github_review_task_reanchored",
+            message: &message,
+        },
+    )
+    .await?;
     enqueue_ui_event_in_tx(
         &mut transaction,
         &UiEvent::Refresh {
@@ -2325,6 +2345,16 @@ pub(crate) async fn create_github_review_task_record(
     .execute(&mut *transaction)
     .await
     .map_err(to_string)?;
+    let message =
+        crate::message_store::load_message_patch_in_tx(&mut transaction, thread_root_id).await?;
+    enqueue_ui_event_in_tx(
+        &mut transaction,
+        &UiEvent::MessageUpsert {
+            reason: "github_review_task_created",
+            message: &message,
+        },
+    )
+    .await?;
     enqueue_ui_event_in_tx(
         &mut transaction,
         &UiEvent::Refresh {

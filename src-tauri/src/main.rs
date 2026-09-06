@@ -37,6 +37,7 @@ mod task_store;
 mod test_support;
 mod text;
 mod ui_notifications;
+mod ui_state;
 mod usage;
 mod web;
 mod web_upload;
@@ -98,6 +99,7 @@ use runtime::supervisor::run_supervisor;
 use system_commands::{
     check_runtime, complete_startup_splash, download_attachment, open_external_url,
 };
+use ui_state::load_ui_state;
 use ui_notifications::{replay_ui_events, spawn_ui_events_pruner, spawn_ui_refresh_listener};
 
 const WINDOW_STATE_FILE: &str = "window-state.json";
@@ -320,6 +322,7 @@ pub fn run() {
             open_external_url,
             retry_agent_work,
             replay_ui_events,
+            load_ui_state,
             load_activity_messages,
             load_channel_messages,
             load_channel_previews,

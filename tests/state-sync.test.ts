@@ -598,3 +598,24 @@ test("optimistic saved and membership mutations update only their owned slice", 
   assert.deepEqual(withoutMember?.channel_members, []);
   assert.strictEqual(withoutMember?.saved_messages[0], savedEntry);
 });
+
+test("scoped state patches preserve history, project task status and remove deleted channels", async () => {
+  const { applyUiStatePatch, scopesForRefresh } = await import("../src/ui-state-sync");
+  const current = bootstrap({
+    channels: [channel("keep"), channel("deleted")],
+    messages: [message("root", "keep", { is_task: true, task_number: 1, task_status: "todo" }), message("history", "keep"), message("removed", "deleted")],
+  });
+  const updated = applyUiStatePatch(current, {
+    channels: [channel("keep", { unread_count: 2 })],
+    tasks: [{ id: "task", message_id: "root", channel_id: "keep", number: 1, status: "done" } as Bootstrap["tasks"][number]],
+  }, { messages: new Map(), channels: new Map([["optimistic", channel("optimistic")]]), removedChannelIds: new Set(), savedToggles: new Map() });
+  assert.deepEqual(updated.channels.map((value) => value.id), ["keep", "optimistic"]);
+  assert.deepEqual(updated.messages.map((value) => value.id), ["root", "history"]);
+  assert.equal(updated.messages[0].task_status, "done");
+  assert.equal(updated.messages[1], current.messages[1], "loaded history keeps object identity");
+  assert.equal(updated.agent_activities, current.agent_activities);
+  assert.deepEqual(scopesForRefresh("channel_read"), ["channels"]);
+  assert.ok(scopesForRefresh("task_status_updated")?.includes("tasks"));
+  assert.equal(scopesForRefresh("event_replay_gap"), null);
+  assert.equal(scopesForRefresh("future_unknown_event"), null);
+});

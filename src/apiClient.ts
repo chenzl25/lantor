@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke as tauriInvoke } from "@tauri-apps/api/core";
-import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen as tauriListen } from "@tauri-apps/api/event";
 
 import type {
   ApiArgs,
@@ -7,6 +7,8 @@ import type {
   ApiCommand,
   ApiResult,
 } from "./api-contract";
+
+import { subscribeWebEvents, type EventSubscription } from "./web-event-stream";
 
 const UI_REFRESH_EVENT = "lantor://refresh";
 
@@ -188,7 +190,6 @@ export async function apiInvokeMeasured<C extends ApiCommand>(
 type BackendEventSubscriptionOptions = {
   cursor?: number | null;
   onCursor?: (cursor: number) => void;
-  onReconnect?: () => void;
 };
 
 type DesktopUiEventDelivery = {
@@ -241,7 +242,7 @@ function parseDesktopUiEventDeliveries(
 export async function subscribeBackendEvents(
   handler: (payload: string) => void,
   options: BackendEventSubscriptionOptions = {},
-): Promise<UnlistenFn> {
+): Promise<EventSubscription> {
   if (isTauriRuntime()) {
     const requestedCursor = options.cursor;
     const startingCursor =
@@ -252,11 +253,13 @@ export async function subscribeBackendEvents(
         : 0;
     let lastCursor = startingCursor;
     let replayComplete = false;
+    let stopped = false;
+    let reconciliation: Promise<void> | null = null;
     const pendingDeliveries = new Map<number, string>();
     const legacyPayloads: string[] = [];
 
     function deliver({ cursor, event }: DesktopUiEventDelivery) {
-      if (cursor <= lastCursor) return;
+      if (stopped || cursor <= lastCursor) return;
       lastCursor = cursor;
       options.onCursor?.(cursor);
       handler(event);
@@ -295,7 +298,7 @@ export async function subscribeBackendEvents(
       } else {
         for (const delivery of replay.events) deliver(delivery);
       }
-      if (Number.isSafeInteger(replay.cursor) && replay.cursor >= lastCursor) {
+      if (Number.isSafeInteger(replay.cursor) && (replay.replayGap || replay.cursor >= lastCursor)) {
         lastCursor = replay.cursor;
         options.onCursor?.(lastCursor);
       }
@@ -307,36 +310,32 @@ export async function subscribeBackendEvents(
       // Compatibility for one hot-reload cycle against an older backend
       // emitter. The current cursor-aware backend never takes this path.
       for (const payload of legacyPayloads) handler(payload);
-      return unlisten;
+      return Object.assign(() => { stopped = true; unlisten(); }, {
+        reconcile: () => {
+          if (stopped) return Promise.resolve();
+          if (reconciliation) return reconciliation;
+          const requestedCursor = lastCursor;
+          reconciliation = apiInvoke("replay_ui_events", { cursor: requestedCursor }).then((replay) => {
+            if (stopped) return;
+            if (replay.replayGap) {
+              if (lastCursor !== requestedCursor) return;
+              lastCursor = replay.cursor;
+              options.onCursor?.(lastCursor);
+              handler(JSON.stringify({ type: "refresh", reason: "event_replay_gap" }));
+            } else {
+              for (const delivery of replay.events) deliver(delivery);
+            }
+          }).finally(() => { reconciliation = null; });
+          return reconciliation;
+        },
+      });
     } catch (err) {
       unlisten();
       throw err;
     }
   }
 
-  const cursor = Number.isSafeInteger(options.cursor) && (options.cursor ?? -1) >= 0
-    ? options.cursor
-    : null;
-  const source = new EventSource(cursor === null ? "/api/events" : `/api/events?cursor=${cursor}`);
-  let disconnected = false;
-  source.addEventListener("lantor", (event) => {
-    const message = event as MessageEvent<string>;
-    const eventCursor = Number(message.lastEventId);
-    if (message.lastEventId && Number.isSafeInteger(eventCursor) && eventCursor >= 0) {
-      options.onCursor?.(eventCursor);
-    }
-    handler(message.data);
-  });
-  source.onopen = () => {
-    if (!disconnected) return;
-    disconnected = false;
-    options.onReconnect?.();
-  };
-  source.onerror = () => {
-    disconnected = true;
-    console.error("Lantor web event stream disconnected");
-  };
-  return () => source.close();
+  return subscribeWebEvents(handler, options, (cursor) => apiInvoke("replay_ui_events", { cursor }));
 }
 
 export function attachmentAssetUrl(storagePath: string, attachmentId: string) {

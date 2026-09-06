@@ -90,6 +90,16 @@ pub(crate) async fn update_task_title_in_pool(
         .await
         .map_err(to_string)?;
 
+    let message =
+        crate::message_store::load_message_patch_in_tx(&mut tx, message_id).await?;
+    enqueue_ui_event_in_tx(
+        &mut tx,
+        &UiEvent::MessageUpsert {
+            reason: "task_title_updated",
+            message: &message,
+        },
+    )
+    .await?;
     enqueue_ui_event_in_tx(
         &mut tx,
         &UiEvent::Refresh {

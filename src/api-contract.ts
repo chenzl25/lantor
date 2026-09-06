@@ -30,6 +30,8 @@ export type InboxItemTimestamp = {
   dismissedUntil: string;
 };
 
+import type { UiStatePatch, UiStateScope } from "./ui-state-sync";
+
 type MutationResult = void | { ok: true };
 
 type AgentDraftRequest = {
@@ -48,6 +50,14 @@ type AgentDraftRequest = {
 };
 
 export type ApiContract = {
+  load_ui_state: {
+    args: { scopes: UiStateScope[] };
+    result: UiStatePatch;
+  };
+  replay_ui_events: {
+    args: { cursor: number };
+    result: { cursor: number; replayGap: boolean; events: { cursor: number; event: string }[] };
+  };
   bootstrap: {
     args: {
       channelId?: string;
@@ -328,6 +338,8 @@ export type ApiContract = {
 
 const API_COMMAND_NAMES = {
   bootstrap: true,
+  load_ui_state: true,
+  replay_ui_events: true,
   check_runtime: true,
   send_message: true,
   load_older_channel_messages: true,

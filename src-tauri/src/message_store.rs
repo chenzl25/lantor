@@ -1118,7 +1118,6 @@ pub(crate) async fn insert_agent_message_with_options(
         },
     )
     .await?;
-    enqueue_ui_event_in_tx(&mut tx, &UiEvent::Refresh { reason: "message" }).await?;
     tx.commit().await.map_err(to_string)?;
     let conversation_thread_root_id = thread_root_id.unwrap_or(msg_id);
     upsert_agent_thread_subscription(
@@ -1213,7 +1212,15 @@ pub(crate) async fn send_owner_message_in_pool(
         );
     }
 
-    enqueue_ui_event_in_tx(&mut tx, &UiEvent::Refresh { reason: "message" }).await?;
+    let message = load_message_patch_in_tx(&mut tx, msg_id).await?;
+    enqueue_ui_event_in_tx(
+        &mut tx,
+        &UiEvent::MessageUpsert {
+            reason: "message",
+            message: &message,
+        },
+    )
+    .await?;
     tx.commit().await.map_err(to_string)?;
     pending_attachment_writes.commit();
     queue_mentions_as_work_items(
@@ -1270,6 +1277,15 @@ pub(crate) async fn update_message_in_pool(
     .await
     .map_err(to_string)?;
 
+    let message = load_message_patch_in_tx(&mut tx, message_id).await?;
+    enqueue_ui_event_in_tx(
+        &mut tx,
+        &UiEvent::MessageUpsert {
+            reason: "message_updated",
+            message: &message,
+        },
+    )
+    .await?;
     tx.commit().await.map_err(to_string)?;
     Ok(())
 }
@@ -1302,6 +1318,14 @@ pub(crate) async fn delete_message_in_pool(
     if result.rows_affected() == 0 {
         return Err("message does not exist".to_owned());
     }
+    enqueue_ui_event_in_tx(
+        &mut tx,
+        &UiEvent::MessageDelete {
+            reason: "message_deleted",
+            message_id,
+        },
+    )
+    .await?;
     tx.commit().await.map_err(to_string)?;
     remove_attachment_files(&attachment_paths);
     Ok(())

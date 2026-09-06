@@ -351,7 +351,7 @@ pub(crate) async fn notify_supervisor_wake(_pool: &SqlitePool) -> CommandResult<
     Ok(())
 }
 
-async fn load_ui_event_replay_from_cursor(
+pub(crate) async fn load_ui_event_replay_from_cursor(
     pool: &SqlitePool,
     requested_cursor: i64,
 ) -> CommandResult<UiEventReplay> {

@@ -195,6 +195,14 @@ fn web_router(state: Arc<WebState>, dist_dir: PathBuf) -> Router {
         )
         .route("/api/check_runtime", post(api_check_runtime))
         .route("/api/events", get(api_events))
+        .route(
+            "/api/replay_ui_events",
+            post(api_replay_ui_events).layer(CompressionLayer::new()),
+        )
+        .route(
+            "/api/load_ui_state",
+            post(api_load_ui_state).layer(CompressionLayer::new()),
+        )
         .route("/api/attachments/{attachment_id}", get(api_attachment))
         .route(
             "/api/send_message",
@@ -992,6 +1000,31 @@ async fn event_stream_start(
     }
 }
 
+#[derive(Deserialize)]
+struct ReplayRequest {
+    cursor: i64,
+}
+
+async fn api_replay_ui_events(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<ReplayRequest>,
+) -> Result<impl IntoResponse, Response> {
+    crate::ui_notifications::load_ui_event_replay_from_cursor(&state.pool, request.cursor)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_load_ui_state(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<crate::ui_state::UiStateRequest>,
+) -> Result<impl IntoResponse, Response> {
+    crate::ui_state::load_ui_state_in_pool(&state.pool, request.scopes)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
 async fn api_events(
     State(state): State<Arc<WebState>>,
     Query(query): Query<EventsQuery>,
@@ -1205,3 +1238,7 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
     }
 }
+
+#[cfg(test)]
+#[path = "tests/web_sync.rs"]
+mod sync_tests;
