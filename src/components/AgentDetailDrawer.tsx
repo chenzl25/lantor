@@ -487,6 +487,10 @@ export function AgentDetailDrawer({
   }, [agent.id]);
 
   useEffect(() => {
+    setWorkspaceNodes((current) => ({ ...current, "": agent.workspace_entries ?? [] }));
+  }, [agent.id, agent.workspace_entries]);
+
+  useEffect(() => {
     if (!pendingCollapsedRunScrollId) return;
     const frameId = window.requestAnimationFrame(() => {
       activityRunRefs.current.get(pendingCollapsedRunScrollId)?.scrollIntoView({
@@ -959,7 +963,7 @@ export function AgentDetailDrawer({
                         type="button"
                         className="activity-run-open"
                         onClick={() =>
-                          onOpenWorkItem(group.workItem as AgentWorkItem, group.sourceMessage?.id ?? null)
+                          onOpenWorkItem(group.workItem as AgentWorkItem, group.workItem?.source_message_id ?? null)
                         }
                       >
                         Open

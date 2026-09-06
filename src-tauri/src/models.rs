@@ -33,6 +33,7 @@ pub(crate) struct Agent {
     pub(crate) workspace_memory_path: String,
     pub(crate) workspace_memory_exists: bool,
     pub(crate) workspace_entries: Vec<AgentWorkspaceEntry>,
+    pub(crate) details_loaded: bool,
     pub(crate) daily_budget_micros: i64,
     pub(crate) subscription_status: Option<AgentSubscriptionStatus>,
 }
@@ -101,6 +102,7 @@ pub(crate) struct Channel {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ThreadActivity {
+    pub(crate) reply_count: i64,
     pub(crate) thread_root_id: Uuid,
     pub(crate) channel_id: Uuid,
     pub(crate) unread_count: i32,

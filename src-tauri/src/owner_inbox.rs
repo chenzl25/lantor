@@ -146,11 +146,14 @@ pub(crate) async fn mark_all_owner_inbox_read_in_pool(pool: &SqlitePool) -> Comm
 
     sqlx::query(
         r#"
-        insert into channel_read_state (channel_id, last_read_at)
-        select id, strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        from channels
+        insert into channel_read_state (channel_id, last_read_at, last_read_seq)
+        select c.id, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
+            (select coalesce(max(seq), 0) from messages m where m.channel_id = c.id)
+        from channels c
         where true
-        on conflict (channel_id) do update set last_read_at = excluded.last_read_at
+        on conflict (channel_id) do update set
+            last_read_at = excluded.last_read_at,
+            last_read_seq = excluded.last_read_seq
         "#,
     )
     .execute(&mut *transaction)
@@ -172,23 +175,19 @@ pub(crate) async fn mark_channel_read_in_pool(
     pool: &SqlitePool,
     channel_id: Uuid,
 ) -> CommandResult<()> {
-    // The frontend calls this eagerly whenever the active channel renders.
-    // Only advance the read marker (and emit a refresh event) when it actually
-    // moves past a newer message; an unconditional notify here previously fed a
-    // refresh -> effect -> mark-read -> refresh loop that kept every client
-    // re-running a full bootstrap forever.
+    // Store one monotonic watermark. The indexed max is independent of
+    // message visibility and body size; only eligible messages above it count.
     let mut transaction = pool.begin().await.map_err(to_string)?;
     let result = sqlx::query(
         r#"
-        insert into channel_read_state (channel_id, last_read_at)
-        values ($1, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
-        on conflict (channel_id) do update set last_read_at = excluded.last_read_at
-        where exists (
-            select 1
-            from messages m
-            where m.channel_id = excluded.channel_id
-              and julianday(m.created_at) > julianday(channel_read_state.last_read_at)
-        )
+        insert into channel_read_state (channel_id, last_read_at, last_read_seq)
+        values ($1, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
+            (select coalesce(max(seq), 0) from messages where channel_id = $1))
+        on conflict (channel_id) do update set
+            last_read_at = excluded.last_read_at,
+            last_read_seq = excluded.last_read_seq
+        where channel_read_state.last_read_seq is null
+           or excluded.last_read_seq > channel_read_state.last_read_seq
         "#,
     )
     .bind(channel_id)

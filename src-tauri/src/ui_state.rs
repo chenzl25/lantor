@@ -80,3 +80,39 @@ pub(crate) async fn load_ui_state(
 ) -> CommandResult<Value> {
     load_ui_state_in_pool(&state.pool, scopes).await
 }
+
+#[derive(serde::Serialize)]
+pub(crate) struct AgentDetail {
+    agent: crate::models::Agent,
+    agent_activities: Vec<crate::models::AgentActivity>,
+    agent_work_items: Vec<crate::models::AgentWorkItem>,
+}
+
+pub(crate) async fn load_agent_detail_in_pool(
+    pool: &SqlitePool,
+    agent_id: uuid::Uuid,
+) -> CommandResult<AgentDetail> {
+    Ok(AgentDetail {
+        agent: crate::agent_profile::load_agent_detail_in_pool(pool, agent_id).await?,
+        agent_activities: crate::activity_store::load_agent_detail_activities(pool, agent_id)
+            .await?,
+        agent_work_items: crate::activity_store::load_agent_detail_work_items(pool, agent_id)
+            .await?,
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn load_agent_detail(
+    agent_id: uuid::Uuid,
+    state: State<'_, AppState>,
+) -> CommandResult<AgentDetail> {
+    load_agent_detail_in_pool(&state.pool, agent_id).await
+}
+
+#[tauri::command]
+pub(crate) async fn load_thread_messages(
+    thread_root_id: uuid::Uuid,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<crate::models::Message>> {
+    crate::message_store::load_thread_messages_in_pool(&state.pool, thread_root_id).await
+}

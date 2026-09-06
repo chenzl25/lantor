@@ -488,6 +488,29 @@ pub(crate) async fn load_owner_profile(pool: &SqlitePool) -> CommandResult<Owner
 }
 
 pub(crate) async fn load_agents(pool: &SqlitePool) -> CommandResult<Vec<Agent>> {
+    load_agents_with_details(pool, None, true).await
+}
+
+pub(crate) async fn load_agent_summaries(pool: &SqlitePool) -> CommandResult<Vec<Agent>> {
+    load_agents_with_details(pool, None, false).await
+}
+
+pub(crate) async fn load_agent_detail_in_pool(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+) -> CommandResult<Agent> {
+    load_agents_with_details(pool, Some(agent_id), true)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "agent does not exist".to_owned())
+}
+
+async fn load_agents_with_details(
+    pool: &SqlitePool,
+    agent_id: Option<Uuid>,
+    include_details: bool,
+) -> CommandResult<Vec<Agent>> {
     let rows = sqlx::query(
         r#"
         select
@@ -502,8 +525,8 @@ pub(crate) async fn load_agents(pool: &SqlitePool) -> CommandResult<Vec<Agent>> 
             service_tier,
             avatar,
             description,
-            launch_command,
-            environment_variables,
+            case when $2 then launch_command else '' end as launch_command,
+            case when $2 then environment_variables else '' end as environment_variables,
             working_directory,
             daily_budget_micros,
             subscription.provider as subscription_provider,
@@ -513,9 +536,12 @@ pub(crate) async fn load_agents(pool: &SqlitePool) -> CommandResult<Vec<Agent>> 
             subscription.observed_at as subscription_observed_at
         from agents a
         left join agent_subscription_status subscription on subscription.agent_id = a.id
+        where ($1 is null or a.id = $1)
         order by case when handle = 'Hancock' then 0 else 1 end, display_name
         "#,
     )
+    .bind(agent_id)
+    .bind(include_details)
     .fetch_all(pool)
     .await
     .map_err(to_string)?;
@@ -524,7 +550,8 @@ pub(crate) async fn load_agents(pool: &SqlitePool) -> CommandResult<Vec<Agent>> 
         .into_iter()
         .map(|row| {
             let working_directory: String = row.get("working_directory");
-            let workspace = load_agent_workspace_summary(&working_directory);
+            let workspace =
+                include_details.then(|| load_agent_workspace_summary(&working_directory));
             let subscription_provider = row.get::<Option<String>, _>("subscription_provider");
             let subscription_status = subscription_provider.and_then(|provider| {
                 let runtime = row.get::<String, _>("runtime");
@@ -563,10 +590,16 @@ pub(crate) async fn load_agents(pool: &SqlitePool) -> CommandResult<Vec<Agent>> 
                 launch_command: row.get("launch_command"),
                 environment_variables: row.get("environment_variables"),
                 working_directory,
-                workspace_exists: workspace.exists,
-                workspace_memory_path: workspace.memory_path,
-                workspace_memory_exists: workspace.memory_exists,
-                workspace_entries: workspace.entries,
+                workspace_exists: workspace.as_ref().is_some_and(|value| value.exists),
+                workspace_memory_path: workspace
+                    .as_ref()
+                    .map(|value| value.memory_path.clone())
+                    .unwrap_or_default(),
+                workspace_memory_exists: workspace
+                    .as_ref()
+                    .is_some_and(|value| value.memory_exists),
+                workspace_entries: workspace.map(|value| value.entries).unwrap_or_default(),
+                details_loaded: include_details,
                 daily_budget_micros: row.get("daily_budget_micros"),
                 subscription_status,
             }

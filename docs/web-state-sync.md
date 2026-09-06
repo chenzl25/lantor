@@ -8,7 +8,7 @@ Visibility, focus, pageshow and online events coalesce into one foreground recon
 
 Expired/pruned cursors and unsupported event payloads retain snapshot recovery. Streaming messages with a missing baseline first use targeted `load_message` hydration. Collection reads are single-flight, coalesced by scope, and invalidated if newer events arrive while a read is in flight. Failed scopes remain pending for a later foreground or periodic retry. Automatic channel read marking waits 300ms, requires unread state, and is disabled while hidden.
 
-When adding a mutation, publish its affected entity or a scoped invalidation in the same database transaction. If it writes a message directly, include a message event; a task collection update cannot recreate a missing message body. Extend `scopesForRefresh` when adding a refresh reason. This path reuses existing store readers and does not change bootstrap payload design.
+When adding a mutation, publish its affected entity or a scoped invalidation in the same database transaction. If it writes a message directly, include a message event; a task collection update cannot recreate a missing message body. Extend `scopesForRefresh` when adding a refresh reason. This path reuses existing store readers. Compact bootstrap and its lazy detail readers are documented in [bootstrap-payload.md](bootstrap-payload.md).
 
 Validation:
 

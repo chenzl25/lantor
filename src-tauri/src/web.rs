@@ -196,6 +196,14 @@ fn web_router(state: Arc<WebState>, dist_dir: PathBuf) -> Router {
         .route("/api/check_runtime", post(api_check_runtime))
         .route("/api/events", get(api_events))
         .route(
+            "/api/load_agent_detail",
+            post(api_load_agent_detail).layer(CompressionLayer::new()),
+        )
+        .route(
+            "/api/load_thread_messages",
+            post(api_load_thread_messages).layer(CompressionLayer::new()),
+        )
+        .route(
             "/api/replay_ui_events",
             post(api_replay_ui_events).layer(CompressionLayer::new()),
         )
@@ -1015,6 +1023,32 @@ async fn api_replay_ui_events(
         .map_err(api_error)
 }
 
+async fn api_load_agent_detail(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<AgentIdRequest>,
+) -> Result<impl IntoResponse, Response> {
+    crate::ui_state::load_agent_detail_in_pool(&state.pool, request.agent_id)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadMessagesRequest {
+    thread_root_id: Uuid,
+}
+
+async fn api_load_thread_messages(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<ThreadMessagesRequest>,
+) -> Result<impl IntoResponse, Response> {
+    crate::message_store::load_thread_messages_in_pool(&state.pool, request.thread_root_id)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
 async fn api_load_ui_state(
     State(state): State<Arc<WebState>>,
     Json(request): Json<crate::ui_state::UiStateRequest>,
@@ -1242,3 +1276,7 @@ mod tests {
 #[cfg(test)]
 #[path = "tests/web_sync.rs"]
 mod sync_tests;
+
+#[cfg(test)]
+#[path = "tests/bootstrap_slim.rs"]
+mod bootstrap_slim_tests;

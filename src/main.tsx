@@ -27,6 +27,7 @@ import {
 import type { ApiArgsTuple, ApiCommand, ApiResult } from "./api-contract";
 import { applyUiStatePatch, scopesForRefresh, type UiStateScope } from "./ui-state-sync";
 import { streamingMessages, type StreamingMessageSnapshot } from "./streaming-message-store";
+import { mergeHydratedRows } from "./bootstrap-hydration";
 import type { EventSubscription } from "./web-event-stream";
 import { APP_DISPLAY_NAME } from "./branding";
 import {
@@ -918,6 +919,8 @@ function App() {
   const activityFeedRequestRef = useRef(0);
   const messageSearchRequestRef = useRef(0);
   const wikiSearchRequestRef = useRef(0);
+  const loadingThreadIdsRef = useRef(new Set<string>());
+  const agentDetailRequestsRef = useRef(new Map<string, Promise<ApiResult<"load_agent_detail">>>());
   const backendSubscriptionRef = useRef<EventSubscription | null>(null);
   const uiStateScopesRef = useRef(new Set<UiStateScope>());
   const uiStateLoadingScopesRef = useRef(new Set<UiStateScope>());
@@ -1344,6 +1347,66 @@ function App() {
       });
     }, UI_REFRESH_DEBOUNCE_MS);
   }
+
+  function hydrateAgentDetail(agentId: string) {
+    const pending = agentDetailRequestsRef.current.get(agentId);
+    if (pending) return pending;
+    const baselineAgents = new Map(data?.agents.map((row) => [row.id, row]));
+    const baselineActivities = new Map(data?.agent_activities.map((row) => [row.id, row]));
+    const baselineWork = new Map(data?.agent_work_items.map((row) => [row.id, row]));
+    const request = apiInvoke("load_agent_detail", { agentId }).then((detail) => {
+      setData((current) => {
+        if (!current) return current;
+        const liveAgent = current.agents.find((agent) => agent.id === agentId);
+        // A live subscription update can replace a compact profile during this
+        // request. Preserve it and let the versioned collection reader fill details.
+        if (liveAgent?.details_loaded === false && liveAgent !== baselineAgents.get(agentId)) {
+          requestUiState(["agents"]);
+        }
+        return {
+          ...current,
+          agents: mergeHydratedRows(current.agents, [detail.agent], baselineAgents),
+          agent_activities: mergeHydratedRows(current.agent_activities, detail.agent_activities, baselineActivities),
+          agent_work_items: mergeHydratedRows(current.agent_work_items, detail.agent_work_items, baselineWork),
+        };
+      });
+      return detail;
+    }).finally(() => agentDetailRequestsRef.current.delete(agentId));
+    agentDetailRequestsRef.current.set(agentId, request);
+    return request;
+  }
+
+  useEffect(() => {
+    if (!selectedAgentId || data?.agents.find((agent) => agent.id === selectedAgentId)?.details_loaded !== false) return;
+    void hydrateAgentDetail(selectedAgentId).catch((err) => {
+      setAppError(errorMessage(err, "Failed to load agent details"));
+    });
+  }, [selectedAgentId, data?.agents.find((agent) => agent.id === selectedAgentId)?.details_loaded]);
+
+  useEffect(() => {
+    if (!showThread || !activeThreadId) return;
+    let cancelled = false;
+    const threadId = activeThreadId;
+    const baseline = new Map(data?.messages.map((row) => [row.id, row]));
+    loadingThreadIdsRef.current.add(threadId);
+    void apiInvoke("load_thread_messages", { threadRootId: threadId }).then((messages) => {
+      if (cancelled) return;
+      for (const message of messages) {
+        knownMessageIdsRef.current?.add(message.id);
+        loadedHistoricalMessageIdsRef.current.add(message.id);
+      }
+      setData((current) => current ? { ...current, messages: mergeMessages([], mergeHydratedRows(current.messages, messages, baseline)) } : current);
+      requestUiState(["thread_activities", "read_inbox_items", "dismissed_inbox_items"]);
+    }).catch((err) => {
+      if (!cancelled) setAppError(errorMessage(err, "Failed to load thread messages"));
+    }).finally(() => {
+      if (!cancelled) loadingThreadIdsRef.current.delete(threadId);
+    });
+    return () => {
+      cancelled = true;
+      loadingThreadIdsRef.current.delete(threadId);
+    };
+  }, [activeThreadId, showThread, data?.ui_event_cursor]);
 
   async function hydrateActivityFeedMessages() {
     const requestId = activityFeedRequestRef.current + 1;
@@ -2788,7 +2851,7 @@ function App() {
       && message.channel_id === activeChannelId
       && !message.thread_root_id
     ));
-    if (rootExists) return;
+    if (rootExists || loadingThreadIdsRef.current.has(activeThreadId)) return;
     setActiveThreadId(null);
     rememberChannelThread(activeChannelId, null);
   }, [activeChannelId, activeThreadId, data]);
@@ -2799,7 +2862,7 @@ function App() {
   }, [conversationMessages, activeRoot]);
 
   const threadReplySummaries = useMemo(() => {
-    return visibleMessages.reduce<Record<string, ThreadReplySummary>>((summaries, message) => {
+    const summaries = visibleMessages.reduce<Record<string, ThreadReplySummary>>((summaries, message) => {
       if (!message.thread_root_id) return summaries;
       const current = summaries[message.thread_root_id] ?? { count: 0, latest: null, participants: [] };
       current.count += 1;
@@ -2818,7 +2881,14 @@ function App() {
       summaries[message.thread_root_id] = current;
       return summaries;
     }, {});
-  }, [visibleMessages]);
+    for (const activity of data?.thread_activities ?? []) {
+      if (activity.reply_count === undefined) continue;
+      const summary = summaries[activity.thread_root_id] ?? { count: 0, latest: null, participants: [] };
+      summary.count = Math.max(summary.count, activity.reply_count);
+      summaries[activity.thread_root_id] = summary;
+    }
+    return summaries;
+  }, [visibleMessages, data?.thread_activities]);
 
   const threadReplyCounts = useMemo(() => {
     return Object.fromEntries(
@@ -3944,6 +4014,8 @@ function App() {
     setShowActivityFeedModal(false);
     setShowSavedModal(false);
     setShowSearchModal(true);
+    void reloadUiState(["agent_work_items", "agent_activities", "thread_activities", "read_inbox_items", "dismissed_inbox_items"])
+      .catch((err) => setAppError(errorMessage(err, "Failed to load search context")));
   }
 
   function openActivityFeedModal() {
@@ -3955,7 +4027,10 @@ function App() {
     setShowSearchModal(false);
     setShowSavedModal(false);
     setShowActivityFeedModal(true);
-    void hydrateActivityFeedMessages();
+    void Promise.all([
+      hydrateActivityFeedMessages(),
+      reloadUiState(["thread_activities", "read_inbox_items", "dismissed_inbox_items"]),
+    ]).catch((err) => setAppError(errorMessage(err, "Failed to load Activity context")));
   }
 
   function openSavedModal() {
@@ -4285,7 +4360,11 @@ function App() {
     });
   }
 
-  function startEditAgent(agent: Agent) {
+  async function startEditAgent(agent: Agent) {
+    if (agent.details_loaded === false) {
+      try { agent = (await hydrateAgentDetail(agent.id)).agent; }
+      catch (err) { setAppError(errorMessage(err, "Failed to load agent configuration")); return; }
+    }
     setEditingAgentId(agent.id);
     setAgentEdit({
       handle: agent.handle,
@@ -4502,7 +4581,7 @@ function App() {
     return result;
   }
 
-  function openWorkItem(item: AgentWorkItem, focusedMessageIdOverride?: string | null) {
+  async function openWorkItem(item: AgentWorkItem, focusedMessageIdOverride?: string | null) {
     if (item.channel_id) setActiveChannelId(item.channel_id);
     if (item.thread_root_id) {
       revealThread(item.thread_root_id, item.channel_id ?? activeChannelId);
@@ -4514,11 +4593,11 @@ function App() {
       ? item.source_message_id
       : focusedMessageIdOverride;
     if (focusId) {
-      const messageExists = Boolean(data?.messages.some((message) => message.id === focusId));
-      if (messageExists) {
+      try {
+        await loadReferencedMessage(focusId);
         setFocusedMessageId(focusId);
-      } else if (item.channel_id) {
-        setAppError("Original message no longer exists");
+      } catch (err) {
+        setAppError(errorMessage(err, "Failed to load work item source"));
       }
     }
   }

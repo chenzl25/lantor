@@ -9,8 +9,7 @@ use uuid::Uuid;
 
 use crate::{
     activity_store::{
-        load_agent_activities, load_agent_activity_summaries, load_agent_run_summaries,
-        load_agent_runs, load_agent_work_items,
+        load_agent_activities, load_agent_run_summaries, load_agent_runs, load_agent_work_items,
     },
     agent_profile::{load_agents, load_owner_profile},
     app::{to_string, CommandResult},
@@ -19,9 +18,7 @@ use crate::{
     launch_agent,
     message_store::{
         channel_message_history_from_messages, load_artifact_summaries, load_artifacts,
-        load_messages, load_recent_channel_messages_without_artifact_content,
-        load_recent_messages_per_channel_without_artifact_content, load_saved_messages,
-        WEB_BOOTSTRAP_ROOT_MESSAGES_PER_CHANNEL,
+        load_bootstrap_messages, load_messages, load_saved_messages, COMPACT_BOOTSTRAP_ROOTS,
     },
     models::{
         Bootstrap, BootstrapPerf, BootstrapPerfCounts, BootstrapPerfOptions, BootstrapPerfPhase,
@@ -81,7 +78,7 @@ pub(crate) async fn load_tauri_bootstrap(
             runtime: "tauri",
             messages: BootstrapMessageLoad::RecentChannel(
                 requested_channel_id,
-                WEB_BOOTSTRAP_ROOT_MESSAGES_PER_CHANNEL,
+                COMPACT_BOOTSTRAP_ROOTS,
             ),
             include_run_logs: false,
             compact_agent_activities: true,
@@ -98,12 +95,9 @@ pub(crate) async fn load_web_bootstrap(
     current_channel_only: bool,
 ) -> CommandResult<Bootstrap> {
     let messages = if current_channel_only {
-        BootstrapMessageLoad::RecentChannel(
-            requested_channel_id,
-            WEB_BOOTSTRAP_ROOT_MESSAGES_PER_CHANNEL,
-        )
+        BootstrapMessageLoad::RecentChannel(requested_channel_id, COMPACT_BOOTSTRAP_ROOTS)
     } else {
-        BootstrapMessageLoad::RecentPerChannel(WEB_BOOTSTRAP_ROOT_MESSAGES_PER_CHANNEL)
+        BootstrapMessageLoad::RecentPerChannel(COMPACT_BOOTSTRAP_ROOTS)
     };
     load_bootstrap_with_options(
         pool,
@@ -195,7 +189,7 @@ async fn load_bootstrap_with_options(
     push_phase(&mut phases, "channels", started_at, Some(channels.len()));
 
     let started_at = Instant::now();
-    let thread_activities = load_thread_activities(pool).await?;
+    let mut thread_activities = load_thread_activities(pool).await?;
     push_phase(
         &mut phases,
         "thread_activities",
@@ -213,24 +207,26 @@ async fn load_bootstrap_with_options(
     );
 
     let started_at = Instant::now();
-    let agents = load_agents(pool).await?;
+    let compact = options.compact_agent_activities;
+    let agents = if compact {
+        crate::agent_profile::load_agent_summaries(pool).await?
+    } else {
+        load_agents(pool).await?
+    };
     push_phase(&mut phases, "agents", started_at, Some(agents.len()));
 
     let started_at = Instant::now();
     let messages = match options.messages {
         BootstrapMessageLoad::All => load_messages(pool).await?,
         BootstrapMessageLoad::RecentPerChannel(limit) => {
-            load_recent_messages_per_channel_without_artifact_content(pool, limit).await?
+            load_bootstrap_messages(pool, None, limit).await?
         }
         BootstrapMessageLoad::RecentChannel(requested_channel_id, limit) => {
             let channel_id = requested_channel_id
                 .filter(|channel_id| channels.iter().any(|channel| channel.id == *channel_id))
                 .or_else(|| channels.first().map(|channel| channel.id));
             match channel_id {
-                Some(channel_id) => {
-                    load_recent_channel_messages_without_artifact_content(pool, channel_id, limit)
-                        .await?
-                }
+                Some(channel_id) => load_bootstrap_messages(pool, Some(channel_id), limit).await?,
                 None => Vec::new(),
             }
         }
@@ -256,7 +252,7 @@ async fn load_bootstrap_with_options(
     );
 
     let started_at = Instant::now();
-    let dismissed_inbox_items = load_dismissed_inbox_items(pool).await?;
+    let mut dismissed_inbox_items = load_dismissed_inbox_items(pool).await?;
     push_phase(
         &mut phases,
         "dismissed_inbox_items",
@@ -265,7 +261,7 @@ async fn load_bootstrap_with_options(
     );
 
     let started_at = Instant::now();
-    let read_inbox_items = load_read_inbox_items(pool).await?;
+    let mut read_inbox_items = load_read_inbox_items(pool).await?;
     push_phase(
         &mut phases,
         "read_inbox_items",
@@ -312,7 +308,11 @@ async fn load_bootstrap_with_options(
     );
 
     let started_at = Instant::now();
-    let agent_work_items = load_agent_work_items(pool).await?;
+    let agent_work_items = if compact {
+        crate::activity_store::load_agent_work_item_summaries(pool).await?
+    } else {
+        load_agent_work_items(pool).await?
+    };
     push_phase(
         &mut phases,
         "agent_work_items",
@@ -322,7 +322,7 @@ async fn load_bootstrap_with_options(
 
     let started_at = Instant::now();
     let agent_activities = if options.compact_agent_activities {
-        load_agent_activity_summaries(pool).await?
+        crate::activity_store::load_bootstrap_activities(pool).await?
     } else {
         load_agent_activities(pool).await?
     };
@@ -340,6 +340,30 @@ async fn load_bootstrap_with_options(
     let started_at = Instant::now();
     let launch_agent = launch_agent::load_launch_agent_status()?;
     push_phase(&mut phases, "launch_agent", started_at, None);
+
+    if compact {
+        let message_ids: std::collections::HashSet<_> =
+            messages.iter().map(|message| message.id).collect();
+        thread_activities.retain(|activity| {
+            activity.unread_count > 0 || message_ids.contains(&activity.thread_root_id)
+        });
+        let mut relevant_ids: std::collections::HashSet<String> =
+            message_ids.iter().map(ToString::to_string).collect();
+        relevant_ids.extend(channels.iter().map(|item| item.id.to_string()));
+        relevant_ids.extend(tasks.iter().map(|item| item.id.to_string()));
+        relevant_ids.extend(reminders.iter().map(|item| item.id.to_string()));
+        relevant_ids.extend(agent_work_items.iter().map(|item| item.id.to_string()));
+        relevant_ids.extend(
+            thread_activities
+                .iter()
+                .map(|item| item.thread_root_id.to_string()),
+        );
+        let relevant = |key: &String| {
+            key == "saved-messages" || key.rsplit(':').next().is_some_and(|id| relevant_ids.contains(id))
+        };
+        read_inbox_items.retain(|key, _| relevant(key));
+        dismissed_inbox_items.retain(|key, _| relevant(key));
+    }
 
     let counts = BootstrapPerfCounts {
         channels: channels.len(),

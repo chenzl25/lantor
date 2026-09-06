@@ -851,6 +851,7 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .await?;
     ensure_integer_column(pool, "messages", "seq", "integer not null default 0").await?;
+    ensure_integer_column(pool, "channel_read_state", "last_read_seq", "integer").await?;
     ensure_integer_column(
         pool,
         "agent_work_items",
@@ -954,6 +955,35 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     ] {
         sqlx::query(statement).execute(pool).await?;
     }
+
+    // Convert legacy timestamp markers only when a seq watermark preserves
+    // their exact read set. Out-of-order imported timestamps retain the legacy
+    // fallback until the owner next marks that channel read.
+    sqlx::query(
+        r#"
+        with watermarks as (
+            select r.channel_id,
+                coalesce((select max(seq) from messages m
+                    where m.channel_id = r.channel_id
+                      and julianday(m.created_at) <= julianday(r.last_read_at)), 0) as read_seq
+            from channel_read_state r where r.last_read_seq is null
+        )
+        update channel_read_state as r
+        set last_read_seq = (select read_seq from watermarks w where w.channel_id = r.channel_id)
+        where r.last_read_seq is null
+          and julianday(r.last_read_at) is not null
+          and not exists (
+              select 1 from messages m
+              where m.channel_id = r.channel_id
+                and (julianday(m.created_at) is null or (
+                    m.seq <= (select read_seq from watermarks w where w.channel_id = r.channel_id)
+                    and julianday(m.created_at) > julianday(r.last_read_at)
+                ))
+          )
+        "#,
+    )
+    .execute(pool)
+    .await?;
 
     sqlx::query(
         r#"

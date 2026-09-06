@@ -26,6 +26,24 @@ const state = {
   supervisor: { pid: null, status: "stopped", updated_at: null },
   launch_agent: { label: "", plist_path: "", installed: false, loaded: false }, ui_event_cursor: 0,
 };
+const agent = { id: id(800), handle: "LazyAgent", display_name: "Lazy Agent", role: "agent", status: "idle",
+  runtime: "codex", model: "gpt-5.5", reasoning_effort: "medium", service_tier: "", avatar: "L", description: "",
+  launch_command: "", environment_variables: "", working_directory: "/synthetic/workspace", workspace_exists: false,
+  workspace_memory_path: "", workspace_memory_exists: false, workspace_entries: [], details_loaded: false,
+  daily_budget_micros: 0, subscription_status: null };
+state.agents.push(agent);
+state.messages.push(message("Open lazy agent", { sender_agent_id: agent.id, sender_name: "Lazy Agent", sender_role: "agent" }));
+const oldReply = message("Historical reply loaded on expansion", { thread_root_id: root.id });
+state.thread_activities.push({ thread_root_id: root.id, channel_id: channelId, reply_count: 1, unread_count: 0,
+  latest_message_id: oldReply.id, latest_activity_at: now });
+const archivedRoot = message("Archived work source outside bootstrap");
+const workItem = { id: id(810), agent_id: agent.id, agent_handle: agent.handle, channel_id: channelId,
+  channel_name: "sync-test", thread_root_id: archivedRoot.id, source_message_id: archivedRoot.id,
+  task_id: null, task_number: null, source_kind: "mention", title: "Historical work", context: "full context",
+  status: "done", run_id: id(820), created_at: now, updated_at: now, completed_at: now };
+const activity = { id: id(830), agent_id: agent.id, agent_handle: agent.handle, run_id: workItem.run_id,
+  kind: "thinking", phase: "event", status: "info", title: "Historical activity", summary: "", detail: "full detail", metadata: {}, created_at: now };
+const threadHistory = [oldReply];
 const events = [];
 const clients = new Set();
 const requests = [];
@@ -77,7 +95,12 @@ const api = createServer(async (request, response) => {
     case "/api/bootstrap": result = { ...state, ui_event_cursor: events.length }; break;
     case "/api/load_channel_previews": case "/api/load_activity_messages": result = []; break;
     case "/api/load_channel_messages": result = { messages: state.messages, next_before_seq: null, has_more: false }; break;
-    case "/api/load_message": result = state.messages.find((row) => row.id === args.messageId); break;
+    case "/api/load_agent_detail": result = { agent: { ...agent, details_loaded: true, launch_command: "fixture command",
+      environment_variables: "LAZY_FIXTURE=restored", workspace_exists: true,
+      workspace_entries: [{ name: "hydrated-workspace.txt", relative_path: "hydrated-workspace.txt", path: "/synthetic/workspace/hydrated-workspace.txt", kind: "file", size_bytes: 1 }] },
+      agent_activities: [activity], agent_work_items: [workItem] }; break;
+    case "/api/load_thread_messages": result = args.threadRootId === archivedRoot.id ? [archivedRoot] : [root, ...threadHistory, ...state.messages.filter((row) => row.thread_root_id === root.id)]; break;
+    case "/api/load_message": result = [...state.messages, archivedRoot].find((row) => row.id === args.messageId); break;
     case "/api/load_ui_state": result = Object.fromEntries(args.scopes.map((scope) => [scope, state[scope]])); break;
     case "/api/replay_ui_events": result = { cursor: events.length, replayGap: false, events: events.filter((event) => event.cursor > args.cursor) }; break;
     case "/api/send_message": {
@@ -104,6 +127,7 @@ const count = (path) => requests.filter((request) => request.path === `/api/${pa
 try {
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
+  page.setDefaultTimeout(10_000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${api.address().port}`, { waitUntil: "domcontentloaded" });
@@ -112,6 +136,27 @@ try {
   assert.equal(count("mark_channel_read"), 1);
   await page.waitForTimeout(700);
   assert.equal(count("bootstrap"), 1);
+  assert.equal(count("load_agent_detail"), 0, "agent detail stays lazy");
+  assert.equal(count("load_thread_messages"), 0, "history stays lazy");
+  await page.locator(".message-agent-avatar-trigger").click();
+  await page.getByRole("tab", { name: /^Workspace/ }).click();
+  await page.getByText("hydrated-workspace.txt", { exact: true }).waitFor();
+  assert.equal(count("load_agent_detail"), 1);
+  await page.getByRole("button", { name: "Edit @LazyAgent", exact: true }).click();
+  await page.locator(".agent-env-textarea").waitFor();
+  assert.equal(await page.locator(".agent-env-textarea").inputValue(), "LAZY_FIXTURE=restored");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("tab", { name: /^Activity/ }).click();
+  await page.locator(".activity-run-open").click();
+  await page.locator(".thread .markdown-body").filter({ hasText: archivedRoot.body }).waitFor();
+  assert.equal(count("load_message"), 1, "work source outside bootstrap is fetched, not treated as deleted");
+  await page.getByRole("button", { name: "Close thread panel", exact: true }).click();
+  await page.locator(`[data-message-id="${root.id}"]`).hover();
+  await page.locator(`.conversation [data-message-id="${root.id}"]`).getByRole("button", { name: "View thread replies", exact: true }).click();
+  await page.getByText("Historical reply loaded on expansion", { exact: true }).waitFor();
+  assert.equal(count("load_thread_messages"), 2);
+  await page.getByRole("button", { name: "Close thread panel", exact: true }).click();
+  assert.equal(count("bootstrap"), 1, "lazy hydration must not bootstrap");
   await page.locator("textarea").first().fill("Sent without bootstrap");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await page.locator(".markdown-body").filter({ hasText: "Sent without bootstrap" }).waitFor();
@@ -185,6 +230,11 @@ try {
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await page.waitForTimeout(500);
   assert.equal(count("load_ui_state"), unchangedScopes, "up-to-date foreground does not reload collections");
+  await page.locator(`[data-message-id="${root.id}"]`).hover();
+  await page.locator(`.conversation [data-message-id="${root.id}"]`).getByRole("button", { name: "View thread replies", exact: true }).click();
+  await page.getByText("Historical reply loaded on expansion", { exact: true }).waitFor();
+  const threadRequestsBeforeGap = count("load_thread_messages");
+  threadHistory.push(message("Reply recovered beyond compact snapshot", { thread_root_id: root.id }));
   const normalBootstrapRequests = count("bootstrap");
   const recovered = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/bootstrap");
   const gapEvent = publish({ type: "refresh", reason: "event_replay_gap" });
@@ -192,9 +242,11 @@ try {
   for (const client of clients) client.write(sse(gapEvent));
   await page.waitForTimeout(500);
   assert.equal(count("bootstrap"), normalBootstrapRequests + 1, "a replay gap recovers once, including duplicate delivery");
+  await page.getByText("Reply recovered beyond compact snapshot", { exact: true }).waitFor();
+  assert.equal(count("load_thread_messages"), threadRequestsBeforeGap + 1, "snapshot gap rehydrates the open thread");
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ normalBootstrapRequests, gapRecoveryRequests: count("bootstrap") - normalBootstrapRequests, replayRequests: count("replay_ui_events"), readBurstRequests: 1,
-    retryIntervalsMs: intervals, checks: "send, read, task status, stale collection response, unchanged foreground, hidden 65s, foreground under 5s, real SSE offline 10s, no missing/duplicate messages, one snapshot for replay gap" }));
+    retryIntervalsMs: intervals, checks: "lazy agent workspace/edit, archived work source, lazy thread history, send, read, task status, stale collection response, unchanged foreground, hidden 65s, foreground under 5s, real SSE offline 10s, no missing/duplicate messages, one snapshot for replay gap" }));
 } finally {
   await browser?.close();
   for (const client of clients) client.destroy();

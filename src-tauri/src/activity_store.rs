@@ -70,6 +70,14 @@ async fn load_agent_runs_with_log_mode(
 }
 
 pub(crate) async fn load_agent_work_items(pool: &SqlitePool) -> CommandResult<Vec<AgentWorkItem>> {
+    load_agent_work_items_with_context(pool, true, None).await
+}
+
+async fn load_agent_work_items_with_context(
+    pool: &SqlitePool,
+    include_context: bool,
+    agent_id: Option<Uuid>,
+) -> CommandResult<Vec<AgentWorkItem>> {
     let rows = sqlx::query(
         r#"
         select
@@ -85,7 +93,7 @@ pub(crate) async fn load_agent_work_items(pool: &SqlitePool) -> CommandResult<Ve
             t.number as task_number,
             w.source_kind,
             w.title,
-            w.context,
+            case when $1 then w.context else '' end as context,
             w.status,
             w.run_id,
             w.created_at,
@@ -95,10 +103,13 @@ pub(crate) async fn load_agent_work_items(pool: &SqlitePool) -> CommandResult<Ve
         join agents a on a.id = w.agent_id
         left join channels c on c.id = w.channel_id
         left join tasks t on t.id = w.task_id
+        where ($2 is null or w.agent_id = $2)
         order by w.created_at desc
         limit 80
         "#,
     )
+    .bind(include_context)
+    .bind(agent_id)
     .fetch_all(pool)
     .await
     .map_err(to_string)?;
@@ -128,19 +139,43 @@ pub(crate) async fn load_agent_work_items(pool: &SqlitePool) -> CommandResult<Ve
         .collect())
 }
 
+pub(crate) async fn load_agent_work_item_summaries(
+    pool: &SqlitePool,
+) -> CommandResult<Vec<AgentWorkItem>> {
+    load_agent_work_items_with_context(pool, false, None).await
+}
+
+pub(crate) async fn load_bootstrap_activities(
+    pool: &SqlitePool,
+) -> CommandResult<Vec<AgentActivity>> {
+    let mut activities = load_agent_activities_with_limit(pool, 3, None).await?;
+    for activity in &mut activities {
+        activity.detail = activity.detail.chars().take(240).collect();
+        if let Some(metadata) = activity.metadata.as_object_mut() {
+            metadata.retain(|_, value| {
+                value.is_number()
+                    || value.is_boolean()
+                    || value.as_str().is_some_and(|text| text.len() <= 256)
+            });
+        }
+    }
+    Ok(activities)
+}
+
 pub(crate) async fn load_agent_activities(pool: &SqlitePool) -> CommandResult<Vec<AgentActivity>> {
-    load_agent_activities_with_limit(pool, DEFAULT_AGENT_ACTIVITY_LIMIT_PER_AGENT).await
+    load_agent_activities_with_limit(pool, DEFAULT_AGENT_ACTIVITY_LIMIT_PER_AGENT, None).await
 }
 
 pub(crate) async fn load_agent_activity_summaries(
     pool: &SqlitePool,
 ) -> CommandResult<Vec<AgentActivity>> {
-    load_agent_activities_with_limit(pool, WEB_AGENT_ACTIVITY_LIMIT_PER_AGENT).await
+    load_agent_activities_with_limit(pool, WEB_AGENT_ACTIVITY_LIMIT_PER_AGENT, None).await
 }
 
 async fn load_agent_activities_with_limit(
     pool: &SqlitePool,
     limit_per_agent: i64,
+    agent_id: Option<Uuid>,
 ) -> CommandResult<Vec<AgentActivity>> {
     let rows = sqlx::query(
         r#"
@@ -165,6 +200,7 @@ async fn load_agent_activities_with_limit(
                     'unknown'
                 ) as owner_key
             from agent_activities
+            where ($2 is null or agent_id = $2)
         ) owners
         join agent_activities activity on activity.id in (
             select recent.id
@@ -181,6 +217,7 @@ async fn load_agent_activities_with_limit(
         "#,
     )
     .bind(limit_per_agent)
+    .bind(agent_id)
     .fetch_all(pool)
     .await
     .map_err(to_string)?;
@@ -383,4 +420,18 @@ mod tests {
         drop_test_schema(pool, schema).await;
         assert!(result.is_ok(), "{:?}", result.err());
     }
+}
+
+pub(crate) async fn load_agent_detail_activities(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+) -> CommandResult<Vec<AgentActivity>> {
+    load_agent_activities_with_limit(pool, DEFAULT_AGENT_ACTIVITY_LIMIT_PER_AGENT, Some(agent_id))
+        .await
+}
+pub(crate) async fn load_agent_detail_work_items(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+) -> CommandResult<Vec<AgentWorkItem>> {
+    load_agent_work_items_with_context(pool, true, Some(agent_id)).await
 }

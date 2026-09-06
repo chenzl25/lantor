@@ -99,8 +99,8 @@ use runtime::supervisor::run_supervisor;
 use system_commands::{
     check_runtime, complete_startup_splash, download_attachment, open_external_url,
 };
-use ui_state::load_ui_state;
 use ui_notifications::{replay_ui_events, spawn_ui_events_pruner, spawn_ui_refresh_listener};
+use ui_state::{load_agent_detail, load_thread_messages, load_ui_state};
 
 const WINDOW_STATE_FILE: &str = "window-state.json";
 const MIN_RESTORED_WINDOW_WIDTH: f64 = 1180.0;
@@ -323,6 +323,8 @@ pub fn run() {
             retry_agent_work,
             replay_ui_events,
             load_ui_state,
+            load_agent_detail,
+            load_thread_messages,
             load_activity_messages,
             load_channel_messages,
             load_channel_previews,

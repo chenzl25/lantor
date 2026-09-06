@@ -263,3 +263,94 @@ async fn benchmark_bootstrap_recency_indexes() {
     }
     drop_test_schema(pool, path.to_string_lossy().into_owned()).await;
 }
+
+#[tokio::test]
+#[ignore = "manual bootstrap payload benchmark on a disposable database copy"]
+async fn benchmark_bootstrap_payload() {
+    let source = std::env::var("LANTOR_BENCH_SOURCE_DATABASE").expect("source snapshot");
+    let path = std::env::temp_dir().join(format!(
+        "lantor-payload-bench-{}.sqlite",
+        uuid::Uuid::new_v4()
+    ));
+    let _guard = BenchmarkDatabase(path.clone());
+    let status = std::process::Command::new("sqlite3")
+        .args(["-readonly", &source])
+        .arg(format!(
+            ".backup '{}'",
+            path.to_string_lossy().replace('\'', "''")
+        ))
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let database_url = format!("sqlite://{}", path.display());
+    let pool = db_connect_with_url(&database_url, 5).await.unwrap();
+    let legacy = super::bootstrap_slim_tests::legacy_unread(&pool).await;
+    migrate(&pool).await.unwrap();
+    let current = crate::channels::load_channels(&pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|channel| (channel.id, i64::from(channel.unread_count)))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(
+        legacy, current,
+        "migration must preserve every channel unread count"
+    );
+    println!(
+        "UNREAD_EQUIVALENCE {}",
+        json!({"channels":current.len(), "equal":true})
+    );
+    let app = web_router(
+        Arc::new(WebState {
+            pool: pool.clone(),
+            db_url: database_url,
+        }),
+        PathBuf::from("dist"),
+    );
+    for route in ["/api/bootstrap?currentChannelOnly=true", "/api/bootstrap"] {
+        let mut samples = Vec::new();
+        for _ in 0..6 {
+            let started = Instant::now();
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(route).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let response_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let payload: Value = serde_json::from_slice(&body).unwrap();
+            let fields: serde_json::Map<String, Value> = payload.as_object().unwrap().iter().map(|(key,value)|
+                (key.clone(), json!({"bytes":serde_json::to_vec(value).unwrap().len(), "rows":value.as_array().map(Vec::len)}))).collect();
+            samples.push(json!({"bytes":body.len(), "response_ms":response_ms, "fields":fields, "perf":payload["__perf"]}));
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(route)
+                    .header("accept-encoding", "gzip")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let gzip_bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .len();
+        println!(
+            "BOOTSTRAP_PAYLOAD_BENCH {}",
+            json!({"route":route,"gzip_bytes":gzip_bytes,"samples":samples})
+        );
+    }
+    let mut samples = Vec::new();
+    for _ in 0..20 {
+        let started = Instant::now();
+        let channels = crate::channels::load_channels(&pool).await.unwrap();
+        samples.push(started.elapsed().as_secs_f64() * 1000.0);
+        assert!(!channels.is_empty());
+    }
+    println!("CHANNEL_READ_BENCH {}", json!({"samples_ms":samples}));
+    drop_test_schema(pool, path.to_string_lossy().into_owned()).await;
+}

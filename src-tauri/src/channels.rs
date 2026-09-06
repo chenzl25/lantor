@@ -72,10 +72,15 @@ pub(crate) async fn load_channels(pool: &SqlitePool) -> CommandResult<Vec<Channe
             c.description,
             c.kind,
             c.dm_agent_id,
-            cast(count(m.id) filter (
-                where julianday(m.created_at) > julianday(
+            cast((
+                select count(*) from messages m
+                where m.channel_id = c.id
+                  and m.seq > coalesce(r.last_read_seq, 0)
+                  -- Legacy writers can still insert timestamp-only markers.
+                  -- Migrated markers and new mark_read requests use seq only.
+                  and (r.last_read_seq is not null or julianday(m.created_at) > julianday(
                     coalesce(r.last_read_at, '0001-01-01T00:00:00+00:00')
-                )
+                  ))
                   and m.sender_role <> 'owner'
                   and m.delivery_state <> 'streaming'
                   and not (
@@ -105,8 +110,6 @@ pub(crate) async fn load_channels(pool: &SqlitePool) -> CommandResult<Vec<Channe
             ) as github_review_synced_at
         from channels c
         left join channel_read_state r on r.channel_id = c.id
-        left join messages m on m.channel_id = c.id
-        group by c.id, c.name, c.description, c.kind, c.dm_agent_id
         order by
           case
             when c.kind = 'channel' and c.name = 'lantor' then 0
@@ -205,6 +208,7 @@ pub(crate) async fn load_thread_activities(
         select
             root.id as thread_root_id,
             root.channel_id,
+            count(*) as reply_count,
             cast(sum(case
                 when reply.sender_role <> 'owner'
                   and julianday(reply.created_at) > julianday(
@@ -234,6 +238,7 @@ pub(crate) async fn load_thread_activities(
     Ok(rows
         .into_iter()
         .map(|row| ThreadActivity {
+            reply_count: row.get("reply_count"),
             thread_root_id: row.get("thread_root_id"),
             channel_id: row.get("channel_id"),
             unread_count: row.get("unread_count"),

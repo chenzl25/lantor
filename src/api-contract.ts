@@ -1,4 +1,7 @@
 import type {
+  Agent,
+  AgentActivity,
+  AgentWorkItem,
   AgentWorkspaceFile,
   AgentWorkspaceListing,
   Artifact,
@@ -50,6 +53,14 @@ type AgentDraftRequest = {
 };
 
 export type ApiContract = {
+  load_agent_detail: {
+    args: { agentId: string };
+    result: { agent: Agent; agent_activities: AgentActivity[]; agent_work_items: AgentWorkItem[] };
+  };
+  load_thread_messages: {
+    args: { threadRootId: string };
+    result: Message[];
+  };
   load_ui_state: {
     args: { scopes: UiStateScope[] };
     result: UiStatePatch;
@@ -339,6 +350,8 @@ export type ApiContract = {
 const API_COMMAND_NAMES = {
   bootstrap: true,
   load_ui_state: true,
+  load_agent_detail: true,
+  load_thread_messages: true,
   replay_ui_events: true,
   check_runtime: true,
   send_message: true,

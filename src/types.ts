@@ -55,6 +55,7 @@ export type Agent = {
   workspace_memory_path: string;
   workspace_memory_exists: boolean;
   workspace_entries: AgentWorkspaceEntry[];
+  details_loaded?: boolean;
   daily_budget_micros: number;
   subscription_status: AgentSubscriptionStatus | null;
 };
@@ -77,6 +78,7 @@ export type Channel = {
 };
 
 export type ThreadActivity = {
+  reply_count?: number;
   thread_root_id: string;
   channel_id: string;
   unread_count: number;
