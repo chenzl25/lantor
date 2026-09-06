@@ -26,6 +26,7 @@ import { MessageReferenceCard } from "./MessageReferenceCard";
 
 export type MessageMarkdownProps = {
   body: string;
+  references?: Record<string, ResolvedMessageReference>;
   onLocalAgentLink?: (handle: string) => void;
   messages?: Message[];
   channels?: Channel[];
@@ -133,11 +134,13 @@ function referenceFromHref(
   href: string | undefined,
   messages: Message[] | undefined,
   channels: Channel[] | undefined,
+  references: MessageMarkdownProps["references"],
 ) {
   if (!href?.startsWith(`${LOCAL_ENTITY_PATH_PREFIX}reference/`)) return null;
-  if (!messages || !channels) return null;
   const [, kind, id] = href.match(/^\/lantor\/reference\/(message|thread)\/([0-9a-fA-F-]{8,36})/) ?? [];
   if (kind !== "message" && kind !== "thread") return null;
+  if (references) return references[`${kind}:${id}`] ?? null;
+  if (!messages || !channels) return null;
   return resolveMessageReference({ kind, id, token: `[[${kind}:${id}]]` }, messages, channels);
 }
 
@@ -201,6 +204,7 @@ function MarkdownTableScroll({ children, scrollKey }: { children?: ReactNode; sc
 
 export function MarkdownRenderer({
   body,
+  references,
   onLocalAgentLink,
   messages,
   channels,
@@ -223,7 +227,7 @@ export function MarkdownRenderer({
   }, [onOpenReference, sourceMessageId]);
   const markdownComponents = useMemo<Components>(() => ({
     a: ({ children, href, node: _node, ...props }) => {
-      const reference = referenceFromHref(href, messages, channels);
+      const reference = referenceFromHref(href, messages, channels, references);
       if (reference) {
         return (
           <MessageReferenceCard
@@ -257,7 +261,7 @@ export function MarkdownRenderer({
       tableIndexRef.current += 1;
       return <MarkdownTableScroll scrollKey={tableScrollKey}>{children}</MarkdownTableScroll>;
     },
-  }), [channels, handleOpenReference, messages, onLocalAgentLink, onOpenReference, scrollKey, sourceMessageId]);
+  }), [references, channels, handleOpenReference, messages, onLocalAgentLink, onOpenReference, scrollKey, sourceMessageId]);
 
   return (
     <div className="markdown-body">

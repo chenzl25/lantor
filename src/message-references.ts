@@ -16,8 +16,8 @@ export type MessageReference = {
 };
 
 export type ResolvedMessageReference = MessageReference & {
-  message: import("./types").Message | null;
-  channel: import("./types").Channel | null;
+  message: Pick<Message, "id" | "channel_id" | "thread_root_id" | "sender_name" | "body" | "created_at"> | null;
+  channel: Pick<import("./types").Channel, "id" | "name"> | null;
   replyCount: number | null;
 };
 

@@ -3,21 +3,21 @@ import {
   ArrowRight,
   BookOpen,
   CheckCircle2,
-  ChevronRight,
   Flag,
   Github,
   Hash,
-  Bookmark,
   LayoutList,
   MessageSquare,
   Paperclip,
-  Quote,
   Send,
   Settings,
   Trash2,
   UserPlus,
 } from "lucide-react";
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FocusEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TextareaHTMLAttributes, type WheelEvent as ReactWheelEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FocusEvent, type MouseEvent as ReactMouseEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type TextareaHTMLAttributes, type WheelEvent as ReactWheelEvent } from "react";
+import { useEventCallback } from "../hooks/useEventCallback";
+import { useMessageRows } from "../hooks/useMessageRows";
+import { useRetainedValue } from "../hooks/useRetainedValue";
 import { useAutoGrowTextarea } from "../hooks/useAutoGrowTextarea";
 import { useCoarsePointer } from "../hooks/useCoarsePointer";
 import { useMentionPicker } from "../hooks/useMentionPicker";
@@ -26,22 +26,19 @@ import { isImeComposing, isInputComposing } from "../input-utils";
 import { mentionableAgentsForChannel } from "../mentions";
 import { copyText } from "../clipboard";
 import { APP_DISPLAY_NAME } from "../branding";
-import { isCompactFollowupMessage, messageHasVisibleContent, wasEdited } from "../message-grouping";
-import { shouldCollapseMessage as shouldCollapseChannelMessage } from "../message-preview";
+import { isCompactFollowupMessage } from "../message-grouping";
 import { messageShareLink, messageToMarkdown } from "../message-share";
 import { appendMessageReferenceToken, messageReferenceToken, parseMessageReferences, removeMessageReferenceToken, withoutMessageReferenceTokens, type MessageReferenceKind, type ResolvedMessageReference } from "../message-references";
 import { Agent, AgentActivity, AgentRun, AgentWorkItem, Artifact, Channel, DraftAttachment, GithubIssueTaskResult, GithubReviewTaskResult, Message, OwnerProfile, TASK_STATUSES, Task, ThreadReplySummary } from "../types";
-import { agentForMessageSender, deletedAgentForMessageSender, formatClockTime, formatDateDivider, formatTime, isSameCalendarDay, ownerAsAvatarAgent, visibleAgentDescription, visibleChannelDescription } from "../ui-utils";
-import { ActivityProgressDock, activeProgressByAgent } from "./ActivityProgressDock";
+import { formatTime, isSameCalendarDay, visibleAgentDescription, visibleChannelDescription } from "../ui-utils";
+import { ActivityProgressDock, activeProgressByAgent, indexProgress, type ActiveAgentProgress } from "./ActivityProgressDock";
 import { AgentAvatar, AgentAvatarWithProfile } from "./AgentAvatar";
 import { ComposerReferenceTextarea } from "./ComposerReferenceTextarea";
 import { DraftAttachmentsPreview } from "./DraftAttachmentsPreview";
 import { GithubPanel } from "./GithubPanel";
 import { WikiPanel } from "./WikiPanel";
 import { MessageActionMenu } from "./MessageActionMenu";
-import { MessageAttachments } from "./MessageAttachments";
-import { MessageArtifacts } from "./MessageArtifacts";
-import { MessageMarkdown } from "./MessageMarkdown";
+import { MessageRow, type MessageRowActions, type MessageRowAction } from "./MessageRow";
 import { MessageReferencePreview, type MessageReferencePreviewItem } from "./MessageReferencePreview";
 import { TaskAssigneePicker } from "./TaskAssigneePicker";
 import { UnreadBadge } from "./UnreadBadge";
@@ -113,113 +110,18 @@ type MessageMenuState = {
   message: Message;
 } | null;
 
-const MESSAGE_CARD_INTERACTIVE_TARGET_SELECTOR = [
-  "a",
-  "button",
-  "input",
-  "select",
-  "textarea",
-  "summary",
-  "[contenteditable='true']",
-  "[role='button']",
-  "[role='link']",
-  ".message-artifacts",
-  ".message-attachments",
-].join(",");
 const LOAD_OLDER_SCROLL_TOP_PX = 96;
 
 function taskStatusLabel(status: string) {
   return status.replace("_", " ");
 }
 
-type ReplyProgress = ReturnType<typeof activeProgressByAgent>[number];
-type ActiveReplyMenuPlacement = "above" | "below";
 const MESSAGE_LIST_COMPOSER_RESIZE_SUPPRESS_MS = 200;
-const EMPTY_ACTIVE_REPLY_PROGRESS_BY_ROOT: Record<string, ReplyProgress[]> = Object.freeze({});
 
 function compactReferencePreview(body: string) {
   const text = withoutMessageReferenceTokens(body).replace(/\s+/g, " ").trim();
   if (!text) return "No text preview";
   return text.length > 140 ? `${text.slice(0, 139).trimEnd()}...` : text;
-}
-
-function compactReplyProgressText(value: string, limit: number) {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  if (!normalized) return "";
-  if (normalized.length <= limit) return normalized;
-  return `${normalized.slice(0, Math.max(0, limit - 1)).trim()}...`;
-}
-
-function userFacingReplyProgressTitle(value: string) {
-  const title = value.trim() || "Working";
-  const lowered = title.toLowerCase();
-  if (lowered.includes("warm app-server ready") || lowered.includes("warm stream-json ready")) return "Runtime ready";
-  if (lowered === "started working" || lowered === "run started" || lowered === "run created") return "Working";
-  return title;
-}
-
-function userFacingReplyProgressDetail(value: string) {
-  const detail = value.trim();
-  if (!detail || detail.startsWith("{") || detail.startsWith("[")) return "";
-  const parts = detail.split(/[,\n]/).map((part) => part.trim()).filter(Boolean);
-  if (parts.length > 0) {
-    const entries = parts.map((part) => {
-      const separator = part.indexOf("=");
-      return separator > 0
-        ? [part.slice(0, separator).trim(), part.slice(separator + 1).trim()]
-        : null;
-    });
-    if (entries.every(Boolean)) {
-      return entries
-        .filter((entry): entry is string[] => Boolean(entry))
-        .filter(([key]) => !["pid", "thread_id", "session_id", "request_id", "run_id", "reference_id", "uuid"].includes(key))
-        .map(([key, item]) => `${key.replace(/_/g, " ")} ${item}`)
-        .join(", ");
-    }
-  }
-  if (detail === "pid unavailable") return "";
-  return detail;
-}
-
-function replyProgressSummary(progress: ReplyProgress) {
-  if (progress.latestActivity) {
-    const title = userFacingReplyProgressTitle(progress.latestActivity.summary || progress.latestActivity.title || "Working");
-    const detail = compactReplyProgressText(userFacingReplyProgressDetail(progress.latestActivity.detail), 72);
-    return {
-      title,
-      detail: detail && detail !== title ? detail : "",
-    };
-  }
-  if (progress.state === "queued" && progress.queuedItems.length > 0) {
-    return {
-      title: progress.queuedItems.length === 1 ? "Queued" : `${progress.queuedItems.length} queued`,
-      detail: "Waiting to start",
-    };
-  }
-  return {
-    title: "Working",
-    detail: "",
-  };
-}
-
-function ActiveReplyIndicator({ label }: { label: string }) {
-  return (
-    <span className="thread-reply-status-text" aria-label={label}>
-      <span className="thread-reply-status-dot" aria-hidden="true" />
-      <span className="thread-reply-status-dot" aria-hidden="true" />
-      <span className="thread-reply-status-dot" aria-hidden="true" />
-    </span>
-  );
-}
-
-function isInteractiveMessageClick(event: ReactMouseEvent<HTMLElement>) {
-  if (event.nativeEvent.composedPath().some((node) => (
-    node instanceof Element && node.matches(MESSAGE_CARD_INTERACTIVE_TARGET_SELECTOR)
-  ))) {
-    return true;
-  }
-  return event.target instanceof Element
-    && Boolean(event.target.closest(MESSAGE_CARD_INTERACTIVE_TARGET_SELECTOR));
 }
 
 export function Conversation({
@@ -281,7 +183,6 @@ export function Conversation({
   const [showChannelActions, setShowChannelActions] = useState(false);
   const [messageMenu, setMessageMenu] = useState<MessageMenuState>(null);
   const [expandedChannelMessageIds, setExpandedChannelMessageIds] = useState<Set<string>>(() => new Set());
-  const [activeReplyMenuPlacementByMessageId, setActiveReplyMenuPlacementByMessageId] = useState<Record<string, ActiveReplyMenuPlacement>>({});
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const messageListContentRef = useRef<HTMLDivElement | null>(null);
   const messageListBottomAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -298,59 +199,26 @@ export function Conversation({
   const isDm = channel?.kind === "dm";
   const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
   const dmAgent = isDm ? agentsById.get(channel?.dm_agent_id ?? "") ?? null : null;
-  const openLinkedAgentDetail = useCallback((handle: string) => {
+  const openLinkedAgentDetail = useEventCallback((handle: string) => {
     const agent = agents.find((candidate) => candidate.handle.toLowerCase() === handle.toLowerCase());
     if (agent) openAgentDetail(agent);
-  }, [agents, openAgentDetail]);
+  });
   const channelId = channel?.id ?? null;
-  const activeReplyRootIds = useMemo(() => {
-    if (!channelId) return new Set<string>();
-    return new Set(agentWorkItems
-      .filter((workItem) => workItem.channel_id === channelId && workItem.thread_root_id)
-      .map((workItem) => workItem.thread_root_id as string));
-  }, [agentWorkItems, channelId]);
-  const activeReplyProgressByRoot = useMemo<Record<string, ReplyProgress[]>>(() => {
-    if (!channelId || activeReplyRootIds.size === 0) return EMPTY_ACTIVE_REPLY_PROGRESS_BY_ROOT;
-    return Object.fromEntries(
-      rootMessages
-        .filter((message) => activeReplyRootIds.has(message.id))
-        .map((message) => [
-          message.id,
-          activeProgressByAgent(
-            [],
-            agentActivities,
-            agentRuns,
-            agentWorkItems,
-            agents,
-            channelId,
-            message.id,
-          ),
-        ] as const)
-        .filter(([, progress]) => progress.length > 0),
-    );
-  }, [activeReplyRootIds, agentActivities, agentRuns, agentWorkItems, agents, channelId, rootMessages]);
-  const messageListProgressVersion = useMemo(() => {
-    if (!channel) return "";
-    const rootMessageIds = new Set(rootMessages.map((message) => message.id));
-    const relevantWorkItems = agentWorkItems.filter((workItem) => (
-      workItem.channel_id === channel.id
-      && ((workItem.thread_root_id ?? null) === null || rootMessageIds.has(workItem.thread_root_id ?? ""))
-    ));
-    const relevantRunIds = new Set(relevantWorkItems.map((workItem) => workItem.run_id).filter(Boolean));
-    const relevantRuns = agentRuns.filter((run) => relevantRunIds.has(run.id));
-    const relevantActivities = agentActivities.filter((activity) => (
-      activity.run_id ? relevantRunIds.has(activity.run_id) : false
-    ));
-    return [
-      ...relevantWorkItems.map((workItem) => (
-        `work:${workItem.id}:${workItem.status}:${workItem.updated_at}:${workItem.run_id ?? ""}:${workItem.thread_root_id ?? ""}`
-      )),
-      ...relevantRuns.map((run) => `run:${run.id}:${run.status}:${run.started_at ?? ""}:${run.stopped_at ?? ""}`),
-      ...relevantActivities.map((activity) => (
-        `activity:${activity.id}:${activity.status}:${activity.created_at}`
-      )),
-    ].join("|");
-  }, [agentActivities, agentRuns, agentWorkItems, channel, rootMessages]);
+  const progressIndex = useMemo(() => indexProgress(agentActivities, agentRuns, agentWorkItems, agents),
+    [agentActivities, agentRuns, agentWorkItems, agents]);
+  const progressState = useRetainedValue(useMemo(() => {
+    const byRoot: Record<string, ActiveAgentProgress[]> = {};
+    if (channelId) {
+      const surfaces = progressIndex.workItemsByChannel.get(channelId);
+      for (const message of rootMessages) {
+        if (!surfaces?.has(message.id)) continue;
+        const progress = activeProgressByAgent([], progressIndex, channelId, message.id);
+        if (progress.length) byRoot[message.id] = progress;
+      }
+    }
+    return { byRoot, dock: activeProgressByAgent(rootMessages, progressIndex, channelId, null) };
+  }, [progressIndex, rootMessages, channelId]));
+  const rows = useMessageRows(rootMessages, messages, channels, agents, ownerProfile, isDm, threadReplySummaries, progressState.byRoot);
   const lastRootMessage = rootMessages[rootMessages.length - 1] ?? null;
   const { activeTasks, reviewTasks, unassignedTasks, assignedTasks } = useMemo(() => ({
     activeTasks: visibleTasks.filter((task) => task.status !== "done"),
@@ -409,30 +277,29 @@ export function Conversation({
     ));
   }
 
-  const handleReferenceOpen = useCallback((sourceMessageId: string, reference: ResolvedMessageReference) => {
+  const handleReferenceOpen = useEventCallback((sourceMessageId: string, reference: ResolvedMessageReference) => {
     if (reference.kind === "thread") {
       onReferenceThreadJump(sourceMessageId, reference.id);
       return;
     }
     onReferenceMessageJump(sourceMessageId, reference.id);
     targetRootMessageIntoView(reference.id);
-  }, [onReferenceMessageJump, onReferenceThreadJump]);
+  });
 
-  function renderMessageBody(message: Message) {
-    if (!message.body.trim()) return null;
-    const hasReferenceTokens = message.body.includes("[[");
-    return (
-      <MessageMarkdown
-        body={message.body}
-        messages={hasReferenceTokens ? messages : undefined}
-        channels={hasReferenceTokens ? channels : undefined}
-        sourceMessageId={hasReferenceTokens ? message.id : undefined}
-        onOpenReference={hasReferenceTokens ? handleReferenceOpen : undefined}
-        onLocalAgentLink={openLinkedAgentDetail}
-        scrollKey={`message:${message.id}`}
-      />
-    );
-  }
+  const onRowAction = useEventCallback((message: Message, action: MessageRowAction) => {
+    switch (action) {
+      case "reference": insertMessageReference(message, "message"); break;
+      case "save": onToggleMessageSaved(message, !savedMessageIds.has(message.id)); break;
+      case "thread": setActiveThreadId(message.id); break;
+      case "expand": toggleChannelMessageExpanded(message.id); break;
+    }
+  });
+  const onRowMenu = useEventCallback((message: Message, x: number, y: number) => setMessageMenu({ message, x, y }));
+  const onRowArtifact = useEventCallback(openArtifact);
+  const rowActions = useMemo<MessageRowActions>(() => ({
+    onAction: onRowAction, onMenu: onRowMenu, onArtifact: onRowArtifact,
+    onAgent: openLinkedAgentDetail, onReference: handleReferenceOpen,
+  }), [onRowAction, onRowMenu, onRowArtifact, openLinkedAgentDetail, handleReferenceOpen]);
 
   function insertMessageReference(message: Message, kind: MessageReferenceKind) {
     const referenceId = kind === "thread" ? (message.thread_root_id ?? message.id) : message.id;
@@ -633,55 +500,11 @@ export function Conversation({
     });
   }
 
-  function updateActiveReplyMenuPlacement(messageId: string, summaryElement: HTMLElement) {
-    const menu = summaryElement.querySelector<HTMLElement>(".thread-reply-active-menu");
-    if (!menu) return;
-
-    const boundaryRect = messageListRef.current?.getBoundingClientRect();
-    const summaryRect = summaryElement.getBoundingClientRect();
-    const menuHeight = menu.offsetHeight || menu.getBoundingClientRect().height;
-    const gap = 6;
-    const boundaryTop = boundaryRect?.top ?? 0;
-    const boundaryBottom = boundaryRect?.bottom ?? window.innerHeight;
-    const spaceBelow = boundaryBottom - summaryRect.bottom - gap;
-    const spaceAbove = summaryRect.top - boundaryTop - gap;
-    const placement: ActiveReplyMenuPlacement = spaceBelow < menuHeight && spaceAbove > spaceBelow
-      ? "above"
-      : "below";
-
-    setActiveReplyMenuPlacementByMessageId((current) => (
-      current[messageId] === placement ? current : { ...current, [messageId]: placement }
-    ));
-  }
-
   function handleMessageListContentLoad() {
     const element = messageListRef.current;
     if (element && shouldSuppressMessageListFollow(element)) return;
     if (!shouldFollowMessagesRef.current) return;
     scrollMessagesToBottom();
-  }
-
-  function hasSelectedText() {
-    return Boolean(window.getSelection()?.toString().trim());
-  }
-
-  function isPrimaryUnmodifiedClick(event: ReactMouseEvent<HTMLElement>) {
-    return event.button === 0 && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
-  }
-
-  function shouldOpenThreadFromMessageClick() {
-    return window.matchMedia("(max-width: 760px)").matches;
-  }
-
-  function renderReplyParticipantAvatar(message: Message) {
-    const agent = agentForMessageSender(message, agentsById);
-    if (agent) return <AgentAvatar agent={agent} size="sm" title={`@${agent.handle}`} showStatus={false} />;
-    const deletedAgent = deletedAgentForMessageSender(message);
-    if (deletedAgent) return <AgentAvatar agent={deletedAgent} size="sm" title={`@${deletedAgent.handle} has been deleted`} showStatus={false} />;
-    if (message.sender_role === "owner") {
-      return <AgentAvatar agent={ownerAsAvatarAgent(ownerProfile)} size="sm" showStatus={false} />;
-    }
-    return <span className="thread-reply-fallback-avatar">{message.sender_name.slice(0, 1)}</span>;
   }
 
   useEffect(() => {
@@ -719,10 +542,6 @@ export function Conversation({
   function handleChannelActionsBlur(event: FocusEvent<HTMLDivElement>) {
     if (event.currentTarget.contains(event.relatedTarget)) return;
     setShowChannelActions(false);
-  }
-
-  function shouldUseNativeMessageSelection() {
-    return window.matchMedia("(hover: none)").matches;
   }
 
   async function copyMessageMarkdown(message: Message) {
@@ -820,7 +639,7 @@ export function Conversation({
   useLayoutEffect(() => {
     // Don't auto-follow to bottom while the user has jumped to a referenced
     // message (clicked a reference chip). Otherwise every agent-activity refresh
-    // bumps messageListProgressVersion and yanks them back down to the bottom.
+    // bumps progressState and yanks them back down to the bottom.
     if (focusedMessageId) return;
     if (!shouldFollowMessagesRef.current) return;
     scrollMessagesToBottom();
@@ -828,7 +647,7 @@ export function Conversation({
     activeTab,
     channel?.id,
     focusedMessageId,
-    messageListProgressVersion,
+    progressState,
     rootMessages.length,
     lastRootMessage?.id,
     lastRootMessage?.updated_at,
@@ -1031,16 +850,7 @@ export function Conversation({
       {activeTab === "chat" ? (
         <div className="message-list-shell">
           <div className="message-progress-layer">
-            <ActivityProgressDock
-              messages={rootMessages}
-              activities={agentActivities}
-              runs={agentRuns}
-              workItems={agentWorkItems}
-              agents={agents}
-              channelId={channel?.id ?? null}
-              threadRootId={null}
-              onOpenWorkItem={openWorkItem}
-            />
+            <ActivityProgressDock progress={progressState.dock} onOpenWorkItem={openWorkItem} />
           </div>
           <div
             ref={messageListRef}
@@ -1089,280 +899,17 @@ export function Conversation({
                 </div>
               )}
             {rootMessages.map((message, index) => {
-            const linkedTask = taskForMessage(message.id);
-            const replyCount = threadReplyCounts[message.id] ?? 0;
-            const unreadReplyCount = threadUnreadCounts[message.id] ?? 0;
-            const replySummary = threadReplySummaries[message.id] ?? null;
-            const activeReplyProgress = activeReplyProgressByRoot[message.id] ?? [];
-            const hasActiveReplyProgress = activeReplyProgress.length > 0;
-            const activeReplyStatus = hasActiveReplyProgress
-              ? replyProgressSummary(activeReplyProgress[0]).title
-              : "";
-            const activeReplyMenuPlacement = activeReplyMenuPlacementByMessageId[message.id] ?? "above";
-            const replyingAgents = activeReplyProgress.map((progress) => progress.agent.display_name).join(", ");
-            const activeReplyAgentIds = new Set(activeReplyProgress.map((progress) => progress.agent.id).filter(Boolean));
-            const replySummaryClassName = [
-              "thread-reply-summary",
-              hasActiveReplyProgress ? "active-reply" : "",
-              unreadReplyCount > 0 ? "unread-replies" : "",
-            ].filter(Boolean).join(" ");
-            const replyParticipants = (replySummary?.participants ?? [])
-              .filter((participant) => !participant.sender_agent_id || !activeReplyAgentIds.has(participant.sender_agent_id))
-              .slice(0, Math.max(0, 3 - activeReplyProgress.length));
-            const messageAgent = isDm ? null : agentForMessageSender(message, agentsById);
-            const deletedMessageAgent = isDm || messageAgent ? null : deletedAgentForMessageSender(message);
-            const isSaved = savedMessageIds.has(message.id);
-            const isCompact = isCompactFollowupMessage(message, rootMessages[index - 1]);
-            const showDateDivider = index === 0 || !isSameCalendarDay(message.created_at, rootMessages[index - 1]?.created_at ?? "");
-            const isLongChannelMessage = shouldCollapseChannelMessage(message.body);
-            const isChannelMessageExpanded = expandedChannelMessageIds.has(message.id);
-            if (message.sender_role === "system") {
-              return (
-                <Fragment key={message.id}>
-                  {showDateDivider && (
-                    <div className="message-date-divider" role="separator">
-                      <span />
-                      <time dateTime={message.created_at}>{formatDateDivider(message.created_at)}</time>
-                      <span />
-                    </div>
-                  )}
-                  <article className="system-message">
-                    <div className="system-message-line">
-                      {renderMessageBody(message)}
-                      <time>{formatTime(message.created_at)}</time>
-                    </div>
-                  </article>
-                </Fragment>
-              );
-            }
-            return (
-              <Fragment key={message.id}>
-                {showDateDivider && (
-                  <div className="message-date-divider" role="separator">
-                    <span />
-                    <time dateTime={message.created_at}>{formatDateDivider(message.created_at)}</time>
-                    <span />
-                  </div>
-                )}
-                <article
-                  data-message-id={message.id}
-                  className={`message-card ${isCompact ? "compact" : ""} ${message.id === activeRoot?.id ? "focused" : ""} ${isSaved ? "saved" : ""}`}
-                  data-jump-focused={focusedMessageId === message.id ? "true" : "false"}
-                  onClick={(event) => {
-                    if (!isPrimaryUnmodifiedClick(event)) return;
-                    if (isInteractiveMessageClick(event)) return;
-                    if (hasSelectedText()) return;
-                    if (shouldOpenThreadFromMessageClick()) setActiveThreadId(message.id);
-                  }}
-                  onContextMenu={(event) => {
-                    if (shouldUseNativeMessageSelection()) return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    setMessageMenu({ x: event.clientX, y: event.clientY, message });
-                  }}
-                >
-                  {isCompact ? (
-                    <time className="message-compact-time" dateTime={message.created_at}>
-                      {formatClockTime(message.created_at)}
-                    </time>
-                  ) : messageAgent ? (
-                    <button
-                      type="button"
-                      className="message-agent-avatar-trigger"
-                      aria-label={`View @${messageAgent.handle} details`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        openAgentDetail(messageAgent);
-                      }}
-                    >
-                      <AgentAvatarWithProfile agent={messageAgent} />
-                    </button>
-                  ) : deletedMessageAgent ? (
-                    <AgentAvatar
-                      agent={deletedMessageAgent}
-                      size="md"
-                      title={`@${deletedMessageAgent.handle} has been deleted`}
-                    />
-                  ) : message.sender_role === "owner" ? (
-                    <AgentAvatar agent={ownerAsAvatarAgent(ownerProfile)} size="md" showStatus={false} />
-                  ) : (
-                    <div className="avatar">{message.sender_name.slice(0, 1)}</div>
-                  )}
-                  <div className="message-body">
-                    {!isCompact && (
-                      <div className="meta">
-                        <strong>{message.sender_name}</strong>
-                        <span>{message.sender_role}</span>
-                        <time>{formatTime(message.created_at)}</time>
-                        {wasEdited(message) && <span className="edited-indicator">edited</span>}
-                        {linkedTask && (
-                          <mark>
-                            <CheckCircle2 size={14} /> #{linkedTask.number} · {linkedTask.status.replace("_", " ")}
-                          </mark>
-                        )}
-                        <button
-                          type="button"
-                          className={`message-save-button mobile-message-save-tag ${isSaved ? "saved" : ""}`}
-                          title={isSaved ? "Unsave message" : "Save message"}
-                          aria-label={isSaved ? "Unsave message" : "Save message"}
-                          aria-pressed={isSaved}
-                          onPointerDown={(event) => event.stopPropagation()}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onToggleMessageSaved(message, !isSaved);
-                          }}
-                        >
-                          <Bookmark size={14} />
-                        </button>
-                      </div>
-                    )}
-                    <div className="message-hover-actions" aria-label="Message actions">
-                      <button
-                        type="button"
-                        data-tooltip="Reference"
-                        title="Reference message"
-                        aria-label="Reference message"
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          insertMessageReference(message, "message");
-                        }}
-                      >
-                        <Quote size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        data-tooltip={replyCount > 0 ? "View thread" : "Reply in thread"}
-                        title={replyCount > 0 ? "View thread replies" : "Reply in thread"}
-                        aria-label={replyCount > 0 ? "View thread replies" : "Reply in thread"}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          if (!isPrimaryUnmodifiedClick(event)) return;
-                          setActiveThreadId(message.id);
-                        }}
-                      >
-                        <MessageSquare size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        className={isSaved ? "saved" : ""}
-                        data-tooltip={isSaved ? "Unsave" : "Save"}
-                        title={isSaved ? "Unsave message" : "Save message"}
-                        aria-label={isSaved ? "Unsave message" : "Save message"}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onToggleMessageSaved(message, !isSaved);
-                        }}
-                      >
-                        <Bookmark size={14} />
-                      </button>
-                    </div>
-                    {(message.delivery_state !== "streaming" || messageHasVisibleContent(message)) && (
-                      <>
-                        <div className={isLongChannelMessage && !isChannelMessageExpanded ? "message-long-preview collapsed" : "message-long-preview"}>
-                          {renderMessageBody(message)}
-                        </div>
-                        {isLongChannelMessage && (
-                          <button
-                            type="button"
-                            className="message-expand-button"
-                            aria-expanded={isChannelMessageExpanded}
-                            onPointerDown={(event) => event.stopPropagation()}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              toggleChannelMessageExpanded(message.id);
-                            }}
-                          >
-                            {isChannelMessageExpanded ? "Show less" : "Show more"}
-                          </button>
-                        )}
-                      </>
-                    )}
-                    <MessageAttachments attachments={message.attachments} showImageThumbnails={showImageThumbnails} />
-                    <MessageArtifacts artifacts={message.artifacts} onOpenArtifact={openArtifact} />
-                    {message.delivery_state === "sending" && (
-                      <div className="message-stream-state sending">Sending...</div>
-                    )}
-                    {message.delivery_state === "error" && (
-                      <div className="message-stream-state error">Response interrupted</div>
-                    )}
-                    {(hasActiveReplyProgress || (replyCount > 0 && replySummary)) && (
-                      <button
-                        type="button"
-                        className={replySummaryClassName}
-                        data-active-menu-placement={hasActiveReplyProgress ? activeReplyMenuPlacement : undefined}
-                        title="View thread replies"
-                        aria-label={hasActiveReplyProgress
-                          ? `${activeReplyStatus}${replyingAgents ? `: ${replyingAgents}` : ""}. View thread`
-                          : `View ${replyCount} ${replyCount === 1 ? "reply" : "replies"} in thread`}
-                        onPointerEnter={(event) => {
-                          if (hasActiveReplyProgress) updateActiveReplyMenuPlacement(message.id, event.currentTarget);
-                        }}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onFocus={(event) => {
-                          if (hasActiveReplyProgress) updateActiveReplyMenuPlacement(message.id, event.currentTarget);
-                        }}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          if (!isPrimaryUnmodifiedClick(event)) return;
-                          setActiveThreadId(message.id);
-                        }}
-                      >
-                        {(activeReplyProgress.length > 0 || replyParticipants.length > 0) && (
-                          <div className="thread-reply-avatars">
-                            {activeReplyProgress.slice(0, 3).map((progress) => (
-                              <span key={`active:${progress.key}`}>
-                                <AgentAvatar agent={progress.agent} size="sm" showStatus={false} />
-                              </span>
-                            ))}
-                            {replyParticipants.map((participant) => (
-                              <span key={`${participant.sender_role}:${participant.sender_agent_id ?? participant.sender_name}`}>
-                                {renderReplyParticipantAvatar(participant)}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                        {hasActiveReplyProgress && (
-                          <span className="thread-reply-progress-dots" aria-hidden="true">...</span>
-                        )}
-                        {replyCount > 0 && (
-                          <strong>{`${replyCount} ${replyCount === 1 ? "reply" : "replies"}`}</strong>
-                        )}
-                        {hasActiveReplyProgress ? (
-                          <span className="thread-reply-summary-spacer" aria-hidden="true">
-                            <span className="thread-reply-active-menu" aria-hidden="true">
-                              {activeReplyProgress.map((progress) => {
-                                const summary = replyProgressSummary(progress);
-                                return (
-                                  <span key={`menu:${progress.key}`} className="thread-reply-active-agent">
-                                    <AgentAvatar agent={progress.agent} size="sm" showStatus={false} />
-                                    <span className="thread-reply-active-agent-copy">
-                                      <span className="thread-reply-active-agent-name">{progress.agent.display_name}</span>
-                                      <span className="thread-reply-active-agent-status">
-                                        <span>{summary.title}</span>
-                                        {summary.detail && <em>{summary.detail}</em>}
-                                      </span>
-                                    </span>
-                                  </span>
-                                );
-                              })}
-                            </span>
-                          </span>
-                        ) : replySummary?.latest ? (
-                          <span className="thread-reply-summary-action">
-                            <time dateTime={replySummary.latest.created_at}>Last reply {formatTime(replySummary.latest.created_at)}</time>
-                            <span className="thread-reply-summary-open">View thread</span>
-                          </span>
-                        ) : null}
-                        <ChevronRight className="thread-reply-summary-icon" size={18} aria-hidden="true" />
-                      </button>
-                    )}
-                  </div>
-                </article>
-              </Fragment>
-            );
+              const task = taskForMessage(message.id);
+              return <MessageRow
+                key={message.id} data={rows[message.id]} actions={rowActions} variant="channel"
+                compact={isCompactFollowupMessage(message, rootMessages[index - 1])}
+                dateDivider={index === 0 || !isSameCalendarDay(message.created_at, rootMessages[index - 1]?.created_at ?? "")}
+                saved={savedMessageIds.has(message.id)} expanded={expandedChannelMessageIds.has(message.id)}
+                focused={message.id === activeRoot?.id} jumpFocused={focusedMessageId === message.id}
+                showImageThumbnails={showImageThumbnails}
+                replyCount={threadReplyCounts[message.id] ?? 0} unreadReplyCount={threadUnreadCounts[message.id] ?? 0}
+                taskNumber={task?.number} taskStatus={task?.status}
+              />;
             })}
             <div ref={messageListBottomAnchorRef} className="message-list-bottom-anchor" aria-hidden="true" />
           </div>

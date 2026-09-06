@@ -19,20 +19,14 @@ import {
   Wrench,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { memo, useMemo, useState } from "react";
+import { memo, useState } from "react";
 import type { Agent, AgentActivity, AgentRun, AgentWorkItem, Message } from "../types";
 import { messageHasVisibleContent, messageRunId } from "../message-grouping";
 import { formatClockTime } from "../ui-utils";
 import { AgentAvatar } from "./AgentAvatar";
 
 type ActivityProgressDockProps = {
-  messages: Message[];
-  activities: AgentActivity[];
-  runs: AgentRun[];
-  workItems: AgentWorkItem[];
-  agents: Agent[];
-  channelId: string | null;
-  threadRootId: string | null;
+  progress: ActiveAgentProgress[];
   onOpenWorkItem?: (item: AgentWorkItem, focusedMessageIdOverride?: string | null) => void;
 };
 
@@ -309,38 +303,40 @@ function isTerminalProgressActivity(activity: AgentActivity | null) {
   return false;
 }
 
-function workItemMatchesSurface(
-  workItem: AgentWorkItem,
-  channelId: string | null,
-  threadRootId: string | null,
+export function indexProgress(
+  activities: AgentActivity[], runs: AgentRun[], workItems: AgentWorkItem[], agents: Agent[],
 ) {
-  if (!channelId || workItem.channel_id !== channelId) return false;
-  return (workItem.thread_root_id ?? null) === (threadRootId ?? null);
-}
-
-function agentForProgress(
-  handle: string,
-  activity: AgentActivity | null,
-  agents: Agent[],
-): ActiveAgentProgress["agent"] {
-  const activityHandle = activity?.agent_handle?.replace(/^@/, "").trim();
-  const lookup = activityHandle || handle;
-  const agent = agents.find((candidate) => candidate.handle === lookup);
-  if (agent) return agent;
-  const displayName = lookup ? `@${lookup}` : "Agent";
+  const activitiesByRun = new Map<string, AgentActivity[]>();
+  // Sort useful history once for all roots, not once per visible thread.
+  for (const activity of activities.filter(isUsefulActivity)
+    .sort((left, right) => timestamp(right.created_at) - timestamp(left.created_at))) {
+    if (!activity.run_id) continue;
+    const group = activitiesByRun.get(activity.run_id) ?? [];
+    group.push(activity);
+    activitiesByRun.set(activity.run_id, group);
+  }
+  const workItemsByChannel = new Map<string, Map<string | null, AgentWorkItem[]>>();
+  for (const item of workItems) {
+    if (!item.channel_id) continue;
+    const channel = workItemsByChannel.get(item.channel_id) ?? new Map<string | null, AgentWorkItem[]>();
+    const root = item.thread_root_id ?? null;
+    const group = channel.get(root) ?? [];
+    group.push(item);
+    channel.set(root, group);
+    workItemsByChannel.set(item.channel_id, channel);
+  }
   return {
-    handle: lookup || "agent",
-    display_name: displayName,
-    status: "running",
+    activitiesByRun,
+    runsById: new Map(runs.map((run) => [run.id, run])),
+    workItemsByChannel,
+    agentsById: new Map(agents.map((agent) => [agent.id, agent])),
+    agentsByHandle: new Map(agents.map((agent) => [agent.handle, agent])),
   };
 }
 
 export function activeProgressByAgent(
   messages: Message[],
-  activities: AgentActivity[],
-  runs: AgentRun[],
-  workItems: AgentWorkItem[],
-  agents: Agent[],
+  index: ReturnType<typeof indexProgress>,
   channelId: string | null,
   threadRootId: string | null,
 ) {
@@ -353,19 +349,10 @@ export function activeProgressByAgent(
       && message.delivery_state === "streaming"
       && !messageHasVisibleContent(message));
 
-  const activitiesByRun = new Map<string, AgentActivity[]>();
-  activities
-    .filter(isUsefulActivity)
-    .sort((left, right) => timestamp(right.created_at) - timestamp(left.created_at))
-    .forEach((activity) => {
-      if (!activity.run_id) return;
-      const current = activitiesByRun.get(activity.run_id) ?? [];
-      current.push(activity);
-      activitiesByRun.set(activity.run_id, current);
-    });
-
-  const runsById = new Map(runs.map((run) => [run.id, run]));
-  const surfaceWorkItems = workItems.filter((workItem) => workItemMatchesSurface(workItem, channelId, threadRootId));
+  const { activitiesByRun, runsById, agentsById, agentsByHandle } = index;
+  const surfaceWorkItems = channelId
+    ? index.workItemsByChannel.get(channelId)?.get(threadRootId) ?? []
+    : [];
   const candidatesByRun = new Map<string, ProgressCandidate>();
   const addCandidate = (runId: string, candidate: ProgressCandidate) => {
     const current = candidatesByRun.get(runId);
@@ -427,7 +414,11 @@ export function activeProgressByAgent(
     const compactHistory = compactProgressActivities(history).slice(0, MAX_PROGRESS_HISTORY_ITEMS);
     progressByAgent.set(key, {
       key,
-      agent: existing?.agent ?? agentForProgress(handle, latestActivity, agents),
+      agent: existing?.agent ?? agentsByHandle.get(handle) ?? {
+        handle: handle || "agent",
+        display_name: handle ? `@${handle}` : "Agent",
+        status: "running",
+      },
       workItem: candidate.workItem ?? existing?.workItem ?? null,
       queuedItems: existing?.queuedItems ?? [],
       state: existing?.state === "working" || candidate.state === "working" ? "working" : "queued",
@@ -445,7 +436,7 @@ export function activeProgressByAgent(
       const queuedItems = [...(existing?.queuedItems ?? [])];
       if (!queuedItems.some((item) => item.id === workItem.id)) queuedItems.push(workItem);
       const agent = existing?.agent
-        ?? agents.find((candidate) => candidate.id === workItem.agent_id)
+        ?? agentsById.get(workItem.agent_id)
         ?? {
           id: workItem.agent_id,
           handle: workItem.agent_handle || "agent",
@@ -469,21 +460,8 @@ export function activeProgressByAgent(
     .sort((left, right) => right.latestAt - left.latestAt);
 }
 
-function ActivityProgressDockContent({
-  messages,
-  activities,
-  runs,
-  workItems,
-  agents,
-  channelId,
-  threadRootId,
-  onOpenWorkItem,
-}: ActivityProgressDockProps) {
+function ActivityProgressDockContent({ progress, onOpenWorkItem }: ActivityProgressDockProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
-  const progress = useMemo(
-    () => activeProgressByAgent(messages, activities, runs, workItems, agents, channelId, threadRootId),
-    [activities, agents, channelId, messages, runs, threadRootId, workItems],
-  );
   if (progress.length === 0) return null;
 
   const workingCount = progress.filter((item) => item.state === "working").length;

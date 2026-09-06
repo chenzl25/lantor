@@ -1,5 +1,8 @@
-import { ArrowDown, ArrowLeft, Bookmark, CheckCircle2, Crosshair, FileImage, Hash, Maximize2, MessageSquare, Minimize2, MoreHorizontal, Paperclip, Quote, RotateCcw, Send, X } from "lucide-react";
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TextareaHTMLAttributes, type WheelEvent as ReactWheelEvent } from "react";
+import { ArrowDown, ArrowLeft, CheckCircle2, Crosshair, FileImage, Hash, Maximize2, MessageSquare, Minimize2, MoreHorizontal, Paperclip, Quote, RotateCcw, Send, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type TextareaHTMLAttributes, type WheelEvent as ReactWheelEvent } from "react";
+import { useEventCallback } from "../hooks/useEventCallback";
+import { useMessageRows } from "../hooks/useMessageRows";
+import { useRetainedValue } from "../hooks/useRetainedValue";
 import { useAutoGrowTextarea } from "../hooks/useAutoGrowTextarea";
 import { useCoarsePointer } from "../hooks/useCoarsePointer";
 import { useMentionPicker } from "../hooks/useMentionPicker";
@@ -8,21 +11,19 @@ import { APP_DISPLAY_NAME } from "../branding";
 import { isImeComposing, isInputComposing } from "../input-utils";
 import { mentionableAgentsForChannel } from "../mentions";
 import { copyText } from "../clipboard";
-import { isCompactFollowupMessage, messageHasVisibleContent, wasEdited } from "../message-grouping";
+import { isCompactFollowupMessage } from "../message-grouping";
 import { shouldCollapseMessage as shouldCollapseThreadMessage } from "../message-preview";
 import { messageShareLink, messageToMarkdown } from "../message-share";
 import { appendMessageReferenceToken, messageReferenceToken, parseMessageReferences, removeMessageReferenceToken, withoutMessageReferenceTokens, type MessageReferenceKind, type ResolvedMessageReference } from "../message-references";
 import { downloadThreadPanelSvg } from "../thread-svg-export";
 import { Agent, AgentActivity, AgentRun, AgentWorkItem, Artifact, Channel, DraftAttachment, Message, OwnerProfile, TASK_STATUSES, Task } from "../types";
-import { agentForMessageSender, deletedAgentForMessageSender, formatClockTime, formatDateDivider, formatTime, isSameCalendarDay, ownerAsAvatarAgent, visibleAgentDescription, visibleChannelDescription } from "../ui-utils";
-import { ActivityProgressDock } from "./ActivityProgressDock";
-import { AgentAvatar, AgentAvatarWithProfile } from "./AgentAvatar";
+import { formatClockTime, formatTime, isSameCalendarDay, visibleAgentDescription, visibleChannelDescription } from "../ui-utils";
+import { ActivityProgressDock, activeProgressByAgent, indexProgress } from "./ActivityProgressDock";
+import { AgentAvatar } from "./AgentAvatar";
 import { ComposerReferenceTextarea } from "./ComposerReferenceTextarea";
 import { DraftAttachmentsPreview } from "./DraftAttachmentsPreview";
 import { MessageActionMenu } from "./MessageActionMenu";
-import { MessageAttachments } from "./MessageAttachments";
-import { MessageArtifacts } from "./MessageArtifacts";
-import { MessageMarkdown } from "./MessageMarkdown";
+import { MessageRow, type MessageRowActions, type MessageRowAction } from "./MessageRow";
 import { MessageReferencePreview, type MessageReferencePreviewItem } from "./MessageReferencePreview";
 import { TaskAssigneePicker } from "./TaskAssigneePicker";
 
@@ -216,16 +217,13 @@ export function ThreadPanel({
   const threadScrollStateByThreadRef = useRef<Map<string, ThreadScrollState>>(new Map());
   const threadScrollAnchorRef = useRef<ThreadScrollAnchor | null>(null);
   const focusedThreadMessageScrollKeyRef = useRef<string | null>(null);
-  const openLinkedAgentDetail = useCallback((handle: string) => {
+  const openLinkedAgentDetail = useEventCallback((handle: string) => {
     const agent = agents.find((candidate) => candidate.handle.toLowerCase() === handle.toLowerCase());
     if (agent) openAgentDetail(agent);
-  }, [agents, openAgentDetail]);
+  });
   const isDm = channel?.kind === "dm";
   const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
   const dmAgent = isDm ? agentsById.get(channel?.dm_agent_id ?? "") ?? null : null;
-  const rootAgent = activeRoot ? agentForMessageSender(activeRoot, agentsById) : null;
-  const deletedRootAgent = activeRoot && !rootAgent ? deletedAgentForMessageSender(activeRoot) : null;
-  const rootSaved = activeRoot ? savedMessageIds.has(activeRoot.id) : false;
   const activeThreadExpansionKey = activeRoot?.id ?? null;
   const expandedThreadMessageIds = useMemo(() => {
     if (!activeThreadExpansionKey) return new Set<string>();
@@ -243,6 +241,13 @@ export function ThreadPanel({
       : `Thread in #${channel.name}`
     : `${APP_DISPLAY_NAME} thread`;
   const threadMessages = useMemo(() => activeRoot ? [activeRoot, ...replies] : replies, [activeRoot, replies]);
+  const rows = useMessageRows(threadMessages, messages, channels, agents, ownerProfile);
+  const progressIndex = useMemo(() => indexProgress(agentActivities, agentRuns, agentWorkItems, agents),
+    [agentActivities, agentRuns, agentWorkItems, agents]);
+  const progressChannelId = activeRoot ? channel?.id ?? null : null;
+  const progressThreadId = activeRoot?.id ?? null;
+  const progress = useRetainedValue(useMemo(() => activeProgressByAgent(replies, progressIndex, progressChannelId, progressThreadId),
+    [replies, progressIndex, progressChannelId, progressThreadId]));
   const threadMessageById = useMemo(() => new Map(threadMessages.map((message) => [message.id, message])), [threadMessages]);
   const channelNameById = useMemo(() => new Map(channels.map((value) => [value.id, value.name])), [channels]);
 
@@ -283,30 +288,33 @@ export function ThreadPanel({
     ));
   }
 
-  const handleReferenceOpen = useCallback((sourceMessageId: string, reference: ResolvedMessageReference) => {
+  const handleReferenceOpen = useEventCallback((sourceMessageId: string, reference: ResolvedMessageReference) => {
     if (reference.kind === "thread") {
       onReferenceThreadJump(sourceMessageId, reference.id);
       return;
     }
     onReferenceMessageJump(sourceMessageId, reference.id);
     targetMessageIntoView(reference.id);
-  }, [onReferenceMessageJump, onReferenceThreadJump]);
+  });
 
-  function renderMessageBody(message: Message) {
-    if (!message.body.trim()) return null;
-    const hasReferenceTokens = message.body.includes("[[");
-    return (
-      <MessageMarkdown
-        body={message.body}
-        messages={hasReferenceTokens ? messages : undefined}
-        channels={hasReferenceTokens ? channels : undefined}
-        sourceMessageId={hasReferenceTokens ? message.id : undefined}
-        onOpenReference={hasReferenceTokens ? handleReferenceOpen : undefined}
-        onLocalAgentLink={openLinkedAgentDetail}
-        scrollKey={`message:${message.id}`}
-      />
-    );
-  }
+  const onRowAction = useEventCallback((message: Message, action: MessageRowAction) => {
+    switch (action) {
+      case "reference": insertMessageReference(message, "message"); break;
+      case "save": onToggleMessageSaved(message, !savedMessageIds.has(message.id)); break;
+      case "focus": setTapFocusedMessageId(message.id); break;
+      case "expand": toggleThreadMessageExpanded(message.id); break;
+    }
+  });
+  const onRowMenu = useEventCallback((message: Message, x: number, y: number) => setMessageMenu({ message, x, y }));
+  const onRowArtifact = useEventCallback(openArtifact);
+  const onRowMount = useEventCallback((messageId: string, node: HTMLElement | null) => {
+    if (node) threadMessageRefs.current.set(messageId, node);
+    else threadMessageRefs.current.delete(messageId);
+  });
+  const rowActions = useMemo<MessageRowActions>(() => ({
+    onAction: onRowAction, onMenu: onRowMenu, onArtifact: onRowArtifact, onMount: onRowMount,
+    onAgent: openLinkedAgentDetail, onReference: handleReferenceOpen,
+  }), [onRowAction, onRowMenu, onRowArtifact, onRowMount, openLinkedAgentDetail, handleReferenceOpen]);
 
   function insertMessageReference(message: Message, kind: MessageReferenceKind) {
     const referenceId = kind === "thread" ? (message.thread_root_id ?? message.id) : message.id;
@@ -693,18 +701,6 @@ export function ThreadPanel({
     };
   }, [activeRoot?.id, focusedMessageId, replies.length, lastReply?.id, lastReply?.updated_at, lastReply?.delivery_state]);
 
-  function hasSelectedText() {
-    return Boolean(window.getSelection()?.toString().trim());
-  }
-
-  function isPrimaryUnmodifiedClick(event: ReactMouseEvent<HTMLElement>) {
-    return event.button === 0 && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
-  }
-
-  function shouldUseNativeMessageSelection() {
-    return window.matchMedia("(hover: none)").matches;
-  }
-
   async function copyMessageMarkdown(message: Message) {
     await copyText(messageToMarkdown(message, surfaceLabel));
     setMessageMenu(null);
@@ -975,16 +971,7 @@ export function ThreadPanel({
       <section className="thread-focus">
         <div className="thread-scroll-shell">
           <div className="thread-progress-layer">
-            <ActivityProgressDock
-              messages={replies}
-              activities={agentActivities}
-              runs={agentRuns}
-              workItems={agentWorkItems}
-              agents={agents}
-              channelId={activeRoot ? channel?.id ?? null : null}
-              threadRootId={activeRoot?.id ?? null}
-              onOpenWorkItem={openWorkItem}
-            />
+            <ActivityProgressDock progress={progress} onOpenWorkItem={openWorkItem} />
           </div>
           <div
             ref={threadScrollRef}
@@ -996,156 +983,12 @@ export function ThreadPanel({
             onLoadCapture={handleThreadContentLoad}
           >
             <div ref={threadScrollContentRef} className="thread-scroll-content">
-            {activeRoot && (
-              <Fragment>
-                <div className="message-date-divider" role="separator">
-                  <span />
-                  <time dateTime={activeRoot.created_at}>{formatDateDivider(activeRoot.created_at)}</time>
-                  <span />
-                </div>
-                <article
-                  data-message-id={activeRoot.id}
-                  ref={(node) => {
-                    if (node) {
-                      threadMessageRefs.current.set(activeRoot.id, node);
-                    } else {
-                      threadMessageRefs.current.delete(activeRoot.id);
-                    }
-                  }}
-                  className={`thread-root ${activeRoot.sender_role === "system" ? "system-message" : ""} ${tapFocusedMessageId === activeRoot.id ? "tap-focused" : ""} ${rootSaved ? "saved" : ""}`}
-                  data-jump-focused={focusedMessageId === activeRoot.id ? "true" : "false"}
-                  onClick={(event) => {
-                    if (!isPrimaryUnmodifiedClick(event)) return;
-                    if (hasSelectedText()) return;
-                    if (activeRoot.sender_role !== "system") setTapFocusedMessageId(activeRoot.id);
-                  }}
-                  onContextMenu={(event) => {
-                    if (activeRoot.sender_role === "system") return;
-                    if (shouldUseNativeMessageSelection()) return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    setMessageMenu({ x: event.clientX, y: event.clientY, message: activeRoot });
-                  }}
-                >
-                {activeRoot.sender_role === "system" ? (
-                  <div className="system-message-line">
-                    {renderMessageBody(activeRoot)}
-                    <time>{formatTime(activeRoot.created_at)}</time>
-                  </div>
-                ) : (
-                  <div className="thread-message-with-avatar">
-                    {rootAgent ? (
-                      <button
-                        type="button"
-                        className="message-agent-avatar-trigger"
-                        aria-label={`View @${rootAgent.handle} details`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          openAgentDetail(rootAgent);
-                        }}
-                      >
-                        <AgentAvatarWithProfile agent={rootAgent} />
-                      </button>
-                    ) : deletedRootAgent ? (
-                      <AgentAvatar
-                        agent={deletedRootAgent}
-                        size="md"
-                        title={`@${deletedRootAgent.handle} has been deleted`}
-                      />
-                    ) : activeRoot.sender_role === "owner" ? (
-                      <AgentAvatar agent={ownerAsAvatarAgent(ownerProfile)} size="md" showStatus={false} />
-                    ) : (
-                      <div className="avatar">{activeRoot.sender_name.slice(0, 1)}</div>
-                    )}
-                    <div className="thread-message-content">
-                      <div className="meta">
-                        <strong>{activeRoot.sender_name}</strong>
-                        <span>{activeRoot.sender_role}</span>
-                        <time>{formatTime(activeRoot.created_at)}</time>
-                        {wasEdited(activeRoot) && <span className="edited-indicator">edited</span>}
-                        <button
-                          type="button"
-                          className={`message-save-button mobile-message-save-tag ${rootSaved ? "saved" : ""}`}
-                          title={rootSaved ? "Unsave message" : "Save message"}
-                          aria-label={rootSaved ? "Unsave message" : "Save message"}
-                          aria-pressed={rootSaved}
-                          onPointerDown={(event) => event.stopPropagation()}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onToggleMessageSaved(activeRoot, !rootSaved);
-                          }}
-                        >
-                          <Bookmark size={14} />
-                        </button>
-                      </div>
-                      <div className="message-hover-actions" aria-label="Message actions">
-                        <button
-                          type="button"
-                          data-tooltip="Reference"
-                          title="Reference message"
-                          aria-label="Reference message"
-                          onPointerDown={(event) => event.stopPropagation()}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            insertMessageReference(activeRoot, "message");
-                          }}
-                        >
-                          <Quote size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          className={rootSaved ? "saved" : ""}
-                          data-tooltip={rootSaved ? "Unsave" : "Save"}
-                          title={rootSaved ? "Unsave message" : "Save message"}
-                          aria-label={rootSaved ? "Unsave message" : "Save message"}
-                          onPointerDown={(event) => event.stopPropagation()}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onToggleMessageSaved(activeRoot, !rootSaved);
-                          }}
-                        >
-                          <Bookmark size={14} />
-                        </button>
-                      </div>
-                      {(activeRoot.delivery_state !== "streaming" || messageHasVisibleContent(activeRoot)) && (() => {
-                        const isLongThreadMessage = shouldCollapseThreadMessage(activeRoot.body);
-                        const isThreadMessageExpanded = expandedThreadMessageIds.has(activeRoot.id);
-                        return (
-                          <>
-                            <div className={isLongThreadMessage && !isThreadMessageExpanded ? "message-long-preview collapsed" : "message-long-preview"}>
-                              {renderMessageBody(activeRoot)}
-                            </div>
-                            {isLongThreadMessage && (
-                              <button
-                                type="button"
-                                className="message-expand-button"
-                                aria-expanded={isThreadMessageExpanded}
-                                onPointerDown={(event) => event.stopPropagation()}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  toggleThreadMessageExpanded(activeRoot.id);
-                                }}
-                              >
-                                {isThreadMessageExpanded ? "Show less" : "Show more"}
-                              </button>
-                            )}
-                          </>
-                        );
-                      })()}
-                      <MessageAttachments attachments={activeRoot.attachments} showImageThumbnails={showImageThumbnails} />
-                      <MessageArtifacts artifacts={activeRoot.artifacts} onOpenArtifact={openArtifact} />
-                      {activeRoot.delivery_state === "sending" && (
-                        <div className="message-stream-state sending">Sending...</div>
-                      )}
-                      {activeRoot.delivery_state === "error" && (
-                        <div className="message-stream-state error">Response interrupted</div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </article>
-            </Fragment>
-          )}
+            {activeRoot && <MessageRow
+              key={activeRoot.id} data={rows[activeRoot.id]} actions={rowActions} variant="thread-root" dateDivider
+              saved={savedMessageIds.has(activeRoot.id)} expanded={expandedThreadMessageIds.has(activeRoot.id)}
+              jumpFocused={focusedMessageId === activeRoot.id} tapFocused={tapFocusedMessageId === activeRoot.id}
+              showImageThumbnails={showImageThumbnails}
+            />}
 
           {activeTask && (
             <section className="thread-task-card">
@@ -1254,180 +1097,14 @@ export function ThreadPanel({
                 <p>Select a root message after you create one.</p>
               </div>
             )}
-            {replies.map((reply, index) => {
-              const replyAgent = agentForMessageSender(reply, agentsById);
-              const deletedReplyAgent = replyAgent ? null : deletedAgentForMessageSender(reply);
-              const replySaved = savedMessageIds.has(reply.id);
-              const isCompact = isCompactFollowupMessage(reply, replies[index - 1]);
-              const showDateDivider = index === 0 || !isSameCalendarDay(reply.created_at, replies[index - 1]?.created_at ?? "");
-              if (reply.sender_role === "system") {
-                return (
-                  <Fragment key={reply.id}>
-                    {showDateDivider && (
-                      <div className="message-date-divider" role="separator">
-                        <span />
-                        <time dateTime={reply.created_at}>{formatDateDivider(reply.created_at)}</time>
-                        <span />
-                      </div>
-                    )}
-                    <article className="system-message">
-                      <div className="system-message-line">
-                        {renderMessageBody(reply)}
-                        <time>{formatTime(reply.created_at)}</time>
-                      </div>
-                    </article>
-                  </Fragment>
-                );
-              }
-              return (
-                <Fragment key={reply.id}>
-                  {showDateDivider && (
-                    <div className="message-date-divider" role="separator">
-                      <span />
-                      <time dateTime={reply.created_at}>{formatDateDivider(reply.created_at)}</time>
-                      <span />
-                    </div>
-                  )}
-                  <article
-                    data-message-id={reply.id}
-                    ref={(node) => {
-                      if (node) {
-                        threadMessageRefs.current.set(reply.id, node);
-                      } else {
-                        threadMessageRefs.current.delete(reply.id);
-                      }
-                    }}
-                    className={`${isCompact ? "compact" : ""} ${replySaved ? "saved" : ""} ${tapFocusedMessageId === reply.id ? "tap-focused" : ""}`}
-                    data-jump-focused={focusedMessageId === reply.id ? "true" : "false"}
-                    onClick={(event) => {
-                      if (!isPrimaryUnmodifiedClick(event)) return;
-                      if (hasSelectedText()) return;
-                      setTapFocusedMessageId(reply.id);
-                    }}
-                    onContextMenu={(event) => {
-                      if (shouldUseNativeMessageSelection()) return;
-                      event.preventDefault();
-                      event.stopPropagation();
-                      setMessageMenu({ x: event.clientX, y: event.clientY, message: reply });
-                    }}
-                  >
-                    {isCompact ? (
-                      <time className="message-compact-time" dateTime={reply.created_at}>
-                        {formatClockTime(reply.created_at)}
-                      </time>
-                    ) : replyAgent ? (
-                      <button
-                        type="button"
-                        className="message-agent-avatar-trigger"
-                        aria-label={`View @${replyAgent.handle} details`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          openAgentDetail(replyAgent);
-                        }}
-                      >
-                        <AgentAvatarWithProfile agent={replyAgent} />
-                      </button>
-                    ) : deletedReplyAgent ? (
-                      <AgentAvatar
-                        agent={deletedReplyAgent}
-                        size="md"
-                        title={`@${deletedReplyAgent.handle} has been deleted`}
-                      />
-                    ) : reply.sender_role === "owner" ? (
-                      <AgentAvatar agent={ownerAsAvatarAgent(ownerProfile)} size="md" showStatus={false} />
-                    ) : (
-                      <div className="avatar">{reply.sender_name.slice(0, 1)}</div>
-                    )}
-                    <div className="reply-body">
-                      {!isCompact && (
-                        <div className="meta">
-                          <strong>{reply.sender_name}</strong>
-                          <span>{reply.sender_role}</span>
-                          <time>{formatTime(reply.created_at)}</time>
-                          {wasEdited(reply) && <span className="edited-indicator">edited</span>}
-                          <button
-                            type="button"
-                            className={`message-save-button mobile-message-save-tag ${replySaved ? "saved" : ""}`}
-                            title={replySaved ? "Unsave message" : "Save message"}
-                            aria-label={replySaved ? "Unsave message" : "Save message"}
-                            aria-pressed={replySaved}
-                            onPointerDown={(event) => event.stopPropagation()}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onToggleMessageSaved(reply, !replySaved);
-                            }}
-                          >
-                            <Bookmark size={14} />
-                          </button>
-                        </div>
-                      )}
-                      <div className="message-hover-actions" aria-label="Message actions">
-                        <button
-                          type="button"
-                          data-tooltip="Reference"
-                          title="Reference message"
-                          aria-label="Reference message"
-                          onPointerDown={(event) => event.stopPropagation()}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            insertMessageReference(reply, "message");
-                          }}
-                        >
-                          <Quote size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          className={replySaved ? "saved" : ""}
-                          data-tooltip={replySaved ? "Unsave" : "Save"}
-                          title={replySaved ? "Unsave message" : "Save message"}
-                          aria-label={replySaved ? "Unsave message" : "Save message"}
-                          onPointerDown={(event) => event.stopPropagation()}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onToggleMessageSaved(reply, !replySaved);
-                          }}
-                        >
-                          <Bookmark size={14} />
-                        </button>
-                      </div>
-                      {(reply.delivery_state !== "streaming" || messageHasVisibleContent(reply)) && (() => {
-                        const isLongThreadMessage = shouldCollapseThreadMessage(reply.body);
-                        const isThreadMessageExpanded = expandedThreadMessageIds.has(reply.id);
-                        return (
-                          <>
-                            <div className={isLongThreadMessage && !isThreadMessageExpanded ? "message-long-preview collapsed" : "message-long-preview"}>
-                              {renderMessageBody(reply)}
-                            </div>
-                            {isLongThreadMessage && (
-                              <button
-                                type="button"
-                                className="message-expand-button"
-                                aria-expanded={isThreadMessageExpanded}
-                                onPointerDown={(event) => event.stopPropagation()}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  toggleThreadMessageExpanded(reply.id);
-                                }}
-                              >
-                                {isThreadMessageExpanded ? "Show less" : "Show more"}
-                              </button>
-                            )}
-                          </>
-                        );
-                      })()}
-                      <MessageAttachments attachments={reply.attachments} showImageThumbnails={showImageThumbnails} />
-                      <MessageArtifacts artifacts={reply.artifacts} onOpenArtifact={openArtifact} />
-                      {reply.delivery_state === "sending" && (
-                        <div className="message-stream-state sending">Sending...</div>
-                      )}
-                      {reply.delivery_state === "error" && (
-                        <div className="message-stream-state error">Response interrupted</div>
-                      )}
-                    </div>
-                  </article>
-                </Fragment>
-              );
-            })}
+            {replies.map((reply, index) => <MessageRow
+              key={reply.id} data={rows[reply.id]} actions={rowActions} variant="reply"
+              compact={isCompactFollowupMessage(reply, replies[index - 1])}
+              dateDivider={index === 0 || !isSameCalendarDay(reply.created_at, replies[index - 1]?.created_at ?? "")}
+              saved={savedMessageIds.has(reply.id)} expanded={expandedThreadMessageIds.has(reply.id)}
+              jumpFocused={focusedMessageId === reply.id} tapFocused={tapFocusedMessageId === reply.id}
+              showImageThumbnails={showImageThumbnails}
+            />)}
           </section>
           <div className="thread-bottom-anchor" aria-hidden="true" />
           {messageMenu && (
