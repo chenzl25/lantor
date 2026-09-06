@@ -2258,6 +2258,46 @@ button,
   height: 1px;
 }
 
+@supports (overflow-anchor: auto) and (overflow-clip-margin: 100px) and selector(:has(*)) {
+  .conversation .message-list,
+  .thread .thread-scroll {
+    overflow-anchor: auto;
+  }
+
+  /* Browsers without scroll anchoring or paint clip margins retain normal rows.
+     Keep every message searchable and directly addressable. The browser remembers
+     each rendered row's height; unseen rows start with a conservative estimate. */
+  .message-render-boundary {
+    content-visibility: auto;
+    contain-intrinsic-block-size: auto 160px;
+    overflow-clip-margin: 100px;
+  }
+
+  .message-render-boundary.compact {
+    contain-intrinsic-block-size: auto 100px;
+  }
+
+  .message-render-boundary.system-message {
+    contain-intrinsic-block-size: auto 32px;
+  }
+
+  /* The clip margin accommodates the action bar/tooltips without toggling layout
+     containment on every hover while scrolling. Dialogs need a viewport-sized
+     containing block; jumps and live streams need their actual content height. */
+  .message-render-boundary:focus-within,
+  .message-render-boundary:has(.attachment-lightbox, .attachment-download-toast),
+  .message-render-boundary[data-streaming="true"],
+  .message-render-boundary[data-jump-focused="true"] {
+    content-visibility: visible;
+  }
+
+  @media print {
+    .message-render-boundary {
+      content-visibility: visible;
+    }
+  }
+}
+
 .empty-state {
   display: grid;
   place-items: center;

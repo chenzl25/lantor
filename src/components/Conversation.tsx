@@ -192,6 +192,7 @@ export function Conversation({
   const focusedMessageScrollKeyRef = useRef<string | null>(null);
   const userMessageScrollUntilRef = useRef(0);
   const messageListMetricsRef = useRef({ scrollHeight: 0, scrollTop: 0, clientHeight: 0 });
+  const olderMessagesAnchorRef = useRef<{ element: HTMLElement; top: number } | null>(null);
   const olderMessagesLoadInFlightRef = useRef(false);
   const messageListContextEpochRef = useRef(0);
   const channelActionsRef = useRef<HTMLDivElement | null>(null);
@@ -367,6 +368,11 @@ export function Conversation({
   function handleMessageListScroll() {
     const element = messageListRef.current;
     if (!element) return;
+    const pendingAnchor = olderMessagesAnchorRef.current;
+    if (pendingAnchor && element.querySelector("article[data-message-id]") === pendingAnchor.element) {
+      // Follow user movement while the fetch is pending, up until rows prepend.
+      pendingAnchor.top = pendingAnchor.element.getBoundingClientRect().top;
+    }
     if (
       activeTab === "chat" &&
       channel &&
@@ -378,13 +384,14 @@ export function Conversation({
     ) {
       const contextEpoch = messageListContextEpochRef.current;
       const messageList = element;
-      const previousScrollHeight = element.scrollHeight;
+      const firstMessage = element.querySelector<HTMLElement>("article[data-message-id]");
+      const anchor = firstMessage ? { element: firstMessage, top: firstMessage.getBoundingClientRect().top } : null;
+      olderMessagesAnchorRef.current = anchor;
       stopFollowingMessages(element);
       olderMessagesLoadInFlightRef.current = true;
       void onLoadOlderRootMessages()
         .finally(() => {
           if (messageListContextEpochRef.current !== contextEpoch) return;
-          olderMessagesLoadInFlightRef.current = false;
           window.requestAnimationFrame(() => {
             if (
               messageListContextEpochRef.current !== contextEpoch
@@ -392,10 +399,13 @@ export function Conversation({
             ) return;
             const list = messageListRef.current;
             if (!list) return;
-            const heightDelta = list.scrollHeight - previousScrollHeight;
-            if (heightDelta > 0) {
-              list.scrollTop += heightDelta;
+            // At scrollTop=0 native anchoring may be suppressed. Correct the
+            // actual old row once, then let native anchoring handle later estimates.
+            if (anchor?.element.isConnected) {
+              list.scrollTop += anchor.element.getBoundingClientRect().top - anchor.top;
             }
+            olderMessagesAnchorRef.current = null;
+            olderMessagesLoadInFlightRef.current = false;
             rememberMessageListMetrics(list);
           });
         });
@@ -513,6 +523,7 @@ export function Conversation({
   useLayoutEffect(() => {
     messageListContextEpochRef.current += 1;
     olderMessagesLoadInFlightRef.current = false;
+    olderMessagesAnchorRef.current = null;
   }, [activeTab, channel?.id]);
 
   useEffect(() => () => {

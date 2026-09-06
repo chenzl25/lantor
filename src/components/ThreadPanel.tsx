@@ -379,23 +379,25 @@ export function ThreadPanel({
 
   function captureThreadScrollAnchor(element: HTMLDivElement): ThreadScrollAnchor | null {
     const containerTop = element.getBoundingClientRect().top;
-    const candidates = Array.from(element.querySelectorAll<HTMLElement>("[data-message-id]"));
-    let closest: ThreadScrollAnchor | null = null;
-    let closestDistance = Number.POSITIVE_INFINITY;
-    for (const candidate of candidates) {
-      const rect = candidate.getBoundingClientRect();
-      if (rect.bottom < containerTop) continue;
-      const messageId = candidate.dataset.messageId;
-      if (!messageId) continue;
-      const topOffset = rect.top - containerTop;
-      const distance = Math.abs(topOffset);
-      if (distance < closestDistance) {
-        closestDistance = distance;
-        closest = { messageId, topOffset };
-      }
-      if (topOffset >= 0) break;
+    const candidates = element.querySelectorAll<HTMLElement>("article[data-message-id]");
+    // Rows are in visual order. Inspect their outer boxes, never the skipped
+    // Markdown descendants, and avoid walking thousands of rows on every scroll.
+    let low = 0;
+    let high = candidates.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (candidates[middle].getBoundingClientRect().bottom < containerTop) low = middle + 1;
+      else high = middle;
     }
-    return closest;
+    const candidate = candidates[low];
+    if (!candidate) return null;
+    const topOffset = candidate.getBoundingClientRect().top - containerTop;
+    const next = candidates[low + 1];
+    if (topOffset < 0 && next) {
+      const nextOffset = next.getBoundingClientRect().top - containerTop;
+      if (Math.abs(nextOffset) < Math.abs(topOffset)) return { messageId: next.dataset.messageId!, topOffset: nextOffset };
+    }
+    return { messageId: candidate.dataset.messageId!, topOffset };
   }
 
   function restoreThreadScrollAnchor(remember = true) {

@@ -116,8 +116,9 @@ export const MessageRow = memo(function MessageRow({
   return <>
     {dateDivider && <div className="message-date-divider" role="separator"><span /><time dateTime={message.created_at}>{formatDateDivider(message.created_at)}</time><span /></div>}
     <article ref={setNode} data-message-id={message.id}
-      className={[channel && !system ? "message-card" : root ? "thread-root" : "", system ? "system-message" : "", compact ? "compact" : "", focused ? "focused" : "", saved ? "saved" : "", tapFocused ? "tap-focused" : ""].filter(Boolean).join(" ")}
+      className={["message-render-boundary", channel && !system ? "message-card" : root ? "thread-root" : "", system ? "system-message" : "", compact ? "compact" : "", focused ? "focused" : "", saved ? "saved" : "", tapFocused ? "tap-focused" : ""].filter(Boolean).join(" ")}
       data-jump-focused={jumpFocused ? "true" : "false"}
+      data-streaming={message.delivery_state === "streaming" ? "true" : undefined}
       onClick={(event) => {
         if (system || !isPrimaryUnmodifiedClick(event) || window.getSelection()?.toString().trim()) return;
         if (channel) {
