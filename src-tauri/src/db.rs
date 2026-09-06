@@ -912,6 +912,8 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "create index if not exists artifacts_channel_id_idx on artifacts(channel_id)",
         "create index if not exists github_resource_threads_thread_idx on github_resource_threads(thread_root_id)",
         "create index if not exists github_resource_threads_task_idx on github_resource_threads(task_id) where task_id is not null",
+        "create index if not exists agent_runs_started_idx on agent_runs(started_at desc)",
+        "create index if not exists agent_work_items_created_idx on agent_work_items(created_at desc)",
         "create index if not exists agent_activities_agent_created_idx on agent_activities(agent_id, agent_handle, created_at desc)",
         r#"
         create index if not exists agent_activities_owner_instant_idx on agent_activities(

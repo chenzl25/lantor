@@ -1129,6 +1129,10 @@ fn api_error(message: String) -> Response {
 mod static_tests;
 
 #[cfg(test)]
+#[path = "tests/bootstrap_recency.rs"]
+mod bootstrap_recency_tests;
+
+#[cfg(test)]
 mod tests {
     use axum::http::{HeaderMap, HeaderValue};
 
