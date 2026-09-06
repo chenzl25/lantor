@@ -9,7 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
-const IMMUTABLE_CACHE: &str = "public, max-age=31536000, immutable";
+const IMMUTABLE_CACHE: &str = "private, max-age=31536000, immutable";
 
 // Unsupported units and multipart ranges fall back to the full representation.
 // Malformed/unsatisfiable single byte ranges receive 416.

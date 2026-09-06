@@ -64,7 +64,7 @@ try {
     const second = report.cache[1];
     assert.ok(second.fromDiskCache || second.memoryCacheEvent, "second render must use browser HTTP cache");
     assert.equal(second.fromServiceWorker, false);
-    assert.match(second.cacheControl, /max-age=31536000, immutable/);
+    assert.equal(second.cacheControl, "private, max-age=31536000, immutable");
   }
 } finally { await browser.close(); }
 
