@@ -284,6 +284,16 @@ export type GithubIssueDetail = {
   updated_at: string;
 };
 
+export type GithubReviewComparisons = {
+  repository_id: string;
+  comparisons: {
+    pull_number: number;
+    review_anchor_sha: string;
+    head_sha: string;
+    commits_ahead: number;
+  }[];
+};
+
 export type GithubChannelOverview = {
   account: GithubAccount;
   binding: GithubRepositoryBinding | null;

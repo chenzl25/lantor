@@ -7,6 +7,7 @@ import type {
   ChannelWikiOverview,
   ChannelWikiSearchHit,
   GithubChannelOverview,
+  GithubReviewComparisons,
   GithubIssueDetail,
   GithubIssueTaskResult,
   GithubRepositoryBinding,
@@ -139,6 +140,10 @@ export type ApiContract = {
       note: string;
     };
     result: PublishChannelWikiResult;
+  };
+  load_github_review_comparisons: {
+    args: { channelId: string };
+    result: GithubReviewComparisons;
   };
   load_github_review_queue: {
     args: { channelId: string };
@@ -337,6 +342,7 @@ const API_COMMAND_NAMES = {
   load_channel_wiki: true,
   publish_channel_wiki: true,
   search_channel_wikis: true,
+  load_github_review_comparisons: true,
   load_github_review_queue: true,
   refresh_github_review_queue: true,
   refresh_github_issue_queue: true,

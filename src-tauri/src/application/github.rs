@@ -74,6 +74,13 @@ pub(crate) async fn load_github_review_queue(
     load_cached_github_channel_overview(pool, request.channel_id).await
 }
 
+pub(crate) async fn load_github_review_comparisons(
+    pool: &SqlitePool,
+    request: GithubChannelRequest,
+) -> CommandResult<crate::github::GithubReviewComparisons> {
+    crate::github::load_github_review_comparisons(pool, request.channel_id).await
+}
+
 pub(crate) async fn refresh_github_review_queue(
     pool: &SqlitePool,
     request: GithubChannelRequest,
@@ -220,7 +227,7 @@ pub(crate) async fn rereview_github_pull_request(
         return Err("review task already anchors the current pull request head".to_owned());
     }
     let commits_ahead =
-        load_github_commits_ahead(&binding, &context.head_sha, pull_request.head_sha())
+        load_github_commits_ahead(pool, &binding, &context.head_sha, pull_request.head_sha())
             .await
             .ok();
     let dispatch = rereview_github_review_task_record(
