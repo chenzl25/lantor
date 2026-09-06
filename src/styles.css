@@ -1635,7 +1635,7 @@ button,
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: start;
-  width: min(252px, calc(100vw - 32px));
+  width: min(300px, calc(100vw - 32px));
   max-height: calc(100vh - 24px);
   gap: 10px;
   padding: 10px;
@@ -1647,8 +1647,8 @@ button,
   font-size: var(--type-size-meta);
   line-height: 1.35;
   opacity: 0;
-  overflow: hidden;
-  pointer-events: none;
+  overflow: auto;
+  pointer-events: auto;
   text-align: left;
   transform: translateY(4px);
   transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
@@ -9029,6 +9029,33 @@ body.resizing-column * {
 .subscription-empty span {
   color: var(--ink-muted);
   font-size: var(--type-size-meta);
+}
+
+.agent-avatar-subscription {
+  display: grid;
+  grid-column: 1 / -1;
+  min-width: 0;
+  gap: 8px;
+}
+
+.agent-avatar-subscription .detail-section-head {
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.agent-avatar-subscription .subscription-summary {
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.agent-avatar-subscription .subscription-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.agent-avatar-subscription .subscription-card,
+.agent-avatar-subscription .subscription-empty {
+  gap: 6px;
+  padding: 9px 10px;
 }
 
 .performance-grid {

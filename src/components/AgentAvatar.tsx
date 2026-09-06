@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import type { Style } from "@dicebear/core";
 import type { Agent } from "../types";
+import { AgentSubscriptionUsage } from "./AgentSubscriptionUsage";
 
 type AgentAvatarProps = {
   agent: Pick<Agent, "handle" | "display_name" | "status"> &
-    Partial<Pick<Agent, "id" | "runtime" | "model" | "role" | "avatar" | "description">>;
+    Partial<Pick<Agent, "id" | "runtime" | "model" | "role" | "avatar" | "description" | "subscription_status">>;
   size?: "sm" | "md" | "lg";
   className?: string;
   title?: string;
@@ -16,14 +17,15 @@ type ProfilePopoverPosition = {
   left: number;
   top: number;
   arrowLeft: number;
+  maxHeight: number;
   placement: "above" | "below";
 };
 
 const IDENTICON_SIZE = 5;
 const IDENTICON_MIRROR_WIDTH = Math.ceil(IDENTICON_SIZE / 2);
 const DEFAULT_DICEBEAR_STYLE = "dylan";
-const PROFILE_POPOVER_WIDTH = 252;
-const PROFILE_POPOVER_ESTIMATED_HEIGHT = 116;
+const PROFILE_POPOVER_WIDTH = 300;
+const PROFILE_POPOVER_ESTIMATED_HEIGHT = 320;
 const PROFILE_POPOVER_GAP = 10;
 const PROFILE_POPOVER_VIEWPORT_MARGIN = 12;
 const PROFILE_POPOVER_MEDIA_QUERY = "(hover: hover) and (pointer: fine) and (min-width: 761px)";
@@ -119,32 +121,38 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function getProfilePopoverPosition(rect: DOMRect): ProfilePopoverPosition {
+function getProfilePopoverPosition(
+  rect: DOMRect,
+  height = PROFILE_POPOVER_ESTIMATED_HEIGHT,
+  width = PROFILE_POPOVER_WIDTH,
+): ProfilePopoverPosition {
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
   const maxLeft = Math.max(
     PROFILE_POPOVER_VIEWPORT_MARGIN,
-    viewportWidth - PROFILE_POPOVER_WIDTH - PROFILE_POPOVER_VIEWPORT_MARGIN,
+    viewportWidth - width - PROFILE_POPOVER_VIEWPORT_MARGIN,
   );
   const anchorCenter = rect.left + rect.width / 2;
   const left = clamp(
-    anchorCenter - PROFILE_POPOVER_WIDTH / 2,
+    anchorCenter - width / 2,
     PROFILE_POPOVER_VIEWPORT_MARGIN,
     maxLeft,
   );
-  const arrowLeft = clamp(anchorCenter - left, 18, PROFILE_POPOVER_WIDTH - 18);
-  const hasRoomAbove =
-    rect.top >= PROFILE_POPOVER_ESTIMATED_HEIGHT + PROFILE_POPOVER_GAP + PROFILE_POPOVER_VIEWPORT_MARGIN;
-  const placement = hasRoomAbove ? "above" : "below";
-  const preferredTop = hasRoomAbove
-    ? rect.top - PROFILE_POPOVER_GAP - PROFILE_POPOVER_ESTIMATED_HEIGHT
+  const arrowLeft = clamp(anchorCenter - left, 18, width - 18);
+  const roomAbove = rect.top - PROFILE_POPOVER_GAP - PROFILE_POPOVER_VIEWPORT_MARGIN;
+  const roomBelow = viewportHeight - rect.bottom - PROFILE_POPOVER_GAP - PROFILE_POPOVER_VIEWPORT_MARGIN;
+  const placement = roomAbove >= height || roomAbove >= roomBelow ? "above" : "below";
+  const maxHeight = Math.max(0, placement === "above" ? roomAbove : roomBelow);
+  const visibleHeight = Math.min(height, maxHeight);
+  const preferredTop = placement === "above"
+    ? rect.top - PROFILE_POPOVER_GAP - visibleHeight
     : rect.bottom + PROFILE_POPOVER_GAP;
   const maxTop = Math.max(
     PROFILE_POPOVER_VIEWPORT_MARGIN,
-    viewportHeight - PROFILE_POPOVER_ESTIMATED_HEIGHT - PROFILE_POPOVER_VIEWPORT_MARGIN,
+    viewportHeight - visibleHeight - PROFILE_POPOVER_VIEWPORT_MARGIN,
   );
   const top = clamp(preferredTop, PROFILE_POPOVER_VIEWPORT_MARGIN, maxTop);
-  return { left, top, arrowLeft, placement };
+  return { left, top, arrowLeft, maxHeight, placement };
 }
 
 function canOpenProfilePopover() {
@@ -172,7 +180,17 @@ function useProfilePopoverEnabled() {
   return enabled;
 }
 
-export function AgentAvatar({ agent, size = "md", className = "", title, showStatus = true }: AgentAvatarProps) {
+export function AgentAvatar(props: AgentAvatarProps) {
+  const { agent } = props;
+  // Real agents carry the subscription field even before their first snapshot.
+  // Owner avatars and form previews do not have provider usage to display.
+  const hasSubscription = "subscription_status" in agent
+    && (agent.runtime === "codex" || agent.runtime === "claude")
+    && agent.status !== "deleted";
+  return hasSubscription ? <AgentAvatarWithProfile {...props} /> : <AgentAvatarImage {...props} />;
+}
+
+function AgentAvatarImage({ agent, size = "md", className = "", title, showStatus = true }: AgentAvatarProps) {
   const seedText = agent.id || `${agent.handle}:${agent.display_name}:${agent.runtime ?? ""}`;
   const identicon = generateIdenticon(seedText);
   const customAvatar = agent.avatar?.trim();
@@ -254,12 +272,18 @@ export function AgentAvatarWithProfile({
   agent,
   size = "md",
   className = "",
+  title,
   showStatus = true,
 }: AgentAvatarProps) {
   const anchorRef = useRef<HTMLSpanElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tooltipId = useId();
   const profilePopoverEnabled = useProfilePopoverEnabled();
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [profilePosition, setProfilePosition] = useState<ProfilePopoverPosition | null>(null);
+  const hasSubscription = (agent.runtime === "codex" || agent.runtime === "claude")
+    && agent.status !== "deleted";
   const role = compactProfileText(agent.role);
   const description = compactProfileText(
     agent.status === "deleted" ? "This agent has been deleted." : agent.description,
@@ -267,17 +291,29 @@ export function AgentAvatarWithProfile({
   const updateProfilePosition = useCallback(() => {
     const rect = anchorRef.current?.getBoundingClientRect();
     if (!rect) return;
-    setProfilePosition(getProfilePopoverPosition(rect));
+    setProfilePosition(getProfilePopoverPosition(
+      rect,
+      cardRef.current?.offsetHeight,
+      cardRef.current?.offsetWidth,
+    ));
   }, []);
 
   useLayoutEffect(() => {
     if (!profilePopoverEnabled || !isProfileOpen) return;
     updateProfilePosition();
+    const observer = new ResizeObserver(updateProfilePosition);
+    if (cardRef.current) observer.observe(cardRef.current);
+    const dismissOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsProfileOpen(false);
+    };
     window.addEventListener("resize", updateProfilePosition);
     window.addEventListener("scroll", updateProfilePosition, true);
+    window.addEventListener("keydown", dismissOnEscape);
     return () => {
+      observer.disconnect();
       window.removeEventListener("resize", updateProfilePosition);
       window.removeEventListener("scroll", updateProfilePosition, true);
+      window.removeEventListener("keydown", dismissOnEscape);
     };
   }, [isProfileOpen, profilePopoverEnabled, updateProfilePosition]);
 
@@ -288,34 +324,52 @@ export function AgentAvatarWithProfile({
     }
   }, [profilePopoverEnabled]);
 
+  useEffect(() => () => {
+    if (closeTimerRef.current !== null) clearTimeout(closeTimerRef.current);
+  }, []);
+
   const openProfile = useCallback(() => {
+    if (closeTimerRef.current !== null) clearTimeout(closeTimerRef.current);
     if (profilePopoverEnabled) {
+      updateProfilePosition();
       setIsProfileOpen(true);
     }
-  }, [profilePopoverEnabled]);
+  }, [profilePopoverEnabled, updateProfilePosition]);
+
+  const closeProfile = useCallback(() => {
+    if (closeTimerRef.current !== null) clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = setTimeout(() => setIsProfileOpen(false), 120);
+  }, []);
 
   const profileCard =
     profilePopoverEnabled && isProfileOpen && profilePosition && typeof document !== "undefined"
       ? createPortal(
-          <span
+          <div
+            ref={cardRef}
+            id={tooltipId}
+            role="tooltip"
             className={`agent-avatar-profile-card agent-avatar-profile-card-visible agent-avatar-profile-card-${profilePosition.placement}`}
-            aria-hidden="true"
+            onMouseEnter={openProfile}
+            onMouseLeave={closeProfile}
+            onClick={(event) => event.stopPropagation()}
             style={
               {
                 left: profilePosition.left,
                 top: profilePosition.top,
+                maxHeight: profilePosition.maxHeight,
                 "--agent-avatar-profile-arrow-left": `${profilePosition.arrowLeft}px`,
               } as CSSProperties
             }
           >
-            <AgentAvatar agent={agent} size="md" className="agent-avatar-profile-image" />
+            <AgentAvatarImage agent={agent} size="md" className="agent-avatar-profile-image" />
             <span className="agent-avatar-profile-copy">
               <span className="agent-avatar-profile-name">{agent.display_name}</span>
               <span className="agent-avatar-profile-handle">@{agent.handle}</span>
-              {role ? <span className="agent-avatar-profile-role">{role}</span> : null}
-              {description ? <span className="agent-avatar-profile-description">{description}</span> : null}
+              {!hasSubscription && role ? <span className="agent-avatar-profile-role">{role}</span> : null}
+              {!hasSubscription && description ? <span className="agent-avatar-profile-description">{description}</span> : null}
             </span>
-          </span>,
+            {hasSubscription && <AgentSubscriptionUsage agent={{ ...agent, runtime: agent.runtime ?? "" }} compact />}
+          </div>,
           document.body,
         )
       : null;
@@ -324,10 +378,12 @@ export function AgentAvatarWithProfile({
     <span
       ref={anchorRef}
       className="agent-avatar-profile-anchor"
+      aria-describedby={isProfileOpen ? tooltipId : undefined}
       onMouseEnter={openProfile}
-      onMouseLeave={() => setIsProfileOpen(false)}
+      onMouseLeave={closeProfile}
+      onClick={() => setIsProfileOpen(false)}
     >
-      <AgentAvatar agent={agent} size={size} className={className} showStatus={showStatus} />
+      <AgentAvatarImage agent={agent} size={size} className={className} showStatus={showStatus} title={profilePopoverEnabled ? undefined : title} />
       {profileCard}
     </span>
   );
