@@ -67,6 +67,12 @@ reminder worker, event pruning, and web server, then serves Lantor at
 `http://127.0.0.1:8787/` by default. Set `LANTOR_WEB_BIND` only when you need
 another bind address, or set it to `off` to disable browser access.
 
+`npm run build` also generates gzip/Brotli sidecars for text assets. The web
+server negotiates them via `Accept-Encoding` and keeps the original files for
+other clients; API/SSE routes are not affected. Serve the complete `dist/`
+directory, including the sidecars and local PWA icons. This removes the icon
+dependency on external hosts; full offline app support requires a service worker.
+
 For frontend hot reload in browser-only development, run two terminals:
 
 ```bash

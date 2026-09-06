@@ -317,7 +317,14 @@ fn web_router(state: Arc<WebState>, dist_dir: PathBuf) -> Router {
         .with_state(state);
 
     let app = if index.is_file() {
-        app.fallback_service(ServeDir::new(&dist_dir).fallback(ServeFile::new(index)))
+        // Compression is generated once by the web build, not per request.
+        // Keep it on the static fallback so API responses (especially SSE) are untouched.
+        app.fallback_service(
+            ServeDir::new(&dist_dir)
+                .precompressed_gzip()
+                .precompressed_br()
+                .fallback(ServeFile::new(index).precompressed_gzip().precompressed_br()),
+        )
     } else {
         app.fallback(get(move || missing_dist(dist_dir)))
     };
@@ -343,6 +350,11 @@ async fn static_cache_control(request: Request, next: Next) -> Response {
         response
             .headers_mut()
             .insert(header::CACHE_CONTROL, HeaderValue::from_static(value));
+        // ServeDir negotiates precompressed files but does not emit Vary. Include
+        // identity responses too, so caches cannot reuse one encoding for another.
+        response
+            .headers_mut()
+            .append(header::VARY, HeaderValue::from_static("Accept-Encoding"));
     }
     response
 }
@@ -1111,6 +1123,10 @@ fn api_error(message: String) -> Response {
     )
         .into_response()
 }
+
+#[cfg(test)]
+#[path = "tests/web_static.rs"]
+mod static_tests;
 
 #[cfg(test)]
 mod tests {

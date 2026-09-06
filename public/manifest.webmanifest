@@ -8,13 +8,13 @@
   "theme_color": "#070d1f",
   "icons": [
     {
-      "src": "https://raw.githubusercontent.com/chenzl25/lantor/main/public/lantor-icon-192.png",
+      "src": "/lantor-icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "https://raw.githubusercontent.com/chenzl25/lantor/main/public/lantor-icon.png",
+      "src": "/lantor-icon.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
