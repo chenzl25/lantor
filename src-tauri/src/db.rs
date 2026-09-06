@@ -14,6 +14,8 @@ use uuid::Uuid;
 use crate::app::{to_string, CommandResult};
 use crate::usage::backfill_agent_run_usage_from_logs;
 
+mod messages_fts;
+
 const DEFAULT_DATABASE_URL: &str = "sqlite://~/Library/Application Support/Lantor/lantor.sqlite";
 
 pub(crate) fn expand_home_path(value: &str) -> String {
@@ -1004,6 +1006,7 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
     backfill_agent_run_usage_from_logs(pool).await?;
+    messages_fts::migrate(pool).await?;
 
     Ok(())
 }

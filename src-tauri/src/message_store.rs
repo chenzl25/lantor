@@ -1,3 +1,7 @@
+mod search;
+
+pub(crate) use search::search_messages_without_artifact_content;
+
 use std::collections::HashMap;
 
 use sqlx::{sqlite::SqliteRow, Row, Sqlite, SqlitePool, Transaction};
@@ -27,7 +31,6 @@ pub(crate) const CHANNEL_PREVIEW_ROOT_MESSAGES_PER_CHANNEL: i64 = 3;
 const CHANNEL_PREVIEW_REPLIES_PER_THREAD: i64 = 12;
 const ACTIVITY_FEED_THREAD_LIMIT: i64 = 120;
 const ACTIVITY_FEED_MENTION_LIMIT: i64 = 120;
-const MESSAGE_SEARCH_LIMIT_MAX: i64 = 100;
 const MAX_OLDER_CHANNEL_ROOT_MESSAGES_PER_PAGE: i64 = 100;
 
 pub(crate) const COMPACT_BOOTSTRAP_ROOTS: i64 = 20;
@@ -374,77 +377,6 @@ pub(crate) async fn load_activity_messages_without_artifact_content(
         .fetch_all(pool)
         .await
         .map_err(to_string)?;
-
-    messages_from_rows(pool, rows, false).await
-}
-
-pub(crate) async fn search_messages_without_artifact_content(
-    pool: &SqlitePool,
-    search_query: &str,
-    after: Option<&str>,
-    limit: i64,
-) -> CommandResult<Vec<Message>> {
-    let search_query = search_query.trim();
-    if search_query.is_empty() {
-        return Ok(Vec::new());
-    }
-    let escaped = search_query
-        .replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_");
-    let pattern = format!("%{escaped}%");
-    let rows = sqlx::query(
-        r#"
-        select
-            m.id,
-            m.seq,
-            m.channel_id,
-            m.thread_root_id,
-            m.sender_agent_id,
-            m.sender_name,
-            m.sender_role,
-            m.body,
-            m.is_task,
-            m.thread_followed,
-            m.delivery_state,
-            m.stream_key,
-            t.number as task_number,
-            t.status as task_status,
-            m.created_at,
-            m.updated_at
-        from messages m
-        join channels c on c.id = m.channel_id
-        left join tasks t on t.message_id = m.id
-        where (
-            lower(m.body) like lower($1) escape '\'
-            or lower(m.sender_name) like lower($1) escape '\'
-            or lower(c.name) like lower($1) escape '\'
-        )
-          and ($2 is null or julianday(m.created_at) >= julianday($2))
-          and m.delivery_state <> 'streaming'
-          and not (
-            m.sender_role <> 'system'
-            and m.sender_role <> 'owner'
-            and m.stream_key glob '????????-????-????-????-????????????:*'
-            and m.delivery_state = 'complete'
-            and trim(m.body) = ''
-            and not exists (
-              select 1 from message_attachments ma where ma.message_id = m.id
-            )
-            and not exists (
-              select 1 from artifacts ar where ar.message_id = m.id
-            )
-          )
-        order by m.seq desc
-        limit $3
-        "#,
-    )
-    .bind(pattern)
-    .bind(after)
-    .bind(limit.clamp(1, MESSAGE_SEARCH_LIMIT_MAX))
-    .fetch_all(pool)
-    .await
-    .map_err(to_string)?;
 
     messages_from_rows(pool, rows, false).await
 }
