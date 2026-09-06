@@ -54,6 +54,8 @@ import { SearchModal } from "./components/SearchModal";
 import { SettingsModal, type ChatTextSize, type FontPreset, type ThemePreference } from "./components/SettingsModal";
 import { Sidebar } from "./components/Sidebar";
 import { ThreadPanel } from "./components/ThreadPanel";
+import { WebAppStatus } from "./components/WebAppStatus";
+import { useWebOnline } from "./hooks/useWebOnline";
 import { UnreadBadge } from "./components/UnreadBadge";
 import { isProgressOnlyMessage } from "./message-grouping";
 import { messageReferenceLocation, type MessageReferenceKind } from "./message-references";
@@ -386,6 +388,7 @@ function errorMessage(err: unknown, fallback: string) {
 }
 
 function BootSplash({ appError, onRetry }: { appError: string | null; onRetry: () => void }) {
+  const online = useWebOnline();
   const statuses = [
     "Waking agents...",
     "Restoring workspace...",
@@ -393,7 +396,7 @@ function BootSplash({ appError, onRetry }: { appError: string | null; onRetry: (
   ];
 
   return (
-    <div className="boot" aria-live="polite">
+    <div className={`boot ${online ? "" : "offline"}`} aria-live="polite">
       <div className="boot-panel">
         <div className="boot-constellation" aria-hidden="true">
           <div className="boot-orbit">
@@ -408,13 +411,13 @@ function BootSplash({ appError, onRetry }: { appError: string | null; onRetry: (
         </div>
         <div className="boot-copy">
           <strong>{APP_DISPLAY_NAME}</strong>
-          <div className="boot-status" aria-label={statuses.join(" ")}>
+          {!online ? <div className="boot-offline">Connect to the internet to load your workspace.</div> : <div className="boot-status" aria-label={statuses.join(" ")}>
             {statuses.map((status, index) => (
               <span key={status} style={{ "--status-index": index } as CSSProperties}>{status}</span>
             ))}
-          </div>
+          </div>}
         </div>
-        {appError ? (
+        {appError && online ? (
           <div className="boot-error" role="alert">
             <p>{appError}</p>
             <button type="button" onClick={onRetry}>
@@ -2009,6 +2012,15 @@ function App() {
       console.error(err);
     });
   }, []);
+
+  useEffect(() => {
+    if (data || isTauriRuntime()) return;
+    // A cold offline launch has no event cursor yet. Retry the initial load
+    // once connectivity returns; established SSE sessions keep their backoff.
+    const retry = () => { void refreshWithError(`Failed to load ${APP_DISPLAY_NAME} state`); };
+    window.addEventListener("online", retry);
+    return () => window.removeEventListener("online", retry);
+  }, [Boolean(data)]);
 
   useEffect(() => {
     if ((!data && !appError) || bootReady) return;
@@ -5440,9 +5452,12 @@ function App() {
 }
 
 const app = (
-  <AppErrorBoundary>
-    <App />
-  </AppErrorBoundary>
+  <>
+    <WebAppStatus />
+    <AppErrorBoundary>
+      <App />
+    </AppErrorBoundary>
+  </>
 );
 
 createRoot(document.getElementById("root")!).render(

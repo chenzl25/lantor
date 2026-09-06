@@ -254,6 +254,55 @@ button,
   background: color-mix(in srgb, var(--status-danger-soft) 72%, var(--surface-floating));
 }
 
+.boot-offline {
+  color: var(--ink-muted);
+  font-size: var(--type-size-body);
+  text-align: center;
+  line-height: 1.5;
+}
+
+.boot.offline .boot-orbit,
+.boot.offline .boot-link,
+.boot.offline .boot-core {
+  animation: none;
+}
+
+.web-app-status {
+  position: fixed;
+  z-index: 1500;
+  top: calc(12px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 8px;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  padding: 10px 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  background: var(--surface-floating);
+  color: var(--ink-primary);
+  box-shadow: var(--surface-shadow);
+  font-size: var(--type-size-body);
+}
+
+.web-app-status span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.web-app-status svg {
+  flex-shrink: 0;
+}
+
+.web-app-status button {
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--ink-on-accent);
+}
+
 .boot-panel p {
   margin: 0;
   color: var(--status-danger);

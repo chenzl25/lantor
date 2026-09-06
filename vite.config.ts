@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { appShellPlugin } from "./scripts/app-shell-plugin.mjs";
 
 function webBackendProxyTarget() {
   if (process.env.LANTOR_WEB_PROXY_TARGET) {
@@ -22,7 +23,7 @@ function webBackendProxyTarget() {
 }
 
 export default defineConfig(({ mode }) => ({
-  plugins: [react()],
+  plugins: [react(), appShellPlugin()],
   resolve: {
     alias: mode === "bench"
       ? [

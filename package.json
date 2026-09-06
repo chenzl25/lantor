@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "test": "tsx --test tests/*.test.ts",
+    "test:app-shell": "node tests/app-shell.e2e.mjs",
     "test:streaming": "node tests/streaming.e2e.mjs",
     "test:attachments": "cargo test --manifest-path src-tauri/Cargo.toml web::attachment_tests::browser_cache_range_and_upload_memory -- --ignored --nocapture",
     "test:sse-push": "cargo test --manifest-path src-tauri/Cargo.toml web::sse_push_tests::browser_cross_process_delivery_and_query_scaling -- --ignored --nocapture",

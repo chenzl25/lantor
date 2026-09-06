@@ -52,7 +52,10 @@ let browser;
 try {
   browser = await chromium.launch({ headless: true });
   async function pageFixture(body, onMathRequest) {
-    const context = await browser.newContext();
+    // This fixture deliberately stalls/aborts chunks through page.route. Keep
+    // app-shell precaching from satisfying those requests outside the route;
+    // real worker + lazy-import behavior is covered by test:app-shell.
+    const context = await browser.newContext({ serviceWorkers: "block" });
     const page = await context.newPage();
     const requests = [];
     const errors = [];
