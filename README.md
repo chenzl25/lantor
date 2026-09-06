@@ -73,6 +73,13 @@ other clients; API/SSE routes are not affected. Serve the complete `dist/`
 directory, including the sidecars and local PWA icons. This removes the icon
 dependency on external hosts; full offline app support requires a service worker.
 
+Math rendering is loaded on demand, including KaTeX CSS/fonts. Messages use the
+existing `$$...$$` / `math` fenced-code syntax; single-dollar prices stay plain
+text. While the math chunk loads (or if it fails), the message remains readable
+as ordinary Markdown. Run `npm run build && npm run test:web-math` to check the
+bundle graph and browser behavior with a synthetic backend (Playwright Chromium
+must be installed).
+
 For frontend hot reload in browser-only development, run two terminals:
 
 ```bash
