@@ -16,6 +16,13 @@ use crate::{
     ui_notifications::{enqueue_ui_event_in_tx, UiEvent},
 };
 
+mod comparisons;
+mod pull_requests;
+
+pub(crate) use comparisons::{
+    load_github_commits_ahead, load_github_review_comparisons, GithubReviewComparisons,
+};
+
 const GITHUB_CLI_TIMEOUT: Duration = Duration::from_secs(30);
 const GITHUB_REVIEW_REQUEST_LIMIT: &str = "50";
 const GITHUB_AUTHORED_PULL_REQUEST_LIMIT: &str = "100";
@@ -253,7 +260,6 @@ struct GithubPullRequestSnapshot {
     checks: GithubCheckSummary,
     is_review_requested: bool,
     is_authored: bool,
-    review_commits_ahead: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -309,20 +315,8 @@ pub(crate) struct GithubPullRequestDetail {
     number: i64,
     title: String,
     url: String,
-    author: Option<GithubActorCli>,
-    is_draft: bool,
     state: String,
-    updated_at: String,
     head_ref_oid: String,
-    #[serde(default)]
-    status_check_rollup: Vec<GithubStatusCheckCli>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GithubCompareCli {
-    status: String,
-    ahead_by: i64,
 }
 
 impl GithubPullRequestDetail {
@@ -332,20 +326,6 @@ impl GithubPullRequestDetail {
 
     pub(crate) fn head_sha(&self) -> &str {
         &self.head_ref_oid
-    }
-
-    fn as_queue_item(&self) -> GithubPullRequestCli {
-        GithubPullRequestCli {
-            number: self.number,
-            title: self.title.clone(),
-            url: self.url.clone(),
-            author: self.author.clone(),
-            is_draft: self.is_draft,
-            state: self.state.clone(),
-            updated_at: self.updated_at.clone(),
-            head_ref_oid: self.head_ref_oid.clone(),
-            status_check_rollup: self.status_check_rollup.clone(),
-        }
     }
 }
 
@@ -802,7 +782,6 @@ fn merge_pull_request_snapshots(
                     checks,
                     is_review_requested: true,
                     is_authored: false,
-                    review_commits_ahead: None,
                 },
             )
         })
@@ -821,7 +800,6 @@ fn merge_pull_request_snapshots(
                 checks,
                 is_review_requested: false,
                 is_authored: true,
-                review_commits_ahead: None,
             });
     }
     let mut pull_requests = pull_requests.into_values().collect::<Vec<_>>();
@@ -970,28 +948,6 @@ async fn load_resource_links(
         .collect())
 }
 
-pub(crate) async fn load_github_commits_ahead(
-    binding: &GithubRepositoryBinding,
-    previous_head_sha: &str,
-    head_sha: &str,
-) -> CommandResult<i64> {
-    let output = run_github_cli(vec![
-        "api".to_owned(),
-        format!(
-            "repos/{}/compare/{}...{}",
-            binding.name_with_owner, previous_head_sha, head_sha
-        ),
-        "--jq".to_owned(),
-        "{status: .status, aheadBy: .ahead_by}".to_owned(),
-    ])
-    .await?;
-    let comparison: GithubCompareCli = parse_json(&output, "GitHub commit comparison")?;
-    if comparison.status.eq_ignore_ascii_case("identical") {
-        return Ok(0);
-    }
-    Ok(comparison.ahead_by.max(0))
-}
-
 async fn complete_closed_github_review_tasks(
     pool: &SqlitePool,
     links: &HashMap<i64, GithubResourceLink>,
@@ -1044,49 +1000,30 @@ async fn reconcile_linked_pull_request_snapshots(
         PULL_REQUEST_RESOURCE_KIND,
     )
     .await?;
-    let mut known_pull_numbers = requests
+    let known_pull_numbers = requests
         .iter()
         .map(|snapshot| snapshot.pull_request.number)
         .collect::<HashSet<_>>();
     let mut closed_pull_numbers = HashSet::new();
 
-    for pull_number in links.keys().copied() {
-        if known_pull_numbers.contains(&pull_number) {
-            continue;
-        }
-        let pull_request = load_github_pull_request(binding, pull_number).await?;
-        if pull_request.is_open() {
-            let pull_request = pull_request.as_queue_item();
+    let mut missing = links
+        .keys()
+        .copied()
+        .filter(|number| !known_pull_numbers.contains(number))
+        .collect::<Vec<_>>();
+    missing.sort_unstable();
+    for pull_request in pull_requests::load_linked_pull_requests(binding, &missing).await? {
+        if pull_request.state.eq_ignore_ascii_case("open") {
             let checks = summarize_checks(&pull_request.status_check_rollup);
             requests.push(GithubPullRequestSnapshot {
                 pull_request,
                 checks,
                 is_review_requested: false,
                 is_authored: false,
-                review_commits_ahead: None,
             });
-            known_pull_numbers.insert(pull_number);
         } else {
-            closed_pull_numbers.insert(pull_number);
+            closed_pull_numbers.insert(pull_request.number);
         }
-    }
-
-    for snapshot in &mut requests {
-        let Some(link) = links.get(&snapshot.pull_request.number) else {
-            continue;
-        };
-        let current_head_sha = snapshot.pull_request.head_ref_oid.as_str();
-        if link.head_sha.is_empty()
-            || current_head_sha.is_empty()
-            || link.head_sha == current_head_sha
-        {
-            snapshot.review_commits_ahead = None;
-            continue;
-        }
-        snapshot.review_commits_ahead =
-            load_github_commits_ahead(binding, &link.head_sha, current_head_sha)
-                .await
-                .ok();
     }
 
     complete_closed_github_review_tasks(pool, &links, &closed_pull_numbers).await?;
@@ -1109,7 +1046,7 @@ async fn load_cached_review_requests(
         select
             pull_number, title, url, author_login, is_draft, state, github_updated_at,
             is_review_requested, is_authored, head_sha, checks_status, checks_total,
-            checks_pending, checks_failed, failing_checks_json, review_commits_ahead
+            checks_pending, checks_failed, failing_checks_json
         from github_review_request_cache
         where channel_id = $1
           and repository_id = $2
@@ -1152,7 +1089,6 @@ async fn load_cached_review_requests(
             },
             is_review_requested: row.get("is_review_requested"),
             is_authored: row.get("is_authored"),
-            review_commits_ahead: row.get("review_commits_ahead"),
         });
     }
     Ok(requests)
@@ -1335,12 +1271,12 @@ async fn replace_cached_review_requests(
                 channel_id, repository_id, review_login, pull_number, title, url,
                 author_login, is_draft, state, github_updated_at,
                 is_review_requested, is_authored, head_sha, checks_status, checks_total,
-                checks_pending, checks_failed, failing_checks_json, review_commits_ahead,
+                checks_pending, checks_failed, failing_checks_json,
                 attention_unread
             )
             values (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                $14, $15, $16, $17, $18, $19, $20
+                $14, $15, $16, $17, $18, $19
             )
             "#,
         )
@@ -1368,7 +1304,6 @@ async fn replace_cached_review_requests(
         .bind(snapshot.checks.pending)
         .bind(snapshot.checks.failed)
         .bind(failing_checks_json)
-        .bind(snapshot.review_commits_ahead)
         .bind(attention_unread)
         .execute(&mut *transaction)
         .await
@@ -1482,6 +1417,8 @@ async fn decorate_review_requests(
         PULL_REQUEST_RESOURCE_KIND,
     )
     .await?;
+    let mut commits_ahead =
+        comparisons::cached_counts_for_requests(pool, binding, &requests, &links).await?;
     Ok(requests
         .into_iter()
         .map(|snapshot| {
@@ -1517,9 +1454,7 @@ async fn decorate_review_requests(
                 linked_assignee_name: link.as_ref().and_then(|link| link.assignee_name.clone()),
                 review_anchor_sha,
                 review_is_stale,
-                review_commits_ahead: review_is_stale
-                    .then_some(snapshot.review_commits_ahead)
-                    .flatten(),
+                review_commits_ahead: commits_ahead.remove(&pull_request.number),
             }
         })
         .collect())
@@ -1623,16 +1558,6 @@ pub(crate) async fn refresh_github_review_attention(
     let mut requests = Vec::with_capacity(current_requests.len() + cached_requests.len());
     for pull_request in current_requests {
         let previous = cached_requests.remove(&pull_request.number);
-        let same_head = previous.as_ref().is_some_and(|snapshot| {
-            snapshot.pull_request.head_ref_oid == pull_request.head_ref_oid
-        });
-        let review_commits_ahead = same_head
-            .then(|| {
-                previous
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.review_commits_ahead)
-            })
-            .flatten();
         let is_authored = previous
             .as_ref()
             .is_some_and(|snapshot| snapshot.is_authored);
@@ -1642,7 +1567,6 @@ pub(crate) async fn refresh_github_review_attention(
             checks,
             is_review_requested: true,
             is_authored,
-            review_commits_ahead,
         });
     }
     requests.extend(cached_requests.into_values().filter_map(|mut snapshot| {
@@ -1713,16 +1637,16 @@ pub(crate) async fn refresh_github_channel_overview(
     pool: &SqlitePool,
     channel_id: Uuid,
 ) -> CommandResult<GithubChannelOverview> {
-    let account = github_account().await?;
     let Some(binding) = load_github_binding(pool, channel_id).await? else {
         return Ok(GithubChannelOverview {
-            account,
+            account: github_account().await?,
             binding: None,
             review_requests: Vec::new(),
             issues: Vec::new(),
         });
     };
-    let (review_requests, authored_pull_requests) = tokio::try_join!(
+    let (account, review_requests, authored_pull_requests) = tokio::try_join!(
+        github_account(),
         search_review_requests(&binding),
         search_authored_pull_requests(&binding)
     )?;
@@ -1751,16 +1675,16 @@ pub(crate) async fn refresh_github_issue_overview(
     pool: &SqlitePool,
     channel_id: Uuid,
 ) -> CommandResult<GithubChannelOverview> {
-    let account = github_account().await?;
     let Some(binding) = load_github_binding(pool, channel_id).await? else {
         return Ok(GithubChannelOverview {
-            account,
+            account: github_account().await?,
             binding: None,
             review_requests: Vec::new(),
             issues: Vec::new(),
         });
     };
-    let (open_issues, related_issues) = tokio::try_join!(
+    let (account, open_issues, related_issues) = tokio::try_join!(
+        github_account(),
         search_issues(&binding, false),
         search_issues(&binding, true)
     )?;
@@ -1794,7 +1718,7 @@ pub(crate) async fn load_github_pull_request(
         "--repo".to_owned(),
         binding.name_with_owner.clone(),
         "--json".to_owned(),
-        "number,title,url,author,isDraft,state,updatedAt,headRefOid,statusCheckRollup".to_owned(),
+        "number,title,url,state,headRefOid".to_owned(),
     ])
     .await?;
     let pull_request: GithubPullRequestDetail = parse_json(&output, "GitHub pull request")?;
@@ -2574,14 +2498,8 @@ mod tests {
                 number: 42,
                 title: "Keep the queue bounded".to_owned(),
                 url: "https://github.com/acme/stream/pull/42".to_owned(),
-                author: Some(GithubActorCli {
-                    login: "octocat".to_owned(),
-                }),
-                is_draft: false,
                 state: "OPEN".to_owned(),
-                updated_at: "2026-07-27T04:00:00Z".to_owned(),
                 head_ref_oid: "abc123".to_owned(),
-                status_check_rollup: Vec::new(),
             };
 
             let first = create_github_review_task_record(
@@ -2659,14 +2577,8 @@ mod tests {
                 number: 42,
                 title: "Keep the queue bounded".to_owned(),
                 url: "https://github.com/acme/stream/pull/42".to_owned(),
-                author: Some(GithubActorCli {
-                    login: "octocat".to_owned(),
-                }),
-                is_draft: false,
                 state: "OPEN".to_owned(),
-                updated_at: "2026-07-27T04:00:00Z".to_owned(),
                 head_ref_oid: "abc123".to_owned(),
-                status_check_rollup: Vec::new(),
             };
             let created =
                 create_github_review_task_record(&pool, channel_id, agent_id, &binding, &original)
@@ -2678,7 +2590,6 @@ mod tests {
                 .map_err(|err| err.to_string())?;
 
             let next = GithubPullRequestDetail {
-                updated_at: "2026-07-27T06:00:00Z".to_owned(),
                 head_ref_oid: "def456".to_owned(),
                 ..original.clone()
             };
@@ -2823,7 +2734,6 @@ mod tests {
                     },
                     is_review_requested: true,
                     is_authored: false,
-                    review_commits_ahead: Some(2),
                 },
                 GithubPullRequestSnapshot {
                     pull_request: GithubPullRequestCli {
@@ -2840,7 +2750,6 @@ mod tests {
                     checks: GithubCheckSummary::default(),
                     is_review_requested: false,
                     is_authored: true,
-                    review_commits_ahead: None,
                 },
             ];
             let baseline_update =
@@ -2942,7 +2851,6 @@ mod tests {
                 },
                 is_review_requested: true,
                 is_authored: false,
-                review_commits_ahead: None,
             }];
             replace_cached_review_requests(&pool, &binding, "next-owner", &second_snapshot, true)
                 .await?;
@@ -2973,7 +2881,6 @@ mod tests {
                 checks: GithubCheckSummary::default(),
                 is_review_requested: true,
                 is_authored: false,
-                review_commits_ahead: None,
             });
             let new_request_update = replace_cached_review_requests(
                 &pool,

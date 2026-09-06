@@ -237,6 +237,10 @@ fn web_router(state: Arc<WebState>, dist_dir: PathBuf) -> Router {
             post(api_search_channel_wikis).layer(CompressionLayer::new()),
         )
         .route(
+            "/api/load_github_review_comparisons",
+            post(api_load_github_review_comparisons),
+        )
+        .route(
             "/api/load_github_review_queue",
             post(api_load_github_review_queue),
         )
@@ -579,6 +583,16 @@ async fn api_search_channel_wikis(
     Json(request): Json<SearchChannelWikisRequest>,
 ) -> Result<impl IntoResponse, Response> {
     wiki_commands::search_channel_wikis(&state.pool, request)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_load_github_review_comparisons(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<GithubChannelRequest>,
+) -> Result<impl IntoResponse, Response> {
+    github_commands::load_github_review_comparisons(&state.pool, request)
         .await
         .map(Json)
         .map_err(api_error)

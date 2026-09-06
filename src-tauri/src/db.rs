@@ -362,6 +362,15 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         )
         "#,
         r#"
+        create table if not exists github_commit_comparisons (
+            repository_id text not null,
+            base_sha text not null,
+            head_sha text not null,
+            ahead_by integer not null check (ahead_by >= 0),
+            primary key (repository_id, base_sha, head_sha)
+        )
+        "#,
+        r#"
         create table if not exists github_issue_cache (
             channel_id blob not null references channels(id) on delete cascade,
             repository_id text not null,

@@ -16,6 +16,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { apiInvoke, openExternalUrl } from "../apiClient";
+import { githubComparisonRequestKey, mergeGithubReviewComparisons } from "../github-review";
 import { formatRelativeTime } from "../ui-utils";
 import type {
   Agent,
@@ -27,6 +28,7 @@ import type {
   GithubLabel,
   GithubPullRequest,
   GithubReviewTaskResult,
+  GithubReviewComparisons,
 } from "../types";
 import { GithubIssueDrawer } from "./GithubIssueDrawer";
 import { Modal } from "./Modal";
@@ -47,6 +49,7 @@ type GithubIssueFilter = "related" | "assigned" | "authored" | "linked" | "open"
 const GITHUB_AUTO_REFRESH_INTERVAL_MS = 60_000;
 const githubOverviewCache = new Map<string, GithubChannelOverview>();
 const githubRefreshRequests = new Map<string, Promise<GithubChannelOverview>>();
+const githubComparisonRequests = new Map<string, Promise<GithubReviewComparisons>>();
 
 function cacheGithubOverview(channelId: string, overview: GithubChannelOverview) {
   githubOverviewCache.set(channelId, overview);
@@ -199,6 +202,32 @@ export function GithubPanel({
     syncedAt: channel.github_review_synced_at,
   });
 
+  const enrichOverview = useCallback((next: GithubChannelOverview, requestEpoch: number) => {
+    const requestKey = githubComparisonRequestKey(next);
+    if (!requestKey) return;
+    let request = githubComparisonRequests.get(requestKey);
+    if (!request) {
+      request = apiInvoke("load_github_review_comparisons", { channelId: channel.id })
+        .finally(() => {
+          if (githubComparisonRequests.get(requestKey) === request) {
+            githubComparisonRequests.delete(requestKey);
+          }
+        });
+      githubComparisonRequests.set(requestKey, request);
+    }
+    void request.then((comparisons) => {
+      if (requestEpochRef.current !== requestEpoch) return;
+      setOverview((current) => {
+        if (!current) return current;
+        const updated = mergeGithubReviewComparisons(current, comparisons);
+        if (updated !== current) cacheGithubOverview(channel.id, updated);
+        return updated;
+      });
+    }).catch(() => {
+      // Counts are optional. Keep "New head" and retry on the next load/refresh.
+    });
+  }, [channel.id]);
+
   const refreshOverview = useCallback(async (resource: GithubResource) => {
     const requestEpoch = requestEpochRef.current + 1;
     requestEpochRef.current = requestEpoch;
@@ -209,6 +238,7 @@ export function GithubPanel({
       if (requestEpochRef.current !== requestEpoch) return;
       cacheGithubOverview(channel.id, next);
       setOverview(next);
+      if (resource === "pulls") enrichOverview(next, requestEpoch);
     } catch (loadError) {
       if (requestEpochRef.current !== requestEpoch) return;
       setError(errorMessage(
@@ -220,7 +250,7 @@ export function GithubPanel({
     } finally {
       if (requestEpochRef.current === requestEpoch) setRefreshingResource(null);
     }
-  }, [channel.id]);
+  }, [channel.id, enrichOverview]);
 
   const loadOverview = useCallback(async () => {
     const requestEpoch = requestEpochRef.current + 1;
@@ -240,6 +270,8 @@ export function GithubPanel({
       setLoading(false);
       if (githubQueueNeedsRefresh(next, activeResource)) {
         void refreshOverview(activeResource);
+      } else if (activeResource === "pulls") {
+        enrichOverview(next, requestEpoch);
       }
     } catch (loadError) {
       if (requestEpochRef.current !== requestEpoch) return;
@@ -247,7 +279,7 @@ export function GithubPanel({
       setError(errorMessage(loadError, "Failed to load the cached GitHub review queue"));
       setLoading(false);
     }
-  }, [activeResource, channel.id, refreshOverview]);
+  }, [activeResource, channel.id, enrichOverview, refreshOverview]);
 
   useEffect(() => {
     void loadOverview();

@@ -10,7 +10,7 @@ use crate::{
     },
     github::{
         GithubChannelOverview, GithubIssueDetail, GithubIssueTaskResult, GithubRepositoryBinding,
-        GithubRereviewTaskResult, GithubReviewTaskResult,
+        GithubRereviewTaskResult, GithubReviewComparisons, GithubReviewTaskResult,
     },
 };
 
@@ -20,6 +20,15 @@ pub(crate) async fn load_github_review_queue(
     state: State<'_, AppState>,
 ) -> CommandResult<GithubChannelOverview> {
     application::load_github_review_queue(&state.pool, GithubChannelRequest { channel_id }).await
+}
+
+#[tauri::command]
+pub(crate) async fn load_github_review_comparisons(
+    channel_id: Uuid,
+    state: State<'_, AppState>,
+) -> CommandResult<GithubReviewComparisons> {
+    application::load_github_review_comparisons(&state.pool, GithubChannelRequest { channel_id })
+        .await
 }
 
 #[tauri::command]
