@@ -36,6 +36,7 @@ mod task_store;
 #[cfg(test)]
 mod test_support;
 mod text;
+mod ui_event_hub;
 mod ui_notifications;
 mod ui_state;
 mod usage;

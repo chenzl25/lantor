@@ -21,10 +21,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{Row, SqlitePool};
-use tokio::{
-    net::TcpListener,
-    time::{sleep, Duration},
-};
+use tokio::net::TcpListener;
 use tower_http::{
     compression::CompressionLayer,
     services::{ServeDir, ServeFile},
@@ -984,28 +981,15 @@ fn requested_event_cursor(headers: &HeaderMap, query: &EventsQuery) -> Option<i6
         .or(query.cursor.filter(|cursor| *cursor >= 0))
 }
 
+#[cfg(test)]
 async fn event_stream_start(
     pool: &SqlitePool,
     requested_cursor: Option<i64>,
 ) -> CommandResult<(i64, bool)> {
-    let row = sqlx::query(
-        "select coalesce(min(id), 0) as min_id, coalesce(max(id), 0) as max_id from ui_events",
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(to_string)?;
-    let min_id: i64 = row.get("min_id");
-    let max_id: i64 = row.get("max_id");
-    let Some(cursor) = requested_cursor else {
-        return Ok((max_id, false));
-    };
-    let cursor_fell_behind = min_id > 0 && cursor < min_id.saturating_sub(1);
-    let cursor_is_from_another_database = cursor > max_id;
-    if cursor_fell_behind || cursor_is_from_another_database {
-        Ok((max_id, true))
-    } else {
-        Ok((cursor, false))
-    }
+    let mut subscription =
+        crate::ui_event_hub::UiEventSubscription::connect(pool, requested_cursor).await?;
+    let batch = subscription.recv().await?;
+    Ok((batch.cursor, batch.replay_gap))
 }
 
 #[derive(Deserialize)]
@@ -1064,55 +1048,29 @@ async fn api_events(
     Query(query): Query<EventsQuery>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, Response> {
-    let (initial_last_id, replay_gap) =
-        event_stream_start(&state.pool, requested_event_cursor(&headers, &query))
-            .await
-            .map_err(api_error)?;
-    let pool = state.pool.clone();
+    let mut subscription = crate::ui_event_hub::UiEventSubscription::connect(
+        &state.pool,
+        requested_event_cursor(&headers, &query),
+    )
+    .await
+    .map_err(api_error)?;
     let stream = async_stream::stream! {
-        let mut last_id = initial_last_id;
-        if replay_gap {
-            yield Ok::<Event, Infallible>(
-                Event::default()
-                    .id(last_id.to_string())
-                    .event("lantor")
-                    .data(json!({
-                        "type": "refresh",
-                        "reason": "event_replay_gap"
-                    }).to_string())
-            );
-        }
+        yield Ok::<Event, Infallible>(Event::default().comment("ready"));
         loop {
-            match sqlx::query(
-                r#"
-                select id, event_json
-                from ui_events
-                where id > $1
-                order by id asc
-                limit 80
-                "#,
-            )
-            .bind(last_id)
-            .fetch_all(&pool)
-            .await {
-                Ok(rows) if rows.is_empty() => {
-                    sleep(Duration::from_millis(500)).await;
-                }
-                Ok(rows) => {
-                    for row in rows {
-                        last_id = row.get("id");
-                        yield Ok(
-                            Event::default()
-                                .id(last_id.to_string())
-                                .event("lantor")
-                                .data(row.get::<String, _>("event_json"))
-                        );
+            match subscription.recv().await {
+                Ok(batch) => {
+                    if batch.replay_gap {
+                        yield Ok(Event::default().id(batch.cursor.to_string()).event("lantor")
+                            .data(json!({"type":"refresh", "reason":"event_replay_gap"}).to_string()));
                     }
-                },
+                    for delivery in batch.events {
+                        yield Ok(Event::default().id(delivery.cursor.to_string()).event("lantor").data(delivery.event));
+                    }
+                }
                 Err(err) => {
-                    yield Ok(Event::default().event("error").data(err.to_string()));
-                    sleep(Duration::from_secs(2)).await;
-                },
+                    yield Ok(Event::default().event("error").data(err));
+                    break; // Reconnect with Last-Event-ID through the normal replay path.
+                }
             }
         }
     };
@@ -1280,3 +1238,7 @@ mod sync_tests;
 #[cfg(test)]
 #[path = "tests/bootstrap_slim.rs"]
 mod bootstrap_slim_tests;
+
+#[cfg(test)]
+#[path = "tests/sse_push.rs"]
+mod sse_push_tests;

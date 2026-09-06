@@ -1,0 +1,19 @@
+# Shared UI event delivery
+
+Web SSE and Tauri subscribe to one `UiEventSubscription` hub per database file and process. The hub broadcasts committed event payloads. Normal delivery never queries SQLite once per tab; only initial connection, explicit HTTP replay, and a lagged subscriber read their own replay window.
+
+The supervisor writes `ui_events` in a separate process, usually within the business transaction. An in-process insert notification would miss these events and could precede commit. The hub therefore uses the allowed metadata-observer fallback: one dedicated connection checks `PRAGMA data_version` every 40 ms while there are subscribers. A changed value triggers one shared transactional read of the durable event window. Separate min/max scalar queries seek the rowid endpoints instead of scanning the retained history. With an unchanged database there are **zero periodic event-table queries**, but there are 25 small metadata checks per second, independent of tab count. Commits to other tables can also trigger a shared empty drain. The implementation requires no writer changes or IPC socket and observes older supervisor processes too.
+
+`data_version` values belong to a connection, so the observer does not borrow a different pooled connection each tick. Its dedicated file connection is read-only and does not occupy a slot in the command pool. SQL errors back off for two seconds, reconnect, and force a new drain. Dropping the last subscription aborts the observer; weak registry entries do not retain databases indefinitely.
+
+Subscribers attach to broadcast **before** taking the initial replay snapshot. They discard live events at or below that snapshot cursor. `Last-Event-ID` still overrides the cursor query parameter. A new connection without a cursor starts at the current head. The live queue holds 64 batches; on lag, that subscriber reads from its last cursor. A pruned or invalid cursor returns the existing `event_replay_gap` refresh with the current head. Tauri uses the same subscription and keeps its last delivered cursor across retries. SSE keepalive comments do not touch SQLite.
+
+The chosen 40 ms metadata interval trades a small fixed amount of idle work for cross-process delivery below 100 ms without commit-hook or IPC races. This is transport push with a shared database observer, not a claim that all SQLite activity is eliminated. Writer transaction boundaries and the `ui_events.id` cursor contract remain unchanged.
+
+Validation:
+
+- `cargo test --manifest-path src-tauri/Cargo.toml`: shared-reader identity, idle reads, uncommitted/rolled-back events, ordered delivery, live/replay overlap, slow-consumer catchup and pruned cursors, alongside existing backend coverage.
+- `npm run test:sse-push`: opt-in Rust fixture starts the real Axum route and fresh independent writer processes. Those call the same `runtime::streaming::append_streaming_agent_message` transaction used by the supervisor. The fixture retains 5,000 synthetic history events (roughly 10 MB). Chromium uses native EventSource in one and three tabs. The timestamp is captured before entering the writer, so measured latency includes writer SQL, commit, shared observation, SSE transport and browser delivery. The fixture checks every sample is below 100 ms, no missing/duplicate/reordered events, idle event-table reads, constant live table-query count, header replay and gap refresh. Metrics count shared replay reads (two table statements per normal batch); connection setup queries are intentionally outside the measured window.
+- `npm test`, `npm run build`, `npm run test:web-sync`, `npm run test:streaming`: frontend cursor/backoff, hydration, mutation and streaming compatibility.
+
+The browser fixture uses a disposable synthetic database and freshly built child processes; it does not reuse or restart the user's running supervisor. Production deployment should restart the backend to activate the new delivery listener.

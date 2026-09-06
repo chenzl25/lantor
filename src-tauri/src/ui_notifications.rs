@@ -3,7 +3,9 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
-use sqlx::{sqlite::SqliteRow, Executor, Row, Sqlite, SqlitePool, Transaction};
+use sqlx::{
+    sqlite::SqliteRow, Connection, Executor, Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
+};
 use tauri::{Emitter, State};
 use tokio::time::sleep;
 use uuid::Uuid;
@@ -18,10 +20,16 @@ use crate::models::{
 
 const UI_REFRESH_EVENT: &str = "lantor://refresh";
 
-#[derive(Debug, Serialize)]
+// Separate scalar aggregates let SQLite seek both rowid endpoints. Combining
+// min/max in one aggregate scans the retained event history on every drain.
+pub(crate) const UI_EVENT_BOUNDS_SQL: &str = "select
+    (select coalesce(min(id), 0) from ui_events) as min_id,
+    (select coalesce(max(id), 0) from ui_events) as max_id";
+
+#[derive(Clone, Debug, Serialize)]
 pub(crate) struct UiEventDelivery {
-    cursor: i64,
-    event: String,
+    pub(crate) cursor: i64,
+    pub(crate) event: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -34,9 +42,9 @@ struct UiEventDeliveryBatch {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct UiEventReplay {
-    cursor: i64,
-    replay_gap: bool,
-    events: Vec<UiEventDelivery>,
+    pub(crate) cursor: i64,
+    pub(crate) replay_gap: bool,
+    pub(crate) events: Vec<UiEventDelivery>,
 }
 
 #[derive(Debug, Serialize)]
@@ -355,13 +363,19 @@ pub(crate) async fn load_ui_event_replay_from_cursor(
     pool: &SqlitePool,
     requested_cursor: i64,
 ) -> CommandResult<UiEventReplay> {
-    let mut transaction = pool.begin().await.map_err(to_string)?;
-    let row = sqlx::query(
-        "select coalesce(min(id), 0) as min_id, coalesce(max(id), 0) as max_id from ui_events",
-    )
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(to_string)?;
+    let mut connection = pool.acquire().await.map_err(to_string)?;
+    read_ui_event_replay(&mut connection, requested_cursor).await
+}
+
+pub(crate) async fn read_ui_event_replay(
+    connection: &mut SqliteConnection,
+    requested_cursor: i64,
+) -> CommandResult<UiEventReplay> {
+    let mut transaction = connection.begin().await.map_err(to_string)?;
+    let row = sqlx::query(UI_EVENT_BOUNDS_SQL)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(to_string)?;
     let min_id: i64 = row.get("min_id");
     let max_id: i64 = row.get("max_id");
     let requested_cursor = requested_cursor.max(0);
@@ -414,51 +428,45 @@ pub(crate) async fn replay_ui_events(
 
 pub(crate) fn spawn_ui_refresh_listener(app: tauri::AppHandle, pool: SqlitePool) {
     tauri::async_runtime::spawn(async move {
-        let mut last_id: i64 = sqlx::query_scalar("select coalesce(max(id), 0) from ui_events")
-            .fetch_one(&pool)
-            .await
-            .unwrap_or(0);
+        let mut cursor = None;
         loop {
-            let rows = sqlx::query(
-                r#"
-                select id, event_json
-                from ui_events
-                where id > $1
-                order by id asc
-                limit 80
-                "#,
-            )
-            .bind(last_id)
-            .fetch_all(&pool)
-            .await;
-            match rows {
-                Ok(rows) if rows.is_empty() => {
-                    sleep(Duration::from_millis(150)).await;
-                }
-                Ok(rows) => {
-                    let mut events = Vec::with_capacity(rows.len());
-                    for row in rows {
-                        last_id = row.get("id");
-                        events.push(UiEventDelivery {
-                            cursor: last_id,
-                            event: row.get("event_json"),
-                        });
+            let mut subscription =
+                match crate::ui_event_hub::UiEventSubscription::connect(&pool, cursor).await {
+                    Ok(subscription) => subscription,
+                    Err(err) => {
+                        eprintln!("Lantor UI event subscription failed: {err}");
+                        sleep(Duration::from_secs(2)).await;
+                        continue;
                     }
-                    match serde_json::to_string(&UiEventDeliveryBatch {
-                        event_type: "ui_event_delivery",
-                        events,
-                    }) {
-                        Ok(payload) => {
-                            let _ = app.emit(UI_REFRESH_EVENT, payload);
+                };
+            loop {
+                match subscription.recv().await {
+                    Ok(mut batch) => {
+                        cursor = Some(batch.cursor);
+                        if batch.replay_gap {
+                            batch.events.push(UiEventDelivery {
+                                cursor: batch.cursor,
+                                event: r#"{"type":"refresh","reason":"event_replay_gap"}"#.into(),
+                            });
                         }
-                        Err(err) => {
-                            eprintln!("Lantor UI refresh poller failed to serialize events: {err}");
+                        if batch.events.is_empty() {
+                            continue;
+                        }
+                        match serde_json::to_string(&UiEventDeliveryBatch {
+                            event_type: "ui_event_delivery",
+                            events: batch.events,
+                        }) {
+                            Ok(payload) => {
+                                let _ = app.emit(UI_REFRESH_EVENT, payload);
+                            }
+                            Err(err) => eprintln!("Lantor UI event serialization failed: {err}"),
                         }
                     }
-                }
-                Err(err) => {
-                    eprintln!("Lantor UI refresh poller failed: {err}");
-                    sleep(Duration::from_secs(2)).await;
+                    Err(err) => {
+                        eprintln!("Lantor UI event delivery failed: {err}");
+                        sleep(Duration::from_secs(2)).await;
+                        break;
+                    }
                 }
             }
         }
@@ -468,7 +476,7 @@ pub(crate) fn spawn_ui_refresh_listener(app: tauri::AppHandle, pool: SqlitePool)
 /// Number of most-recent `ui_events` rows to retain on each prune.
 ///
 /// `ui_events` is an append-only UI-refresh notification queue. The desktop
-/// poller and owner-inbox consumers tail it, while desktop and web clients can
+/// event hub and owner-inbox consumers tail it, while desktop and web clients can
 /// replay from their last delivered event id. Retaining several thousand rows
 /// gives reconnecting clients a large replay window; if a cursor falls behind
 /// this window, the transport explicitly requests a snapshot refresh. `id` is

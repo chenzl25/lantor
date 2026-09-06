@@ -2,6 +2,8 @@
 
 `bootstrap` initializes the UI and captures the durable `ui_events.id` cursor before loading state. Normal writes no longer wait for another bootstrap. Message responses replace optimistic rows by id; committed entity events update the other clients. Refresh events invalidate only the collections listed in `src/ui-state-sync.ts`, read through `load_ui_state`. That endpoint does not read message history, run logs, or artifact content.
 
+Web SSE and Tauri share the committed event hub described in [ui-event-delivery.md](ui-event-delivery.md). It replaces per-connection polling with one cross-process metadata observer and broadcast delivery.
+
 SSE reconnects pass the last delivered cursor in the `cursor` query parameter (the server also accepts native `Last-Event-ID`). The browser's fixed retry is disabled by closing failed EventSources. Retries use exponential delay with jitter, capped at 30 seconds; a connection must remain open for 10 seconds before resetting the backoff. Closing a subscription cancels its timers and ignores late deliveries.
 
 Visibility, focus, pageshow and online events coalesce into one foreground reconciliation. The 60-second safety net also checks the durable event cursor, and skips hidden tabs and text editing. An up-to-date check returns no events. HTTP replay and SSE share a delivery cursor, so overlapping replay does not apply deltas twice. The event cursor is used instead of `messages.seq` because edits, deletes, read markers and task changes do not create a new message sequence. A fresh page gets its cursor from its fresh bootstrap; a restored page retains its existing cursor.
