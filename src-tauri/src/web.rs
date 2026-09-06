@@ -7,9 +7,8 @@ use std::{
 };
 
 use axum::{
-    body::Body,
     extract::{DefaultBodyLimit, FromRequest, Multipart, Path as AxumPath, Query, Request, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     middleware::{from_fn, Next},
     response::{
         sse::{Event, KeepAlive},
@@ -469,12 +468,27 @@ async fn extract_send_message_request(
     state: &Arc<WebState>,
 ) -> Result<SendMessageRequest, Response> {
     if is_multipart_request(&request) {
-        let multipart = Multipart::from_request(request, state)
-            .await
-            .map_err(|rejection| rejection.into_response())?;
+        if request
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some_and(crate::attachments::attachment_exceeds_size_limit)
+        {
+            return Err(api_error_status(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "multipart request is larger than 64MiB".to_owned(),
+            ));
+        }
+        let multipart = Multipart::from_request(
+            crate::web_upload::bounded_multipart_body(request),
+            state,
+        )
+        .await
+        .map_err(|rejection| rejection.into_response())?;
         return parse_multipart_send_message(multipart)
             .await
-            .map_err(api_error);
+            .map_err(|error| api_error_status(error.status, error.message));
     }
 
     Json::<SendMessageRequest>::from_request(request, state)
@@ -1080,6 +1094,8 @@ async fn api_events(
 async fn api_attachment(
     State(state): State<Arc<WebState>>,
     AxumPath(attachment_id): AxumPath<Uuid>,
+    method: Method,
+    headers: HeaderMap,
 ) -> Result<Response, Response> {
     let row = sqlx::query(
         r#"
@@ -1098,55 +1114,26 @@ async fn api_attachment(
     let original_name: String = row.get("original_name");
     let mime_type: String = row.get("mime_type");
     let storage_path: String = row.get("storage_path");
-    let bytes = tokio::fs::read(Path::new(&storage_path))
-        .await
-        .map_err(to_string)
-        .map_err(api_error)?;
-    let content_type = if mime_type.trim().is_empty() {
-        mime_guess::from_path(&storage_path)
-            .first_or_octet_stream()
-            .to_string()
-    } else {
-        mime_type
-    };
-    // Active content served inline would execute scripts in the web origin;
-    // force those types to download instead of rendering.
-    let lowered_type = content_type.to_ascii_lowercase();
-    let disposition = if ["html", "svg", "xml", "javascript", "ecmascript"]
-        .iter()
-        .any(|marker| lowered_type.contains(marker))
-    {
-        "attachment"
-    } else {
-        "inline"
-    };
-    let mut response = Response::new(Body::from(bytes));
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(&content_type)
-            .unwrap_or(HeaderValue::from_static("application/octet-stream")),
-    );
-    response.headers_mut().insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    response.headers_mut().insert(
-        header::CONTENT_DISPOSITION,
-        HeaderValue::from_str(&format!(
-            "{disposition}; filename=\"{}\"",
-            original_name.replace('"', "")
-        ))
-        .unwrap_or(HeaderValue::from_static("attachment")),
-    );
-    Ok(response)
+    attachment_response::serve_attachment(
+        attachment_id,
+        &original_name,
+        &mime_type,
+        Path::new(&storage_path),
+        &method,
+        &headers,
+    )
+    .await
 }
 
+#[path = "web_attachment.rs"]
+mod attachment_response;
+
 fn api_error(message: String) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiError { ok: false, message }),
-    )
-        .into_response()
+    api_error_status(StatusCode::BAD_REQUEST, message)
+}
+
+fn api_error_status(status: StatusCode, message: String) -> Response {
+    (status, Json(ApiError { ok: false, message })).into_response()
 }
 
 #[cfg(test)]
@@ -1242,3 +1229,7 @@ mod bootstrap_slim_tests;
 #[cfg(test)]
 #[path = "tests/sse_push.rs"]
 mod sse_push_tests;
+
+#[cfg(test)]
+#[path = "tests/web_attachments.rs"]
+mod attachment_tests;

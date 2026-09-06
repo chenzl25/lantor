@@ -478,6 +478,7 @@ async fn agent_context_inbox_tools_list_read_and_archive_items() {
                 original_name: "inbox.txt".to_owned(),
                 mime_type: "text/plain".to_owned(),
                 bytes: b"inbox context".to_vec(),
+                staged: None,
             }],
         )
         .await?;

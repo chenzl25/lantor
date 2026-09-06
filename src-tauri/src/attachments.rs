@@ -23,6 +23,49 @@ pub(crate) fn attachment_exceeds_size_limit(size_bytes: u64) -> bool {
     size_bytes > ATTACHMENT_SIZE_LIMIT as u64
 }
 
+/// Owns an uncommitted upload, including while parsing/validating the request.
+/// Dropping a failed or cancelled request removes its temporary file.
+#[derive(Debug)]
+pub(crate) struct StagedAttachment {
+    pub(crate) path: PathBuf,
+    pub(crate) size_bytes: u64,
+}
+
+impl StagedAttachment {
+    pub(crate) async fn create(root: &Path) -> CommandResult<(Self, tokio::fs::File)> {
+        let directory = root.join(".tmp");
+        tokio::fs::create_dir_all(&directory)
+            .await
+            .map_err(to_string)?;
+        let staged = Self {
+            path: directory.join(Uuid::new_v4().to_string()),
+            size_bytes: 0,
+        };
+        // Create synchronously: cancelling an async open can otherwise finish
+        // creating the file after the drop guard has attempted to unlink it.
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staged.path)
+            .map_err(to_string)?;
+        Ok((staged, tokio::fs::File::from_std(file)))
+    }
+}
+
+impl Drop for StagedAttachment {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+impl AttachmentUpload {
+    pub(crate) fn size_bytes(&self) -> u64 {
+        self.staged
+            .as_ref()
+            .map_or(self.bytes.len() as u64, |file| file.size_bytes)
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct PendingAttachmentWrites {
     paths: Vec<PathBuf>,
@@ -147,6 +190,7 @@ pub(crate) fn load_agent_attachment_uploads(
             original_name,
             mime_type,
             bytes,
+            staged: None,
         });
     }
     Ok(uploads)
@@ -160,7 +204,7 @@ pub(crate) fn default_attachment_message_body(uploads: &[AttachmentUpload]) -> S
     }
 }
 
-fn attachment_root_dir() -> CommandResult<PathBuf> {
+pub(crate) fn attachment_root_dir() -> CommandResult<PathBuf> {
     if let Ok(path) = env::var("LANTOR_ATTACHMENT_DIR") {
         return Ok(PathBuf::from(path));
     }
@@ -447,6 +491,41 @@ pub(crate) fn write_attachment_file(
     Ok(path.to_string_lossy().to_string())
 }
 
+pub(crate) async fn persist_attachment_upload(
+    message_id: Uuid,
+    attachment_id: Uuid,
+    original_name: &str,
+    upload: &AttachmentUpload,
+    pending: &mut PendingAttachmentWrites,
+) -> CommandResult<String> {
+    let Some(staged) = &upload.staged else {
+        let path = write_attachment_file(message_id, attachment_id, original_name, &upload.bytes)?;
+        pending.track(&path);
+        return Ok(path);
+    };
+    // The staging directory is under the attachment root, so rename stays on
+    // the same filesystem. Track before awaiting rename for cancellation cleanup.
+    let root = staged
+        .path
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| "invalid staged attachment path".to_owned())?;
+    let directory = root.join(message_id.to_string());
+    tokio::fs::create_dir_all(&directory)
+        .await
+        .map_err(to_string)?;
+    let path = directory.join(format!(
+        "{attachment_id}{}",
+        attachment_extension(original_name)
+    ));
+    let storage_path = path.to_string_lossy().into_owned();
+    pending.track(&storage_path);
+    // Rename is synchronous so cancellation cannot race a detached filesystem
+    // operation after the rollback guard has already removed the destination.
+    fs::rename(&staged.path, &path).map_err(to_string)?;
+    Ok(storage_path)
+}
+
 pub(crate) fn format_attachment_size(size_bytes: i64) -> String {
     if size_bytes >= 1_000_000 {
         format!("{:.1}MB", size_bytes as f64 / 1_000_000.0)
@@ -584,5 +663,47 @@ mod tests {
         assert!(attachment_garbage_collection_is_safe(false, true));
         assert!(attachment_garbage_collection_is_safe(true, true));
         assert!(!attachment_garbage_collection_is_safe(true, false));
+    }
+}
+
+#[cfg(test)]
+mod staged_tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn staged_file_is_removed_when_database_insert_rolls_back() {
+        let (pool, database) = crate::test_support::test_pool()
+            .await
+            .expect("isolated database");
+        let root = std::env::temp_dir().join(format!("lantor-staged-rollback-{}", Uuid::new_v4()));
+        let (mut staged, mut file) = StagedAttachment::create(&root).await.unwrap();
+        file.write_all(b"rollback").await.unwrap();
+        file.flush().await.unwrap();
+        drop(file);
+        staged.size_bytes = 8;
+        let temp_path = staged.path.clone();
+        let message = Uuid::new_v4();
+        let mut tx = pool.begin().await.unwrap();
+        let result = crate::message_store::insert_message_attachments_tx(
+            &mut tx,
+            message,
+            vec![AttachmentUpload {
+                original_name: "test.txt".into(),
+                mime_type: "text/plain".into(),
+                bytes: vec![],
+                staged: Some(staged),
+            }],
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "foreign key failure after rename must remove the file"
+        );
+        tx.rollback().await.unwrap();
+        assert!(!temp_path.exists());
+        assert!(!root.join(message.to_string()).exists());
+        std::fs::remove_dir_all(root).unwrap();
+        crate::test_support::drop_test_schema(pool, database).await;
     }
 }

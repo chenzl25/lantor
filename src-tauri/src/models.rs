@@ -203,6 +203,10 @@ pub(crate) struct AttachmentUpload {
     pub(crate) original_name: String,
     pub(crate) mime_type: String,
     pub(crate) bytes: Vec<u8>,
+    // Only the multipart parser can supply a local file. Never deserialize paths
+    // from JSON/Tauri requests.
+    #[serde(skip)]
+    pub(crate) staged: Option<crate::attachments::StagedAttachment>,
 }
 
 #[derive(Debug, Serialize)]

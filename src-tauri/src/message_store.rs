@@ -14,7 +14,7 @@ use crate::agent_routing::{
 };
 use crate::agent_work_dispatch::dispatch_unassigned_task_availability;
 use crate::attachments::{
-    attachment_exceeds_size_limit, remove_attachment_files, write_attachment_file,
+    attachment_exceeds_size_limit, persist_attachment_upload, remove_attachment_files,
     PendingAttachmentWrites, ATTACHMENT_SIZE_LIMIT_MIB,
 };
 use crate::ui_notifications::{enqueue_ui_event_in_tx, UiEvent};
@@ -1259,10 +1259,11 @@ pub(crate) async fn insert_message_attachments_tx(
 ) -> CommandResult<PendingAttachmentWrites> {
     let mut pending_writes = PendingAttachmentWrites::default();
     for attachment in attachments {
-        if attachment.bytes.is_empty() {
+        let size_bytes = attachment.size_bytes();
+        if size_bytes == 0 {
             continue;
         }
-        if attachment_exceeds_size_limit(attachment.bytes.len() as u64) {
+        if attachment_exceeds_size_limit(size_bytes) {
             return Err(format!(
                 "attachment {} is larger than {ATTACHMENT_SIZE_LIMIT_MIB}MB",
                 attachment.original_name,
@@ -1281,9 +1282,14 @@ pub(crate) async fn insert_message_attachments_tx(
         } else {
             mime_type
         };
-        let storage_path =
-            write_attachment_file(message_id, attachment_id, original_name, &attachment.bytes)?;
-        pending_writes.track(&storage_path);
+        let storage_path = persist_attachment_upload(
+            message_id,
+            attachment_id,
+            original_name,
+            &attachment,
+            &mut pending_writes,
+        )
+        .await?;
         sqlx::query(
             r#"
             insert into message_attachments (
@@ -1301,7 +1307,7 @@ pub(crate) async fn insert_message_attachments_tx(
         .bind(message_id)
         .bind(original_name)
         .bind(mime_type)
-        .bind(attachment.bytes.len() as i64)
+        .bind(size_bytes as i64)
         .bind(storage_path)
         .execute(&mut **tx)
         .await
