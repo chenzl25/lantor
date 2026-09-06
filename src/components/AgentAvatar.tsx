@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import type { Style } from "@dicebear/core";
+import { cachedIdenticon, diceBearAvatarCache, diceBearKey, parseDiceBearAvatar } from "../avatar-rendering";
 import type { Agent } from "../types";
 import { AgentSubscriptionUsage } from "./AgentSubscriptionUsage";
 
@@ -21,87 +21,11 @@ type ProfilePopoverPosition = {
   placement: "above" | "below";
 };
 
-const IDENTICON_SIZE = 5;
-const IDENTICON_MIRROR_WIDTH = Math.ceil(IDENTICON_SIZE / 2);
-const DEFAULT_DICEBEAR_STYLE = "dylan";
 const PROFILE_POPOVER_WIDTH = 300;
 const PROFILE_POPOVER_ESTIMATED_HEIGHT = 320;
 const PROFILE_POPOVER_GAP = 10;
 const PROFILE_POPOVER_VIEWPORT_MARGIN = 12;
 const PROFILE_POPOVER_MEDIA_QUERY = "(hover: hover) and (pointer: fine) and (min-width: 761px)";
-const DICEBEAR_STYLE_LOADERS = {
-  adventurer: () => import("@dicebear/adventurer"),
-  "bottts-neutral": () => import("@dicebear/bottts-neutral"),
-  dylan: () => import("@dicebear/dylan"),
-  identicon: () => import("@dicebear/identicon"),
-  initials: () => import("@dicebear/initials"),
-  lorelei: () => import("@dicebear/lorelei"),
-  notionists: () => import("@dicebear/notionists"),
-  personas: () => import("@dicebear/personas"),
-  "pixel-art": () => import("@dicebear/pixel-art"),
-  shapes: () => import("@dicebear/shapes"),
-} as const;
-type DiceBearStyleName = keyof typeof DICEBEAR_STYLE_LOADERS;
-type DiceBearStyle = Style<Record<string, unknown>>;
-
-function hashSeed(seed: string) {
-  let hash = 2166136261;
-  for (let index = 0; index < seed.length; index += 1) {
-    hash ^= seed.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-function nextSeed(seed: number) {
-  let next = seed + 0x6d2b79f5;
-  next = Math.imul(next ^ (next >>> 15), next | 1);
-  next ^= next + Math.imul(next ^ (next >>> 7), next | 61);
-  return (next ^ (next >>> 14)) >>> 0;
-}
-
-function generateIdenticon(seedText: string) {
-  let seed = hashSeed(seedText);
-  const cells = Array.from({ length: IDENTICON_SIZE * IDENTICON_SIZE }, () => false);
-
-  for (let y = 0; y < IDENTICON_SIZE; y += 1) {
-    for (let x = 0; x < IDENTICON_MIRROR_WIDTH; x += 1) {
-      seed = nextSeed(seed);
-      const isFilled = seed % 100 < 58;
-      cells[y * IDENTICON_SIZE + x] = isFilled;
-      cells[y * IDENTICON_SIZE + (IDENTICON_SIZE - 1 - x)] = isFilled;
-    }
-  }
-
-  const colorSeed = hashSeed(`${seedText}:color`);
-  const hue = colorSeed % 360;
-  return {
-    cells,
-    foreground: `hsl(${hue} 68% 42%)`,
-    background: `hsl(${hue} 36% 94%)`,
-  };
-}
-
-function normalizeDiceBearStyle(style: string) {
-  const normalized = style
-    .trim()
-    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
-    .replace(/[_\s]+/g, "-")
-    .toLowerCase();
-  return normalized in DICEBEAR_STYLE_LOADERS
-    ? (normalized as DiceBearStyleName)
-    : DEFAULT_DICEBEAR_STYLE;
-}
-
-function parseDiceBearAvatar(value: string, fallbackSeed: string) {
-  const trimmed = value.trim();
-  const lower = trimmed.toLowerCase();
-  if (lower !== "dicebear" && !lower.startsWith("dicebear:")) return null;
-  const [, rawStyle = DEFAULT_DICEBEAR_STYLE, ...seedParts] = trimmed.split(":");
-  const style = normalizeDiceBearStyle(rawStyle || DEFAULT_DICEBEAR_STYLE);
-  const seed = seedParts.join(":").trim() || fallbackSeed;
-  return { style, seed };
-}
 
 function isImageAvatar(value: string) {
   return /^https?:\/\//i.test(value) || /^data:image\//i.test(value);
@@ -190,14 +114,21 @@ export function AgentAvatar(props: AgentAvatarProps) {
   return hasSubscription ? <AgentAvatarWithProfile {...props} /> : <AgentAvatarImage {...props} />;
 }
 
-function AgentAvatarImage({ agent, size = "md", className = "", title, showStatus = true }: AgentAvatarProps) {
+const AgentAvatarImage = memo(function AgentAvatarImage({ agent, size = "md", className = "", title, showStatus = true }: AgentAvatarProps) {
   const seedText = agent.id || `${agent.handle}:${agent.display_name}:${agent.runtime ?? ""}`;
-  const identicon = generateIdenticon(seedText);
+  const identicon = useMemo(() => cachedIdenticon(seedText), [seedText]);
   const customAvatar = agent.avatar?.trim();
-  const diceBearSpec = customAvatar ? parseDiceBearAvatar(customAvatar, seedText) : null;
+  const diceBearSpec = useMemo(() => customAvatar ? parseDiceBearAvatar(customAvatar, seedText) : null, [customAvatar, seedText]);
+  const specKey = diceBearSpec ? diceBearKey(diceBearSpec) : null;
   const imageAvatar = Boolean(customAvatar && !diceBearSpec && isImageAvatar(customAvatar));
   const isDeletedAgent = agent.status === "deleted";
-  const [diceBearAvatar, setDiceBearAvatar] = useState<string | null>(null);
+  const [loadedAvatar, setLoadedAvatar] = useState<{ key: string; uri: string } | null>(() => {
+    const uri = diceBearSpec && diceBearAvatarCache.get(diceBearSpec);
+    return uri && specKey ? { key: specKey, uri } : null;
+  });
+  const diceBearAvatar = diceBearSpec
+    ? diceBearAvatarCache.get(diceBearSpec) ?? (loadedAvatar?.key === specKey ? loadedAvatar.uri : null)
+    : null;
   const [failedImageAvatar, setFailedImageAvatar] = useState("");
   const style = {
     "--avatar-color": identicon.foreground,
@@ -205,32 +136,24 @@ function AgentAvatarImage({ agent, size = "md", className = "", title, showStatu
   } as CSSProperties;
 
   useEffect(() => {
-    if (!diceBearSpec) {
-      setDiceBearAvatar(null);
+    if (!diceBearSpec) return;
+    const cached = diceBearAvatarCache.get(diceBearSpec);
+    if (cached) {
+      const key = diceBearKey(diceBearSpec);
+      // Another row may have resolved the shared request between render/effect.
+      setLoadedAvatar((current) => current?.key === key && current.uri === cached ? current : { key, uri: cached });
       return;
     }
 
     let cancelled = false;
-    setDiceBearAvatar(null);
-    Promise.all([
-      import("@dicebear/core"),
-      DICEBEAR_STYLE_LOADERS[diceBearSpec.style](),
-    ])
-      .then(([{ createAvatar }, styleDefinition]) => {
-        if (cancelled) return;
-        const avatar = createAvatar(styleDefinition as unknown as DiceBearStyle, {
-          seed: diceBearSpec.seed,
-        });
-        setDiceBearAvatar(avatar.toDataUri());
-      })
-      .catch(() => {
-        if (!cancelled) setDiceBearAvatar(null);
-      });
+    diceBearAvatarCache.load(diceBearSpec).then((uri) => {
+      if (!cancelled) setLoadedAvatar({ key: diceBearKey(diceBearSpec), uri });
+    }).catch(() => { /* Keep the identicon fallback; a later mount can retry. */ });
 
     return () => {
       cancelled = true;
     };
-  }, [diceBearSpec?.seed, diceBearSpec?.style]);
+  }, [diceBearSpec]);
 
   useEffect(() => {
     setFailedImageAvatar("");
@@ -266,7 +189,15 @@ function AgentAvatarImage({ agent, size = "md", className = "", title, showStatu
       )}
     </span>
   );
-}
+}, (previous, next) => (
+  previous.size === next.size && previous.className === next.className
+  && previous.title === next.title && previous.showStatus === next.showStatus
+  // Only fields read by this image component matter; subscription/profile
+  // refreshes can replace agent objects without changing the avatar.
+  && previous.agent.id === next.agent.id && previous.agent.handle === next.agent.handle
+  && previous.agent.display_name === next.agent.display_name && previous.agent.runtime === next.agent.runtime
+  && previous.agent.avatar === next.agent.avatar && previous.agent.status === next.agent.status
+));
 
 export function AgentAvatarWithProfile({
   agent,

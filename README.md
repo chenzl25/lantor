@@ -80,6 +80,12 @@ as ordinary Markdown. Run `npm run build && npm run test:web-math` to check the
 bundle graph and browser behavior with a synthetic backend (Playwright Chromium
 must be installed).
 
+`npm run test:avatar-cache` checks avatar memoization, warm-remount first frames,
+stale asynchronous requests and formatter reuse with React's profiling build and
+test-only counters. It builds a synthetic fixture in a temporary directory,
+without touching the app's `dist/` or local database. Avatar results use bounded
+caches (256 DiceBear images and 1,024 identicons).
+
 For frontend hot reload in browser-only development, run two terminals:
 
 ```bash

@@ -5,7 +5,16 @@ import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
 import test from "node:test";
-import { hasMathMarkdown } from "../src/markdown-math";
+import { hasMathMarkdown, mightHaveMathMarkdown } from "../src/markdown-math";
+
+test("ordinary code fences bypass even the CommonMark math preflight", () => {
+  for (const body of ["```js\nconst math = 1;\n```", "~~~text\nhello\n~~~", "```js\nstreaming", "plain $5"]) {
+    assert.equal(mightHaveMathMarkdown(body), false, body);
+  }
+  for (const body of ["$$x$$", "```math\nx", "~~~math\nx", "```m&#97;th\nx"]) {
+    assert.equal(mightHaveMathMarkdown(body), true, body);
+  }
+});
 
 const formulas = [
   "Inline $$x^2$$ formula",

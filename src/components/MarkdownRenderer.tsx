@@ -42,25 +42,21 @@ const tableScrollPositions = new Map<string, number>();
 const defaultRemarkPlugins: PluggableList = [remarkGfm];
 const LOCAL_ENTITY_LEADING_BOUNDARY = String.raw`(^|[^A-Za-z0-9_/@.-])`;
 const LOCAL_ENTITY_TRAILING_BOUNDARY = String.raw`(?=$|[^A-Za-z0-9_-])`;
+const agentMentionPattern = new RegExp(
+  `${LOCAL_ENTITY_LEADING_BOUNDARY}@([A-Za-z][A-Za-z0-9_-]{1,31})${LOCAL_ENTITY_TRAILING_BOUNDARY}`, "g",
+);
+const channelMentionPattern = new RegExp(
+  `${LOCAL_ENTITY_LEADING_BOUNDARY}#([A-Za-z][A-Za-z0-9_-]{1,63})${LOCAL_ENTITY_TRAILING_BOUNDARY}`, "g",
+);
+const taskMentionPattern = new RegExp(
+  `${LOCAL_ENTITY_LEADING_BOUNDARY}task #([0-9]+)${LOCAL_ENTITY_TRAILING_BOUNDARY}`, "gi",
+);
 
 function encodeLocalPath(value: string) {
   return encodeURIComponent(value.replace(/^[@#]/, ""));
 }
 
 function linkifyPlainText(value: string) {
-  const agentMentionPattern = new RegExp(
-    `${LOCAL_ENTITY_LEADING_BOUNDARY}@([A-Za-z][A-Za-z0-9_-]{1,31})${LOCAL_ENTITY_TRAILING_BOUNDARY}`,
-    "g",
-  );
-  const channelMentionPattern = new RegExp(
-    `${LOCAL_ENTITY_LEADING_BOUNDARY}#([A-Za-z][A-Za-z0-9_-]{1,63})${LOCAL_ENTITY_TRAILING_BOUNDARY}`,
-    "g",
-  );
-  const taskMentionPattern = new RegExp(
-    `${LOCAL_ENTITY_LEADING_BOUNDARY}task #([0-9]+)${LOCAL_ENTITY_TRAILING_BOUNDARY}`,
-    "gi",
-  );
-
   return value
     .replace(agentMentionPattern, (_match, prefix, handle) => (
       `${prefix}[@${handle}](${LOCAL_ENTITY_PATH_PREFIX}agent/${encodeLocalPath(handle)})`

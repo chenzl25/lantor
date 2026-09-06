@@ -9,8 +9,15 @@ type MarkdownNode = {
 
 // Keep the existing syntax: single-dollar math is disabled. Bare \(...\),
 // \[...\] and \begin{...} were not parsed by remark-math and remain plain text.
+const MATH_FENCE_CANDIDATE = /(?:`{3,}|~{3,})[ \t]*(?:math(?=\s|$)|[^\s`~]*&)/;
+export function mightHaveMathMarkdown(body: string): boolean {
+  // Entity-encoded fence languages (e.g. m&#97;th) still need the parser;
+  // ordinary JS/text fences never do unless their body contains $$.
+  return body.includes("$$") || MATH_FENCE_CANDIDATE.test(body);
+}
+
 export function hasMathMarkdown(body: string): boolean {
-  if (!body.includes("$$") && !/[`~]{3}/.test(body)) return false;
+  if (!mightHaveMathMarkdown(body)) return false;
 
   // Reuse the CommonMark parser already bundled by ReactMarkdown, but only for
   // candidates. An AST avoids mistaking code samples (including nested fences,

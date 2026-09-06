@@ -11,10 +11,10 @@ export function ownerAsAvatarAgent(profile: OwnerProfile) {
   };
 }
 
-export function agentForMessageSender(message: Message, agents: Agent[]) {
+export function agentForMessageSender(message: Message, agents: ReadonlyMap<string, Agent>) {
   if (message.sender_role === "owner" || message.sender_role === "system") return null;
   if (!message.sender_agent_id) return null;
-  return agents.find((agent) => agent.id === message.sender_agent_id) ?? null;
+  return agents.get(message.sender_agent_id) ?? null;
 }
 
 export function deletedAgentForMessageSender(message: Message) {
@@ -163,24 +163,36 @@ export function buildPresetCommand(form: AgentForm) {
   return "";
 }
 
+// Named presets are stable locale/options cache keys. Cache formatters, not
+// formatted labels: Today/Yesterday and relative time must still advance.
+const TIME_FORMAT_OPTIONS = {
+  time: { hour: "2-digit", minute: "2-digit" },
+  dateTime: { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" },
+  shortDate: { month: "short", day: "numeric" },
+  shortDateWithYear: { month: "short", day: "numeric", year: "numeric" },
+  clock: { hour: "2-digit", minute: "2-digit", hourCycle: "h23" },
+  divider: { weekday: "long", month: "long", day: "numeric" },
+} satisfies Record<string, Intl.DateTimeFormatOptions>;
+const timeFormatters = new Map<keyof typeof TIME_FORMAT_OPTIONS, Intl.DateTimeFormat>();
+function timeFormatter(preset: keyof typeof TIME_FORMAT_OPTIONS) {
+  let formatter = timeFormatters.get(preset);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en", TIME_FORMAT_OPTIONS[preset]);
+    timeFormatters.set(preset, formatter);
+  }
+  return formatter;
+}
+
 export function formatTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  const clock = new Intl.DateTimeFormat("en", {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+  const clock = timeFormatter("time").format(date);
   const now = new Date();
   const yesterday = new Date(now);
   yesterday.setDate(now.getDate() - 1);
   if (isSameCalendarDay(value, now.toISOString())) return `Today ${clock}`;
   if (isSameCalendarDay(value, yesterday.toISOString())) return `Yesterday ${clock}`;
-  return new Intl.DateTimeFormat("en", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+  return timeFormatter("dateTime").format(date);
 }
 
 export function formatRelativeTime(value: string) {
@@ -197,19 +209,11 @@ export function formatRelativeTime(value: string) {
   const weeks = Math.round(days / 7);
   if (weeks < 5) return `${weeks}w ago`;
   const now = new Date();
-  return new Intl.DateTimeFormat("en", {
-    month: "short",
-    day: "numeric",
-    ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
-  }).format(date);
+  return timeFormatter(date.getFullYear() === now.getFullYear() ? "shortDate" : "shortDateWithYear").format(date);
 }
 
 export function formatClockTime(value: string) {
-  return new Intl.DateTimeFormat("en", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(new Date(value));
+  return timeFormatter("clock").format(new Date(value));
 }
 
 export function formatDateDivider(value: string) {
@@ -220,11 +224,7 @@ export function formatDateDivider(value: string) {
   yesterday.setDate(now.getDate() - 1);
   if (isSameCalendarDay(value, now.toISOString())) return "Today";
   if (isSameCalendarDay(value, yesterday.toISOString())) return "Yesterday";
-  return new Intl.DateTimeFormat("en", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  }).format(date);
+  return timeFormatter("divider").format(date);
 }
 
 export function isSameCalendarDay(left: string, right: string) {

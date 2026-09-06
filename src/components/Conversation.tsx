@@ -27,7 +27,7 @@ import { mentionableAgentsForChannel } from "../mentions";
 import { copyText } from "../clipboard";
 import { APP_DISPLAY_NAME } from "../branding";
 import { isCompactFollowupMessage, messageHasVisibleContent, wasEdited } from "../message-grouping";
-import { DESKTOP_MESSAGE_PREVIEW_CHARS, DESKTOP_MESSAGE_PREVIEW_LINES } from "../message-preview";
+import { shouldCollapseMessage as shouldCollapseChannelMessage } from "../message-preview";
 import { messageShareLink, messageToMarkdown } from "../message-share";
 import { appendMessageReferenceToken, messageReferenceToken, parseMessageReferences, removeMessageReferenceToken, withoutMessageReferenceTokens, type MessageReferenceKind, type ResolvedMessageReference } from "../message-references";
 import { Agent, AgentActivity, AgentRun, AgentWorkItem, Artifact, Channel, DraftAttachment, GithubIssueTaskResult, GithubReviewTaskResult, Message, OwnerProfile, TASK_STATUSES, Task, ThreadReplySummary } from "../types";
@@ -212,12 +212,6 @@ function ActiveReplyIndicator({ label }: { label: string }) {
   );
 }
 
-function shouldCollapseChannelMessage(body: string) {
-  const text = body.trim();
-  if (!text) return false;
-  return text.split("\n").length > DESKTOP_MESSAGE_PREVIEW_LINES || text.length > DESKTOP_MESSAGE_PREVIEW_CHARS;
-}
-
 function isInteractiveMessageClick(event: ReactMouseEvent<HTMLElement>) {
   if (event.nativeEvent.composedPath().some((node) => (
     node instanceof Element && node.matches(MESSAGE_CARD_INTERACTIVE_TARGET_SELECTOR)
@@ -302,7 +296,8 @@ export function Conversation({
   const messageListContextEpochRef = useRef(0);
   const channelActionsRef = useRef<HTMLDivElement | null>(null);
   const isDm = channel?.kind === "dm";
-  const dmAgent = isDm ? agents.find((agent) => agent.id === channel?.dm_agent_id) ?? null : null;
+  const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
+  const dmAgent = isDm ? agentsById.get(channel?.dm_agent_id ?? "") ?? null : null;
   const openLinkedAgentDetail = useCallback((handle: string) => {
     const agent = agents.find((candidate) => candidate.handle.toLowerCase() === handle.toLowerCase());
     if (agent) openAgentDetail(agent);
@@ -357,10 +352,12 @@ export function Conversation({
     ].join("|");
   }, [agentActivities, agentRuns, agentWorkItems, channel, rootMessages]);
   const lastRootMessage = rootMessages[rootMessages.length - 1] ?? null;
-  const activeTasks = visibleTasks.filter((task) => task.status !== "done");
-  const reviewTasks = visibleTasks.filter((task) => task.status === "in_review");
-  const unassignedTasks = visibleTasks.filter((task) => task.status !== "done" && !task.assignee_id);
-  const assignedTasks = visibleTasks.filter((task) => task.assignee_id || task.status === "done");
+  const { activeTasks, reviewTasks, unassignedTasks, assignedTasks } = useMemo(() => ({
+    activeTasks: visibleTasks.filter((task) => task.status !== "done"),
+    reviewTasks: visibleTasks.filter((task) => task.status === "in_review"),
+    unassignedTasks: visibleTasks.filter((task) => task.status !== "done" && !task.assignee_id),
+    assignedTasks: visibleTasks.filter((task) => task.assignee_id || task.status === "done"),
+  }), [visibleTasks]);
   const taskAssigneeOptions = channelAgents.length > 0 ? channelAgents : agents;
   const mentionAgents = useMemo(
     () => mentionableAgentsForChannel(channel, agents, channelAgents),
@@ -677,7 +674,7 @@ export function Conversation({
   }
 
   function renderReplyParticipantAvatar(message: Message) {
-    const agent = agentForMessageSender(message, agents);
+    const agent = agentForMessageSender(message, agentsById);
     if (agent) return <AgentAvatar agent={agent} size="sm" title={`@${agent.handle}`} showStatus={false} />;
     const deletedAgent = deletedAgentForMessageSender(message);
     if (deletedAgent) return <AgentAvatar agent={deletedAgent} size="sm" title={`@${deletedAgent.handle} has been deleted`} showStatus={false} />;
@@ -1112,7 +1109,7 @@ export function Conversation({
             const replyParticipants = (replySummary?.participants ?? [])
               .filter((participant) => !participant.sender_agent_id || !activeReplyAgentIds.has(participant.sender_agent_id))
               .slice(0, Math.max(0, 3 - activeReplyProgress.length));
-            const messageAgent = isDm ? null : agentForMessageSender(message, agents);
+            const messageAgent = isDm ? null : agentForMessageSender(message, agentsById);
             const deletedMessageAgent = isDm || messageAgent ? null : deletedAgentForMessageSender(message);
             const isSaved = savedMessageIds.has(message.id);
             const isCompact = isCompactFollowupMessage(message, rootMessages[index - 1]);
@@ -1484,7 +1481,7 @@ export function Conversation({
   );
 
   function renderTaskCard(task: Task) {
-    const assignee = agents.find((agent) => agent.id === task.assignee_id) ?? null;
+    const assignee = agentsById.get(task.assignee_id ?? "") ?? null;
     return (
       <article className={`task-card ${task.assignee_id ? "" : "unassigned"}`} key={task.id}>
         <div className="task-card-main">

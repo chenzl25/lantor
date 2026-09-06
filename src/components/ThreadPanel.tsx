@@ -9,7 +9,7 @@ import { isImeComposing, isInputComposing } from "../input-utils";
 import { mentionableAgentsForChannel } from "../mentions";
 import { copyText } from "../clipboard";
 import { isCompactFollowupMessage, messageHasVisibleContent, wasEdited } from "../message-grouping";
-import { DESKTOP_MESSAGE_PREVIEW_CHARS, DESKTOP_MESSAGE_PREVIEW_LINES } from "../message-preview";
+import { shouldCollapseMessage as shouldCollapseThreadMessage } from "../message-preview";
 import { messageShareLink, messageToMarkdown } from "../message-share";
 import { appendMessageReferenceToken, messageReferenceToken, parseMessageReferences, removeMessageReferenceToken, withoutMessageReferenceTokens, type MessageReferenceKind, type ResolvedMessageReference } from "../message-references";
 import { downloadThreadPanelSvg } from "../thread-svg-export";
@@ -57,12 +57,6 @@ function isNoisyTaskActivity(activity: AgentActivity) {
   if (activity.kind === "dispatch" && (title === "request started" || title === "request queued")) return true;
   if (activity.kind === "run" && (title === "started working" || title === "run started" || title === "run created")) return true;
   return false;
-}
-
-function shouldCollapseThreadMessage(body: string) {
-  const text = body.trim();
-  if (!text) return false;
-  return text.split("\n").length > DESKTOP_MESSAGE_PREVIEW_LINES || text.length > DESKTOP_MESSAGE_PREVIEW_CHARS;
 }
 
 function compactReferencePreview(body: string) {
@@ -227,8 +221,9 @@ export function ThreadPanel({
     if (agent) openAgentDetail(agent);
   }, [agents, openAgentDetail]);
   const isDm = channel?.kind === "dm";
-  const dmAgent = isDm ? agents.find((agent) => agent.id === channel?.dm_agent_id) ?? null : null;
-  const rootAgent = activeRoot ? agentForMessageSender(activeRoot, agents) : null;
+  const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
+  const dmAgent = isDm ? agentsById.get(channel?.dm_agent_id ?? "") ?? null : null;
+  const rootAgent = activeRoot ? agentForMessageSender(activeRoot, agentsById) : null;
   const deletedRootAgent = activeRoot && !rootAgent ? deletedAgentForMessageSender(activeRoot) : null;
   const rootSaved = activeRoot ? savedMessageIds.has(activeRoot.id) : false;
   const activeThreadExpansionKey = activeRoot?.id ?? null;
@@ -791,7 +786,7 @@ export function ThreadPanel({
   }
 
   const activeTaskAssignee = activeTask
-    ? agents.find((agent) => agent.id === activeTask.assignee_id) ?? null
+    ? agentsById.get(activeTask.assignee_id ?? "") ?? null
     : null;
   const taskAssigneeOptions = channelAgents.length > 0 ? channelAgents : agents;
   const mentionAgents = useMemo(
@@ -1260,7 +1255,7 @@ export function ThreadPanel({
               </div>
             )}
             {replies.map((reply, index) => {
-              const replyAgent = agentForMessageSender(reply, agents);
+              const replyAgent = agentForMessageSender(reply, agentsById);
               const deletedReplyAgent = replyAgent ? null : deletedAgentForMessageSender(reply);
               const replySaved = savedMessageIds.has(reply.id);
               const isCompact = isCompactFollowupMessage(reply, replies[index - 1]);
