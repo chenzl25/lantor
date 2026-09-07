@@ -330,10 +330,6 @@ export function ThreadPanel({
     setMessageMenu(null);
   }
 
-  function removeDraftReference(token: string) {
-    setReplyDraft(removeMessageReferenceToken(replyDraft, token));
-  }
-
   function targetMessageIntoView(messageId: string) {
     const element = threadMessageRefs.current.get(messageId);
     if (!element) return;
@@ -1096,7 +1092,6 @@ export function ThreadPanel({
           replyAttachments={replyAttachments}
           setReplyDraft={setReplyDraft}
           resolveReferencePreviewItems={referencePreviewItemsForText}
-          removeDraftReference={removeDraftReference}
           addReplyAttachments={addReplyAttachments}
           removeReplyAttachment={removeReplyAttachment}
           sendReply={sendReply}
@@ -1117,7 +1112,6 @@ type ThreadReplyComposerProps = {
   replyAttachments: DraftAttachment[];
   setReplyDraft: (value: string) => void;
   resolveReferencePreviewItems: (text: string) => MessageReferencePreviewItem[];
-  removeDraftReference: (token: string) => void;
   addReplyAttachments: (files: FileList | File[]) => void;
   removeReplyAttachment: (id: string) => void;
   sendReply: (bodyOverride?: string, attachmentsOverride?: DraftAttachment[]) => void;
@@ -1181,7 +1175,6 @@ function ThreadReplyComposer({
   replyAttachments,
   setReplyDraft,
   resolveReferencePreviewItems,
-  removeDraftReference,
   addReplyAttachments,
   removeReplyAttachment,
   sendReply,
@@ -1353,7 +1346,7 @@ function ThreadReplyComposer({
           if (!item.token) return;
           const nextText = removeMessageReferenceToken(text, item.token);
           updateText(nextText);
-          removeDraftReference(item.token);
+          commitText(nextText);
         }}
       />
       <DraftAttachmentsPreview attachments={replyAttachments} onRemove={removeReplyAttachment} />

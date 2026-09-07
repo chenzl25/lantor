@@ -1,5 +1,6 @@
+import { DialogSurface } from "./DialogSurface";
 import { Check, MessageSquare, X } from "lucide-react";
-import { useEffect, type MouseEvent as ReactMouseEvent } from "react";
+import { type MouseEvent as ReactMouseEvent } from "react";
 import { Channel, Message } from "../types";
 import { firstLines, formatTime } from "../ui-utils";
 
@@ -37,20 +38,10 @@ export function ThreadBrowserModal({
   onToggleFollow,
   onClose,
 }: ThreadBrowserModalProps) {
-  useEffect(() => {
-    if (!open) return;
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
   if (!open) return null;
 
   return (
-    <div className="search-backdrop" onClick={onClose}>
-      <section className="thread-browser-panel" onClick={(event) => event.stopPropagation()}>
+    <DialogSurface label="Threads" backdropClassName="search-backdrop" className="thread-browser-panel" onClose={onClose}>
         <header className="thread-browser-head">
           <div className="search-input-icon"><MessageSquare size={24} /></div>
           <div>
@@ -84,7 +75,12 @@ export function ThreadBrowserModal({
                 }}
                 onContextMenu={(event) => event.stopPropagation()}
               >
-                <div className="thread-browser-content">
+                <div className="thread-browser-content" role="button" tabIndex={0} aria-label={`Open thread by ${thread.sender_name}`}
+                    onKeyDown={(event) => {
+                      if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+                      event.preventDefault();
+                      onOpenThread(thread);
+                    }}>
                   <div className="meta">
                     <span>{channelLabel(channels, thread.channel_id)}</span>
                     <strong>{thread.sender_name}</strong>
@@ -112,7 +108,6 @@ export function ThreadBrowserModal({
             );
           })}
         </div>
-      </section>
-    </div>
+    </DialogSurface>
   );
 }

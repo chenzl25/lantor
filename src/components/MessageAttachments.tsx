@@ -1,3 +1,5 @@
+import { DialogSurface } from "./DialogSurface";
+import { AppToast } from "./AppToast";
 import { type MouseEvent, type PointerEvent, useEffect, useState } from "react";
 import { Download, FileText, Image, X, ZoomIn, ZoomOut } from "lucide-react";
 import { attachmentAssetUrl, downloadAttachment, isTauriRuntime, openExternalUrl } from "../apiClient";
@@ -35,7 +37,7 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error || "Unknown error");
 }
 
-async function openStoredAttachment(event: MouseEvent<HTMLAnchorElement>, attachment: MessageAttachment) {
+async function openStoredAttachment(event: MouseEvent<HTMLAnchorElement>, attachment: MessageAttachment, onNotice: (notice: Omit<DownloadNotice, "id">) => void) {
   if (attachment.local_url || !isTauriRuntime()) return;
 
   event.preventDefault();
@@ -43,6 +45,7 @@ async function openStoredAttachment(event: MouseEvent<HTMLAnchorElement>, attach
     await openExternalUrl(attachment.storage_path);
   } catch (error) {
     console.error("Failed to open attachment", error);
+    onNotice({ kind: "error", message: `Open failed: ${errorMessage(error)}` });
   }
 }
 
@@ -103,9 +106,7 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
     });
   }
 
-  function closeImagePreview(event: MouseEvent<HTMLButtonElement>) {
-    event.preventDefault();
-    event.stopPropagation();
+  function closeImagePreview() {
     setImagePreview(null);
     setImagePreviewZoomed(false);
   }
@@ -123,20 +124,12 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
 
   useEffect(() => {
     if (!imagePreview) return;
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setImagePreview(null);
-        setImagePreviewZoomed(false);
-      }
-    }
     function handleHistoryNavigation() {
       setImagePreview(null);
       setImagePreviewZoomed(false);
     }
-    window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("popstate", handleHistoryNavigation);
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("popstate", handleHistoryNavigation);
     };
   }, [imagePreview]);
@@ -217,7 +210,7 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
                 aria-label={`Open ${attachment.original_name}`}
                 onClick={(event) => {
                   event.stopPropagation();
-                  void openStoredAttachment(event, attachment);
+                  void openStoredAttachment(event, attachment, showDownloadNotice);
                 }}
               >
                 <span className="attachment-icon"><FileText size={18} /></span>
@@ -244,21 +237,8 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
         })}
       </div>
       {imagePreview && (
-        <div
-          className="attachment-lightbox"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Image preview"
-          onPointerDown={isolateAttachmentEvent}
-          onClick={isolateAttachmentEvent}
-        >
-          <button
-            type="button"
-            className="attachment-lightbox-backdrop"
-            aria-label="Close image preview"
-            onPointerDown={isolateAttachmentEvent}
-            onClick={closeImagePreview}
-          />
+        <DialogSurface label="Image preview" backdropClassName="attachment-lightbox"
+          className="attachment-lightbox-panel" onClose={closeImagePreview}>
           <button
             type="button"
             className="attachment-lightbox-close"
@@ -301,14 +281,10 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
               <img src={imagePreview.src} alt={imagePreview.alt} />
             </button>
           </div>
-        </div>
+        </DialogSurface>
       )}
-      {downloadNotice && (
-        <div className={`app-toast attachment-download-toast ${downloadNotice.kind}`} role={downloadNotice.kind === "error" ? "alert" : "status"}>
-          <span>{downloadNotice.message}</span>
-          <button type="button" onClick={() => setDownloadNotice(null)} aria-label="Dismiss download notification">Dismiss</button>
-        </div>
-      )}
+      {downloadNotice && <AppToast message={downloadNotice.message} kind={downloadNotice.kind}
+        className="attachment-download-toast" onDismiss={() => setDownloadNotice(null)} />}
     </>
   );
 }

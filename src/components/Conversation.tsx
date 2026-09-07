@@ -2,7 +2,6 @@ import {
   ArrowLeft,
   ArrowRight,
   BookOpen,
-  CheckCircle2,
   Flag,
   Github,
   Hash,
@@ -30,7 +29,7 @@ import { observeScrollGeometry } from "../scroll-geometry";
 import { isCompactFollowupMessage } from "../message-grouping";
 import { messageShareLink, messageToMarkdown } from "../message-share";
 import { appendMessageReferenceToken, messageReferenceToken, parseMessageReferences, removeMessageReferenceToken, withoutMessageReferenceTokens, type MessageReferenceKind, type ResolvedMessageReference } from "../message-references";
-import { Agent, AgentActivity, AgentRun, AgentWorkItem, Artifact, Channel, DraftAttachment, GithubIssueTaskResult, GithubReviewTaskResult, Message, OwnerProfile, TASK_STATUSES, Task, ThreadReplySummary } from "../types";
+import { Agent, AgentActivity, AgentRun, AgentWorkItem, Artifact, Channel, DraftAttachment, GithubIssueTaskResult, GithubReviewTaskResult, Message, OwnerProfile, Task, ThreadReplySummary } from "../types";
 import { formatTime, isSameCalendarDay, visibleAgentDescription, visibleChannelDescription } from "../ui-utils";
 import { ActivityProgressDock, activeProgressByAgent, indexProgress, type ActiveAgentProgress } from "./ActivityProgressDock";
 import { AgentAvatar, AgentAvatarWithProfile } from "./AgentAvatar";
@@ -41,7 +40,7 @@ import { WikiPanel } from "./WikiPanel";
 import { MessageActionMenu } from "./MessageActionMenu";
 import { MessageRow, type MessageRowActions, type MessageRowAction } from "./MessageRow";
 import { MessageReferencePreview, type MessageReferencePreviewItem } from "./MessageReferencePreview";
-import { TaskAssigneePicker } from "./TaskAssigneePicker";
+import { TaskBoard } from "./TaskBoard";
 import { UnreadBadge } from "./UnreadBadge";
 
 type WritingSuggestionsTextareaAttrs = TextareaHTMLAttributes<HTMLTextAreaElement> & { "writingsuggestions": "false" };
@@ -112,11 +111,6 @@ type MessageMenuState = {
 } | null;
 
 const LOAD_OLDER_SCROLL_TOP_PX = 96;
-
-function taskStatusLabel(status: string) {
-  return status.replace("_", " ");
-}
-
 
 function compactReferencePreview(body: string) {
   const text = withoutMessageReferenceTokens(body).replace(/\s+/g, " ").trim();
@@ -220,12 +214,6 @@ export function Conversation({
   }, [progressIndex, rootMessages, channelId]));
   const { rows, referenceStore } = useMessageRows(rootMessages, messages, channels, agents, ownerProfile, isDm, threadReplySummaries, progressState.byRoot);
   const lastRootMessage = rootMessages[rootMessages.length - 1] ?? null;
-  const { activeTasks, reviewTasks, unassignedTasks, assignedTasks } = useMemo(() => ({
-    activeTasks: visibleTasks.filter((task) => task.status !== "done"),
-    reviewTasks: visibleTasks.filter((task) => task.status === "in_review"),
-    unassignedTasks: visibleTasks.filter((task) => task.status !== "done" && !task.assignee_id),
-    assignedTasks: visibleTasks.filter((task) => task.assignee_id || task.status === "done"),
-  }), [visibleTasks]);
   const taskAssigneeOptions = channelAgents.length > 0 ? channelAgents : agents;
   const mentionAgents = useMemo(
     () => mentionableAgentsForChannel(channel, agents, channelAgents),
@@ -607,7 +595,7 @@ export function Conversation({
   ]);
 
   return (
-    <section className="conversation">
+    <section className={`conversation ${isDm ? "dm-conversation" : ""}`}>
       <header className="topbar">
         <button
           type="button"
@@ -729,7 +717,7 @@ export function Conversation({
         )}
       </header>
 
-      <div className="tabs">
+      {!isDm && <div className="tabs">
         <button className={activeTab === "chat" ? "active" : ""} onClick={() => setActiveTab("chat")}>
           <MessageSquare size={16} /> Chat
         </button>
@@ -756,7 +744,7 @@ export function Conversation({
             </button>
           </>
         )}
-      </div>
+      </div>}
 
       {activeTab === "chat" ? (
         <div className="message-list-shell">
@@ -845,65 +833,9 @@ export function Conversation({
           )}
         </div>
       ) : activeTab === "tasks" ? (
-        <div className="task-board">
-          <section className="task-board-summary" aria-label="Task summary">
-            <div>
-              <strong>{visibleTasks.length}</strong>
-              <span>Total</span>
-            </div>
-            <div>
-              <strong>{activeTasks.length}</strong>
-              <span>Active</span>
-            </div>
-            <div>
-              <strong>{reviewTasks.length}</strong>
-              <span>Review</span>
-            </div>
-            <div>
-              <strong>{unassignedTasks.length}</strong>
-              <span>Unassigned</span>
-            </div>
-          </section>
-          {visibleTasks.length === 0 && (
-            <div className="empty-state">
-              <LayoutList size={34} />
-              <h2>No tasks in this channel</h2>
-              <p>Create tracked work from chat by sending a message in Task mode.</p>
-            </div>
-          )}
-          {visibleTasks.length > 0 && (
-            <div className="task-sections">
-              {unassignedTasks.length > 0 && (
-                <section className="task-queue-section unassigned" aria-label="Unassigned task queue">
-                  <div className="task-queue-heading">
-                    <div>
-                      <span>Queue</span>
-                      <strong>Unassigned</strong>
-                    </div>
-                    <mark>{unassignedTasks.length}</mark>
-                  </div>
-                  <div className="task-list">
-                    {unassignedTasks.map((task) => renderTaskCard(task))}
-                  </div>
-                </section>
-              )}
-              {assignedTasks.length > 0 && (
-                <section className="task-queue-section" aria-label="Assigned tasks">
-                  <div className="task-queue-heading">
-                    <div>
-                      <span>Work</span>
-                      <strong>Assigned</strong>
-                    </div>
-                    <mark>{assignedTasks.length}</mark>
-                  </div>
-                  <div className="task-list">
-                    {assignedTasks.map((task) => renderTaskCard(task))}
-                  </div>
-                </section>
-              )}
-            </div>
-          )}
-        </div>
+        <TaskBoard key={channelId} tasks={visibleTasks} agents={agents} assigneeOptions={taskAssigneeOptions}
+          titleDrafts={taskTitleDrafts} onTitleChange={setTaskTitleDraft} onTitleSave={saveTaskTitle}
+          onAssign={claimTask} onStatusChange={updateTaskStatus} onOpen={openTask} />
       ) : activeTab === "wiki" ? (
         channel ? <WikiPanel channel={channel} /> : null
       ) : channel ? (
@@ -937,55 +869,6 @@ export function Conversation({
       )}
     </section>
   );
-
-  function renderTaskCard(task: Task) {
-    const assignee = agentsById.get(task.assignee_id ?? "") ?? null;
-    return (
-      <article className={`task-card ${task.assignee_id ? "" : "unassigned"}`} key={task.id}>
-        <div className="task-card-main">
-          <div className="task-card-head" onClick={() => openTask(task)}>
-            <span>Task #{task.number}</span>
-            <button type="button" className="task-open-thread" aria-label={`Open task #${task.number} thread`}>
-              <MessageSquare size={14} />
-            </button>
-          </div>
-          <input
-            value={taskTitleDrafts[task.id] ?? task.title}
-            onChange={(event) => setTaskTitleDraft(task, event.target.value)}
-            onBlur={() => saveTaskTitle(task)}
-            onKeyDown={(event) => {
-              if (isImeComposing(event)) return;
-              if (event.key === "Enter") saveTaskTitle(task);
-            }}
-          />
-          <p>Updated {formatTime(task.updated_at)}</p>
-        </div>
-        <div className="task-controls">
-          <TaskAssigneePicker
-            agents={taskAssigneeOptions}
-            assignee={assignee}
-            disabled={task.status === "done"}
-            done={task.status === "done"}
-            onChange={(agentId) => claimTask(task, agentId)}
-            taskNumber={task.number}
-          />
-          <div className="status-row" aria-label={`Task #${task.number} status`}>
-            {TASK_STATUSES.map((status) => (
-              <button
-                type="button"
-                key={status}
-                className={task.status === status ? "active" : ""}
-                data-state={status}
-                onClick={() => updateTaskStatus(task, status)}
-              >
-                {taskStatusLabel(status)}
-              </button>
-            ))}
-          </div>
-        </div>
-      </article>
-    );
-  }
 }
 
 type ConversationComposerProps = {

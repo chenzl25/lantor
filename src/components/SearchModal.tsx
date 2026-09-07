@@ -1,3 +1,4 @@
+import { DialogSurface } from "./DialogSurface";
 import { Activity, ArrowLeft, BookOpen, Bot, CalendarDays, ChevronDown, FileText, Hash, LayoutList, MessageSquare, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import type { Agent, OwnerProfile, SearchResult, SearchScope, SearchTimeRange } from "../types";
@@ -119,8 +120,7 @@ export function SearchModal({
   if (!open) return null;
 
   return (
-    <div className="search-backdrop" onClick={onClose}>
-      <section className="search-panel" onClick={(event) => event.stopPropagation()}>
+    <DialogSurface label="Search" backdropClassName="search-backdrop" className="search-panel" onClose={onClose}>
         <header className="search-panel-head">
           <div className="search-input-icon"><Search size={24} /></div>
           <input
@@ -223,7 +223,6 @@ export function SearchModal({
             );
           })}
         </div>
-      </section>
-    </div>
+    </DialogSurface>
   );
 }

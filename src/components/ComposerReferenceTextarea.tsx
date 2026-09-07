@@ -21,7 +21,7 @@ function renderReferenceText(value: string) {
       // change glyph advance width, otherwise the caret / click hit-testing /
       // selection drift after the token. The shortened chip lives in the
       // separate composer reference-preview strip instead.
-      <span key={`${match.index}:${match[0]}`} className={`composer-reference-token ${kind}`}>
+      <span key={`${match.index}:${match[0]}`} className={`composer-reference-token reference-${kind}`}>
         {match[0]}
       </span>,
     );

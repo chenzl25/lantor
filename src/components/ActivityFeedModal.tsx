@@ -1,3 +1,4 @@
+import { DialogSurface } from "./DialogSurface";
 import { ArrowUp, Bell, Check, Hash, Inbox, MessageSquare, UserRound, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent } from "react";
@@ -217,8 +218,7 @@ export function ActivityFeedModal({
   }
 
   return (
-    <div className="search-backdrop" onClick={onClose}>
-      <section className="activity-feed-panel activity-panel" onClick={(event) => event.stopPropagation()}>
+    <DialogSurface label="Activity" backdropClassName="search-backdrop" className="activity-feed-panel activity-panel" onClose={onClose}>
         <header className="activity-feed-head">
           <div>
             <h2>Activity</h2>
@@ -312,7 +312,12 @@ export function ActivityFeedModal({
                       <span className="search-result-fallback-avatar">{item.actor?.slice(0, 1) || kindLabel(item.kind).slice(0, 1)}</span>
                     )}
                   </span>
-                  <div className="activity-feed-row-main">
+                  <div className="activity-feed-row-main" role="button" tabIndex={0} aria-label={`Open ${item.title}`}
+                    onKeyDown={(event) => {
+                      if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+                      event.preventDefault();
+                      openItem(item);
+                    }}>
                     <div className="activity-feed-row-meta">
                       {item.actor && <strong>{item.actor}</strong>}
                       <span>{item.surface}</span>
@@ -372,7 +377,6 @@ export function ActivityFeedModal({
             </div>
           )}
         </div>
-      </section>
-    </div>
+    </DialogSurface>
   );
 }

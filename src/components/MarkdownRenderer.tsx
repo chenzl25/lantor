@@ -1,3 +1,4 @@
+import { reportUiError } from "../ui-notice";
 import {
   Children,
   ReactNode,
@@ -164,6 +165,7 @@ function handleLinkClick(
 
   void openExternalUrl(href).catch((err) => {
     console.error("Failed to open external link", err);
+    reportUiError("Could not open link", err);
   });
 }
 

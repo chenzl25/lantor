@@ -1,3 +1,6 @@
+import { activeDialog } from "./dialog-layers";
+import { AppToast } from "./components/AppToast";
+import { UI_ERROR_EVENT } from "./ui-notice";
 import {
   Component,
   Profiler,
@@ -789,7 +792,8 @@ function App() {
   const [agentDraft, setAgentDraft] = useState<AgentForm>(() => newAgentDraft());
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [agentEdit, setAgentEdit] = useState<AgentForm>(EMPTY_AGENT_FORM);
-  const [showThread, setShowThread] = useState(() => window.innerWidth > MOBILE_BREAKPOINT);
+  const [threadRequested, setShowThread] = useState(false);
+  const showThread = threadRequested && Boolean(activeThreadId);
   const [showCreateChannelModal, setShowCreateChannelModal] = useState(false);
   const [showChannelSettingsModal, setShowChannelSettingsModal] = useState(false);
   const [showChannelAgentsModal, setShowChannelAgentsModal] = useState(false);
@@ -816,6 +820,11 @@ function App() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null);
   const [appError, setAppError] = useState<string | null>(null);
+  useEffect(() => {
+    const onError = (event: Event) => setAppError((event as CustomEvent<string>).detail);
+    window.addEventListener(UI_ERROR_EVENT, onError);
+    return () => window.removeEventListener(UI_ERROR_EVENT, onError);
+  }, []);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [artifactViewer, setArtifactViewer] = useState<ArtifactViewerState | null>(null);
   const artifactLoadRequestRef = useRef(0);
@@ -2451,7 +2460,7 @@ function App() {
 
       if (event.key === "Escape") {
         const surface = appSurfaceStateRef.current;
-        if (!shouldDismissOnEscape(event) || surface.blockingModalOpen) return;
+        if (!shouldDismissOnEscape(event) || activeDialog() || surface.blockingModalOpen) return;
         if (surface.activeModal === "search") {
           event.preventDefault();
           closeAppModal("search", () => setShowSearchModal(false));
@@ -2473,7 +2482,7 @@ function App() {
           setSelectedAgentId(null);
         } else if (surface.showThread) {
           event.preventDefault();
-          setShowThread(false);
+          closeThreadPanel();
         }
       }
     }
@@ -2796,6 +2805,7 @@ function App() {
       const isFocused = Boolean(
         isMobileViewport()
           && activeElement instanceof HTMLElement
+          && isTextInput(activeElement)
           && activeElement.closest(".composer, .reply-composer"),
       );
       setMobileComposerFocused((current) => current === isFocused ? current : isFocused);
@@ -5332,12 +5342,7 @@ function App() {
         </button>
       </nav>
 
-      {appError && (
-        <div className="app-toast error" role="alert">
-          <span>{appError}</span>
-          <button onClick={() => setAppError(null)} aria-label="Dismiss error">Dismiss</button>
-        </div>
-      )}
+      {appError && <AppToast message={appError} onDismiss={() => setAppError(null)} />}
 
       <CreateChannelModal
         open={showCreateChannelModal}

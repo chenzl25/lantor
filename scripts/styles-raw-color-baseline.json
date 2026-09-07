@@ -129,25 +129,25 @@
       "n": 0
     },
     {
-      "selector": ":root[data-theme=\"dark\"] .message-reference-card.compact.thread",
+      "selector": ":root[data-theme=\"dark\"] .message-reference-card.compact.reference-thread",
       "prop": "background",
       "literal": "rgba(139, 136, 255, 0.18)",
       "n": 0
     },
     {
-      "selector": ":root[data-theme=\"dark\"] .message-reference-card.compact.thread",
+      "selector": ":root[data-theme=\"dark\"] .message-reference-card.compact.reference-thread",
       "prop": "border-color",
       "literal": "rgba(139, 136, 255, 0.42)",
       "n": 0
     },
     {
-      "selector": ":root[data-theme=\"dark\"] .message-reference-card.compact.thread[role=\"button\"]:hover",
+      "selector": ":root[data-theme=\"dark\"] .message-reference-card.compact.reference-thread[role=\"button\"]:hover",
       "prop": "background",
       "literal": "rgba(139, 136, 255, 0.24)",
       "n": 0
     },
     {
-      "selector": ":root[data-theme=\"dark\"] .message-reference-card.compact.thread[role=\"button\"]:hover",
+      "selector": ":root[data-theme=\"dark\"] .message-reference-card.compact.reference-thread[role=\"button\"]:hover",
       "prop": "border-color",
       "literal": "rgba(139, 136, 255, 0.54)",
       "n": 0
@@ -165,43 +165,43 @@
       "n": 0
     },
     {
-      "selector": ":root[data-theme=\"dark\"] .message-reference-card.thread",
+      "selector": ":root[data-theme=\"dark\"] .message-reference-card.reference-thread",
       "prop": "background",
       "literal": "rgba(139, 136, 255, 0.18)",
       "n": 0
     },
     {
-      "selector": ":root[data-theme=\"dark\"] .message-reference-card.thread",
+      "selector": ":root[data-theme=\"dark\"] .message-reference-card.reference-thread",
       "prop": "background",
       "literal": "rgba(139, 136, 255, 0)",
       "n": 0
     },
     {
-      "selector": ":root[data-theme=\"dark\"] .message-reference-card.thread",
+      "selector": ":root[data-theme=\"dark\"] .message-reference-card.reference-thread",
       "prop": "background",
       "literal": "rgba(25, 29, 36, 0.78)",
       "n": 0
     },
     {
-      "selector": ":root[data-theme=\"dark\"] .message-reference-card.thread",
+      "selector": ":root[data-theme=\"dark\"] .message-reference-card.reference-thread",
       "prop": "border-color",
       "literal": "rgba(139, 136, 255, 0.34)",
       "n": 0
     },
     {
-      "selector": ":root[data-theme=\"dark\"] .message-reference-card.thread .message-reference-icon",
+      "selector": ":root[data-theme=\"dark\"] .message-reference-card.reference-thread .message-reference-icon",
       "prop": "background",
       "literal": "rgba(139, 136, 255, 0.14)",
       "n": 0
     },
     {
-      "selector": ":root[data-theme=\"dark\"] .message-reference-card.thread .message-reference-icon",
+      "selector": ":root[data-theme=\"dark\"] .message-reference-card.reference-thread .message-reference-icon",
       "prop": "border-color",
       "literal": "rgba(139, 136, 255, 0.25)",
       "n": 0
     },
     {
-      "selector": ":root[data-theme=\"dark\"] .message-reference-card.thread .message-reference-icon",
+      "selector": ":root[data-theme=\"dark\"] .message-reference-card.reference-thread .message-reference-icon",
       "prop": "color",
       "literal": "#9b99ff",
       "n": 0
@@ -381,42 +381,6 @@
       "n": 0
     },
     {
-      "selector": ".app-toast",
-      "prop": "background",
-      "literal": "rgba(255, 255, 255, 0.96)",
-      "n": 0
-    },
-    {
-      "selector": ".app-toast",
-      "prop": "border",
-      "literal": "rgba(20, 23, 31, 0.12)",
-      "n": 0
-    },
-    {
-      "selector": ".app-toast",
-      "prop": "box-shadow",
-      "literal": "rgba(15, 23, 42, 0.14)",
-      "n": 0
-    },
-    {
-      "selector": ".app-toast",
-      "prop": "color",
-      "literal": "#2c3038",
-      "n": 0
-    },
-    {
-      "selector": ".app-toast button",
-      "prop": "background",
-      "literal": "rgba(20, 23, 31, 0.08)",
-      "n": 0
-    },
-    {
-      "selector": ".app-toast button",
-      "prop": "color",
-      "literal": "#4f5560",
-      "n": 0
-    },
-    {
       "selector": ".artifact-icon",
       "prop": "background",
       "literal": "rgba(16, 185, 129, 0.12)",
@@ -462,12 +426,6 @@
       "selector": ".attachment-icon",
       "prop": "background",
       "literal": "rgba(10, 132, 255, 0.1)",
-      "n": 0
-    },
-    {
-      "selector": ".attachment-lightbox-backdrop",
-      "prop": "background",
-      "literal": "rgba(12, 16, 24, 0.76)",
       "n": 0
     },
     {
@@ -558,24 +516,6 @@
       "selector": ".composer-reference-token",
       "prop": "box-shadow",
       "literal": "rgba(10, 132, 255, 0.24)",
-      "n": 0
-    },
-    {
-      "selector": ".composer-reference-token.thread",
-      "prop": "background",
-      "literal": "rgba(111, 66, 193, 0.12)",
-      "n": 0
-    },
-    {
-      "selector": ".composer-reference-token.thread",
-      "prop": "box-shadow",
-      "literal": "rgba(111, 66, 193, 0.24)",
-      "n": 0
-    },
-    {
-      "selector": ".composer-reference-token.thread",
-      "prop": "color",
-      "literal": "#6f42c1",
       "n": 0
     },
     {
@@ -678,72 +618,6 @@
       "selector": ".empty-state-action:hover",
       "prop": "border-color",
       "literal": "rgba(10, 132, 255, 0.34)",
-      "n": 0
-    },
-    {
-      "selector": ".fatal-actions button",
-      "prop": "color",
-      "literal": "#fff",
-      "n": 0
-    },
-    {
-      "selector": ".fatal-card",
-      "prop": "background",
-      "literal": "rgba(255, 255, 255, 0.92)",
-      "n": 0
-    },
-    {
-      "selector": ".fatal-card",
-      "prop": "border",
-      "literal": "rgba(20, 23, 31, 0.14)",
-      "n": 0
-    },
-    {
-      "selector": ".fatal-card",
-      "prop": "box-shadow",
-      "literal": "rgba(20, 23, 31, 0.16)",
-      "n": 0
-    },
-    {
-      "selector": ".fatal-card p",
-      "prop": "color",
-      "literal": "#4d515b",
-      "n": 0
-    },
-    {
-      "selector": ".fatal-card pre",
-      "prop": "background",
-      "literal": "#101216",
-      "n": 0
-    },
-    {
-      "selector": ".fatal-card pre",
-      "prop": "color",
-      "literal": "#f6f8ff",
-      "n": 0
-    },
-    {
-      "selector": ".fatal-shell",
-      "prop": "background",
-      "literal": "#eef1f5",
-      "n": 0
-    },
-    {
-      "selector": ".fatal-shell",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.16)",
-      "n": 0
-    },
-    {
-      "selector": ".fatal-shell",
-      "prop": "background",
-      "literal": "rgba(255, 111, 174, 0.16)",
-      "n": 0
-    },
-    {
-      "selector": ".fatal-shell",
-      "prop": "color",
-      "literal": "#16181d",
       "n": 0
     },
     {
@@ -1083,25 +957,25 @@
       "n": 0
     },
     {
-      "selector": ".message-reference-card.compact.thread",
+      "selector": ".message-reference-card.compact.reference-thread",
       "prop": "background",
       "literal": "rgba(88, 86, 214, 0.13)",
       "n": 0
     },
     {
-      "selector": ".message-reference-card.compact.thread",
+      "selector": ".message-reference-card.compact.reference-thread",
       "prop": "border-color",
       "literal": "rgba(88, 86, 214, 0.3)",
       "n": 0
     },
     {
-      "selector": ".message-reference-card.compact.thread[role=\"button\"]:hover",
+      "selector": ".message-reference-card.compact.reference-thread[role=\"button\"]:hover",
       "prop": "background",
       "literal": "rgba(88, 86, 214, 0.19)",
       "n": 0
     },
     {
-      "selector": ".message-reference-card.compact.thread[role=\"button\"]:hover",
+      "selector": ".message-reference-card.compact.reference-thread[role=\"button\"]:hover",
       "prop": "border-color",
       "literal": "rgba(88, 86, 214, 0.45)",
       "n": 0
@@ -1131,49 +1005,49 @@
       "n": 0
     },
     {
-      "selector": ".message-reference-card.thread",
+      "selector": ".message-reference-card.reference-thread",
       "prop": "background",
       "literal": "rgba(255, 255, 255, 0.74)",
       "n": 0
     },
     {
-      "selector": ".message-reference-card.thread",
+      "selector": ".message-reference-card.reference-thread",
       "prop": "background",
       "literal": "rgba(88, 86, 214, 0.11)",
       "n": 0
     },
     {
-      "selector": ".message-reference-card.thread",
+      "selector": ".message-reference-card.reference-thread",
       "prop": "background",
       "literal": "rgba(88, 86, 214, 0)",
       "n": 0
     },
     {
-      "selector": ".message-reference-card.thread",
+      "selector": ".message-reference-card.reference-thread",
       "prop": "border-color",
       "literal": "rgba(88, 86, 214, 0.25)",
       "n": 0
     },
     {
-      "selector": ".message-reference-card.thread .message-reference-icon",
+      "selector": ".message-reference-card.reference-thread .message-reference-icon",
       "prop": "background",
       "literal": "rgba(88, 86, 214, 0.11)",
       "n": 0
     },
     {
-      "selector": ".message-reference-card.thread .message-reference-icon",
+      "selector": ".message-reference-card.reference-thread .message-reference-icon",
       "prop": "border-color",
       "literal": "rgba(88, 86, 214, 0.2)",
       "n": 0
     },
     {
-      "selector": ".message-reference-card.thread .message-reference-icon",
+      "selector": ".message-reference-card.reference-thread .message-reference-icon",
       "prop": "color",
       "literal": "#5856d6",
       "n": 0
     },
     {
-      "selector": ".message-reference-card.thread .message-reference-rail",
+      "selector": ".message-reference-card.reference-thread .message-reference-rail",
       "prop": "background",
       "literal": "#5856d6",
       "n": 0
@@ -1251,7 +1125,7 @@
       "n": 0
     },
     {
-      "selector": ".message-reference-hovercard.thread .message-reference-hovercard-head strong",
+      "selector": ".message-reference-hovercard.reference-thread .message-reference-hovercard-head strong",
       "prop": "color",
       "literal": "#6f42c1",
       "n": 0

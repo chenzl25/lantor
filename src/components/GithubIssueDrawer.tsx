@@ -1,3 +1,4 @@
+import { DialogSurface } from "./DialogSurface";
 import {
   Bot,
   CircleDot,
@@ -15,7 +16,6 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 
 import type {
@@ -80,7 +80,6 @@ export function GithubIssueDrawer({
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
-  const backdropDismissArmedRef = useRef(false);
   const lastIssueNumberRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -100,17 +99,6 @@ export function GithubIssueDrawer({
     }
   }, [agents, issue?.number]);
 
-  useEffect(() => {
-    if (!issue) return;
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      if (event.isComposing || event.keyCode === 229 || creating) return;
-      onClose();
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [creating, issue, onClose]);
-
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
     [agents, selectedAgentId],
@@ -123,16 +111,6 @@ export function GithubIssueDrawer({
   const labels = detail?.labels ?? issue.labels;
   const assigneeLogins = detail?.assignee_logins ?? issue.assignee_logins;
   const linked = Boolean(issue.linked_thread_root_id);
-
-  function handleBackdropPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    backdropDismissArmedRef.current = event.target === event.currentTarget;
-  }
-
-  function handleBackdropPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
-    const shouldClose = backdropDismissArmedRef.current && event.target === event.currentTarget;
-    backdropDismissArmedRef.current = false;
-    if (shouldClose && !creating) onClose();
-  }
 
   async function createTask() {
     if (!selectedAgentId || creating) return;
@@ -147,20 +125,8 @@ export function GithubIssueDrawer({
   }
 
   return (
-    <div
-      className="github-issue-drawer-backdrop"
-      onPointerDown={handleBackdropPointerDown}
-      onPointerUp={handleBackdropPointerUp}
-      onPointerCancel={() => {
-        backdropDismissArmedRef.current = false;
-      }}
-    >
-      <aside
-        className="github-issue-drawer"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="github-issue-drawer-title"
-      >
+    <DialogSurface label={title} labelledBy="github-issue-drawer-title" backdropClassName="github-issue-drawer-backdrop"
+      className="github-issue-drawer" onClose={onClose} closeOnBackdrop={!creating} closeOnEscape={!creating}>
         <header className="github-issue-drawer-head">
           <div>
             <span>
@@ -318,7 +284,6 @@ export function GithubIssueDrawer({
             </div>
           )}
         </footer>
-      </aside>
-    </div>
+    </DialogSurface>
   );
 }

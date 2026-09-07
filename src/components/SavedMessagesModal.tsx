@@ -1,3 +1,4 @@
+import { DialogSurface } from "./DialogSurface";
 import { Bookmark, Hash, MessageSquare, X } from "lucide-react";
 import type { Agent, OwnerProfile, SavedMessage } from "../types";
 import { firstLines, formatTime, ownerAsAvatarAgent } from "../ui-utils";
@@ -25,8 +26,7 @@ export function SavedMessagesModal({
   if (!open) return null;
 
   return (
-    <div className="search-backdrop" onClick={onClose}>
-      <section className="activity-feed-panel saved-panel" onClick={(event) => event.stopPropagation()}>
+    <DialogSurface label="Saved messages" backdropClassName="search-backdrop" className="activity-feed-panel saved-panel" onClose={onClose}>
         <header className="activity-feed-head">
           <div>
             <h2>Saved</h2>
@@ -64,7 +64,12 @@ export function SavedMessagesModal({
                     <span className="search-result-fallback-avatar">{item.sender_name.slice(0, 1) || "S"}</span>
                   )}
                 </span>
-                <div className="activity-feed-row-main">
+                <div className="activity-feed-row-main" role="button" tabIndex={0} aria-label={`Open saved message from ${item.sender_name}`}
+                    onKeyDown={(event) => {
+                      if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+                      event.preventDefault();
+                      onOpenItem(item);
+                    }}>
                   <div className="activity-feed-row-meta">
                     <strong>{item.sender_name || "Saved message"}</strong>
                     <span>#{item.channel_name}</span>
@@ -92,7 +97,6 @@ export function SavedMessagesModal({
             );
           })}
         </div>
-      </section>
-    </div>
+    </DialogSurface>
   );
 }

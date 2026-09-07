@@ -124,7 +124,7 @@ function ReferenceHoverLayer() {
   const message = reference.message;
   if (!message) return null;
   return (
-    <div className={`message-reference-hovercard ${reference.kind}`} style={hovercardStyle(rect)} role="tooltip">
+    <div className={`message-reference-hovercard reference-${reference.kind}`} style={hovercardStyle(rect)} role="tooltip">
       <div className="message-reference-hovercard-head">
         <strong>{referenceLabel(reference)}</strong>
         <span>{referenceMeta(reference)}</span>
@@ -147,7 +147,7 @@ export function MessageReferenceCard({
     : `Missing ${reference.kind} ${reference.id.slice(0, 8)}`;
   const className = [
     "message-reference-card",
-    reference.kind,
+    `reference-${reference.kind}`,
     compact ? "compact" : "",
     reference.message ? "" : "missing",
   ].filter(Boolean).join(" ");

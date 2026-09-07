@@ -74,7 +74,7 @@ try {
   // callbacks must still call their latest implementations.
   await row("channel", 2).locator('a[href="/lantor/agent/Hancock"]').click();
   assert.equal(await page.evaluate(() => window.__rowProbe.events.at(-1).generation), 2);
-  await row("channel", 2).locator(".message-reference-card.message").first().click();
+  await row("channel", 2).locator(".message-reference-card.reference-message").first().click();
   assert.deepEqual(await page.evaluate(() => window.__rowProbe.events.at(-1)), { kind: "reference", generation: 2, source: id(2), target: id(3) });
 
   await page.mouse.move(1590, 5);
@@ -130,7 +130,7 @@ try {
   await reset();
   await page.evaluate(() => window.__rowProbe.edit(3, { body: "Updated reference target" }));
   expectRows(await stats(), [`channel:${id(2)}`, `channel:${id(3)}`], "reference targets remain reactive");
-  await row("channel", 2).locator(".message-reference-card.message").first().hover();
+  await row("channel", 2).locator(".message-reference-card.reference-message").first().hover();
   await page.getByText("Updated reference target", { exact: true }).last().waitFor();
   await page.mouse.move(1590, 5);
 

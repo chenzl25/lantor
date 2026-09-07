@@ -13,6 +13,7 @@ type TaskAssigneePickerProps = {
   done?: boolean;
   onChange: (agentId: string) => void;
   taskNumber?: number;
+  compact?: boolean;
 };
 
 export function TaskAssigneePicker({
@@ -24,6 +25,7 @@ export function TaskAssigneePicker({
   done = false,
   onChange,
   taskNumber,
+  compact = false,
 }: TaskAssigneePickerProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -70,13 +72,14 @@ export function TaskAssigneePicker({
   };
 
   return (
-    <div className="task-assignee-picker" ref={rootRef} onPointerDown={stopPickerPointer}>
+    <div className={`task-assignee-picker ${compact ? "compact" : ""}`} ref={rootRef} onPointerDown={stopPickerPointer}>
       <button
         type="button"
         className="task-assignee-trigger"
         aria-label={triggerAriaLabel}
         aria-expanded={open}
         disabled={disabled}
+        title={compact ? `${assigneeLabel}${assignee ? ` (@${assignee.handle})` : ""}` : undefined}
         onClick={() => setOpen((current) => !current)}
       >
         {assignee ? (

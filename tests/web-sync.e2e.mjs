@@ -161,20 +161,21 @@ try {
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await page.locator(".markdown-body").filter({ hasText: "Sent without bootstrap" }).waitFor();
   await page.getByRole("button", { name: "Tasks", exact: true }).click();
-  await page.locator('[aria-label="Task #1 status"] button[data-state="done"]').click();
-  await page.locator('[aria-label="Task #1 status"] button[data-state="done"].active').waitFor();
+  await page.getByRole("combobox", { name: "Task #1 status", exact: true }).selectOption("done");
+  await page.getByRole("button", { name: "Done 1", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('select[aria-label="Task #1 status"]')?.value === "done");
   // Hold an older task read across a newer SSE invalidation. The newer status
   // must survive, and the single-flight queue must drain its follow-up read.
   let releaseTaskPatch;
   holdTaskPatch = new Promise((resolve) => { releaseTaskPatch = resolve; });
-  await page.locator('[aria-label="Task #1 status"] button[data-state="todo"]').click();
+  await page.getByRole("combobox", { name: "Task #1 status", exact: true }).selectOption("todo");
   for (let i = 0; i < 50 && !taskPatchHeld; i++) await page.waitForTimeout(100);
   assert.ok(taskPatchHeld);
-  await page.locator('[aria-label="Task #1 status"] button[data-state="in_progress"]').click();
+  await page.getByRole("combobox", { name: "Task #1 status", exact: true }).selectOption("in_progress");
   await page.waitForTimeout(100);
   holdTaskPatch = null;
   releaseTaskPatch();
-  await page.locator('[aria-label="Task #1 status"] button[data-state="in_progress"].active').waitFor();
+  await page.waitForFunction(() => document.querySelector('select[aria-label="Task #1 status"]')?.value === "in_progress");
   await page.getByRole("button", { name: "Chat", exact: true }).click();
   const reads = count("mark_channel_read");
   for (let i = 0; i < 3; i++) { incoming(`Burst ${i}`); await page.waitForTimeout(50); }

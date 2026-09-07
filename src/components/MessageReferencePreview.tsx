@@ -1,5 +1,5 @@
 import { Copy, Hash, MessageSquare, X } from "lucide-react";
-import { useState } from "react";
+import { useState, type PointerEvent } from "react";
 import { copyText } from "../clipboard";
 import { messageReferenceToken, type MessageReferenceKind } from "../message-references";
 
@@ -31,18 +31,25 @@ export function MessageReferencePreview({
   onOpen,
 }: MessageReferencePreviewProps) {
   const [expanded, setExpanded] = useState(false);
+  function preserveComposerSelection(event: PointerEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    // Keep the textarea/caret and soft keyboard in place while using its
+    // reference toolbar. Blurring on pointerdown can move the button before click.
+    if (variant === "composer") event.preventDefault();
+  }
   if (items.length === 0) return null;
   const shouldCollapse = items.length > collapsedLimit;
   const visibleItems = shouldCollapse && !expanded ? items.slice(0, collapsedLimit) : items;
   const hiddenCount = items.length - visibleItems.length;
 
   return (
-    <div className={`message-reference-stack ${variant}`}>
+    <div className={`message-reference-stack reference-${variant}`}>
       {items.length > 1 && (
         <div className="message-reference-stack-summary">
           <span>{items.length} references attached</span>
           <button
             type="button"
+            onPointerDown={preserveComposerSelection}
             onClick={() => {
               void copyText(items.map((item) => item.token ?? messageReferenceToken(item.kind, item.id)).join("\n"));
             }}
@@ -55,7 +62,7 @@ export function MessageReferencePreview({
       {visibleItems.map((item) => (
         <div
           key={item.key}
-          className={`message-reference-card ${item.kind} ${item.missing ? "missing" : ""}`}
+          className={`message-reference-card reference-${item.kind} ${item.missing ? "missing" : ""}`}
           role={onOpen ? "button" : undefined}
           tabIndex={onOpen ? 0 : undefined}
           onClick={(event) => {
@@ -89,7 +96,7 @@ export function MessageReferencePreview({
             className="message-reference-remove"
             aria-label={`Copy ${item.kind} reference`}
             title={`Copy ${item.kind} reference`}
-            onPointerDown={(event) => event.stopPropagation()}
+            onPointerDown={preserveComposerSelection}
             onClick={(event) => {
               event.stopPropagation();
               void copyText(item.token ?? messageReferenceToken(item.kind, item.id));
@@ -102,7 +109,7 @@ export function MessageReferencePreview({
               type="button"
               className="message-reference-remove"
               aria-label={`Remove ${item.kind} reference`}
-              onPointerDown={(event) => event.stopPropagation()}
+              onPointerDown={preserveComposerSelection}
               onClick={(event) => {
                 event.stopPropagation();
                 onRemove(item);
@@ -117,6 +124,7 @@ export function MessageReferencePreview({
         <button
           type="button"
           className="message-reference-stack-toggle"
+          onPointerDown={preserveComposerSelection}
           onClick={() => setExpanded((current) => !current)}
         >
           {expanded ? "Show fewer references" : `+${hiddenCount} more ${hiddenCount === 1 ? "reference" : "references"}`}
