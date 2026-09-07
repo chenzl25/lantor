@@ -216,10 +216,9 @@ const MIN_BOOT_SPLASH_MS = 600;
 const MAX_ATTACHMENT_MIB = 64;
 const MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_MIB * 1024 * 1024;
 const OLDER_CHANNEL_MESSAGES_PAGE_SIZE = 40;
-// Issue #82: run states that must bypass the ephemeral coalescing buffer
-// so terminal transitions land immediately. "stopped" is included to
-// match runtime supervisor terminology even if it is rare in practice.
-const RUN_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "stopped"]);
+// Terminal transitions bypass the ephemeral buffer (issue #82). Codex/Claude
+// finish as "exited"; startup recovery marks orphaned runs "unknown".
+const RUN_TERMINAL_STATUSES = new Set(["exited", "failed", "cancelled", "unknown", "completed", "stopped"]);
 const DEFAULT_OWNER_DISPLAY_NAME = "Me";
 const DEFAULT_OWNER_AVATAR = "dicebear:dylan:owner";
 const DEFAULT_OWNER_DESCRIPTION = "local owner";

@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { memo, useState } from "react";
+import { ACTIVE_RUN_STATUSES } from "../types";
 import type { Agent, AgentActivity, AgentRun, AgentWorkItem, Message } from "../types";
 import { messageHasVisibleContent, messageRunId } from "../message-grouping";
 import { formatClockTime } from "../ui-utils";
@@ -107,10 +108,7 @@ const HIDDEN_ACTIVITY_TITLES = new Set([
   "Stream event accepted",
 ]);
 const MAX_PROGRESS_HISTORY_ITEMS = 20;
-const ACTIVE_RUN_STATUSES = new Set(["starting", "running", "stopping"]);
 const ACTIVE_WORK_ITEM_STATUSES = new Set(["queued", "running", "cancelling"]);
-const SETTLING_WORK_ITEM_STATUSES = new Set(["done", "failed", "cancelled", "silent"]);
-const COMPLETION_SETTLE_WINDOW_MS = 15_000;
 const ACTIVITY_STATUS_LABELS: Record<string, string> = {
   active: "Active",
   success: "Done",
@@ -275,11 +273,6 @@ function timestamp(value: string) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function recentlyUpdated(value: string) {
-  const updatedAt = timestamp(value);
-  return updatedAt > 0 && Date.now() - updatedAt <= COMPLETION_SETTLE_WINDOW_MS;
-}
-
 function senderHandle(message: Message) {
   return message.sender_name.replace(/^@/, "").trim();
 }
@@ -316,7 +309,9 @@ export function indexProgress(
     activitiesByRun.set(activity.run_id, group);
   }
   const workItemsByChannel = new Map<string, Map<string | null, AgentWorkItem[]>>();
+  const workItemsByRun = new Map<string, AgentWorkItem>();
   for (const item of workItems) {
+    if (item.run_id) workItemsByRun.set(item.run_id, item);
     if (!item.channel_id) continue;
     const channel = workItemsByChannel.get(item.channel_id) ?? new Map<string | null, AgentWorkItem[]>();
     const root = item.thread_root_id ?? null;
@@ -325,9 +320,18 @@ export function indexProgress(
     channel.set(root, group);
     workItemsByChannel.set(item.channel_id, channel);
   }
+  const latestRunsByAgent = new Map<string, AgentRun>();
+  for (const run of runs) {
+    const latest = latestRunsByAgent.get(run.agent_id);
+    if (!latest || timestamp(run.started_at) > timestamp(latest.started_at)) {
+      latestRunsByAgent.set(run.agent_id, run);
+    }
+  }
   return {
     activitiesByRun,
     runsById: new Map(runs.map((run) => [run.id, run])),
+    latestRunsByAgent,
+    workItemsByRun,
     workItemsByChannel,
     agentsById: new Map(agents.map((agent) => [agent.id, agent])),
     agentsByHandle: new Map(agents.map((agent) => [agent.handle, agent])),
@@ -349,7 +353,7 @@ export function activeProgressByAgent(
       && message.delivery_state === "streaming"
       && !messageHasVisibleContent(message));
 
-  const { activitiesByRun, runsById, agentsById, agentsByHandle } = index;
+  const { activitiesByRun, runsById, latestRunsByAgent, workItemsByRun, agentsById, agentsByHandle } = index;
   const surfaceWorkItems = channelId
     ? index.workItemsByChannel.get(channelId)?.get(threadRootId) ?? []
     : [];
@@ -377,14 +381,10 @@ export function activeProgressByAgent(
       const runId = workItem.run_id;
       if (!runId) return;
       const run = runsById.get(runId);
-      const latestActivity = activitiesByRun.get(runId)?.[0] ?? null;
       const activeRun = Boolean(run && ACTIVE_RUN_STATUSES.has(run.status));
       const activeWorkItem = ACTIVE_WORK_ITEM_STATUSES.has(workItem.status);
-      const settlingWorkItem = SETTLING_WORK_ITEM_STATUSES.has(workItem.status)
-        && !isTerminalProgressActivity(latestActivity)
-        && recentlyUpdated(workItem.updated_at);
 
-      if (!activeRun && !activeWorkItem && !settlingWorkItem) return;
+      if (!activeRun && !activeWorkItem) return;
       addCandidate(runId, {
         message: null,
         workItem,
@@ -399,14 +399,30 @@ export function activeProgressByAgent(
 
   const progressByAgent = new Map<string, ActiveAgentProgress>();
   candidatesByRun.forEach((candidate, runId) => {
+    const run = runsById.get(runId);
+    // A crash, restart or failed launch can leave a streaming placeholder and
+    // no final activity. The run's lifecycle is authoritative over both.
+    if (run && !ACTIVE_RUN_STATUSES.has(run.status)) return;
     const runActivities = compactProgressActivities(activitiesByRun.get(runId) ?? []);
     const latestActivity = runActivities[0] ?? null;
     if (isTerminalProgressActivity(latestActivity)) return;
 
+    const workItem = candidate.workItem ?? workItemsByRun.get(runId) ?? null;
+    const agentId = run?.agent_id || workItem?.agent_id
+      || candidate.message?.sender_agent_id || latestActivity?.agent_id;
     const handle = activityAgentHandle(latestActivity)
-      || candidate.workItem?.agent_handle
+      || workItem?.agent_handle
       || (candidate.message ? senderHandle(candidate.message) : "");
-    const key = handle || candidate.message?.sender_name || runId;
+    const agent = (agentId ? agentsById.get(agentId) : undefined) ?? agentsByHandle.get(handle);
+    // Compact history can omit old runs. Do not revive their placeholders
+    // from an idle profile, settled work, or a newer run on another surface.
+    // A live run/work item still wins over a profile read that lags behind it.
+    if (!run && !(workItem && ACTIVE_WORK_ITEM_STATUSES.has(workItem.status))) {
+      if (workItem || (agent && !ACTIVE_RUN_STATUSES.has(agent.status))) return;
+      const latestRun = latestRunsByAgent.get(agentId || agent?.id || "");
+      if (latestRun && timestamp(latestRun.started_at) > timestamp(candidate.message?.created_at ?? "")) return;
+    }
+    const key = agent?.handle || handle || candidate.message?.sender_name || runId;
     const latestAt = Math.max(timestamp(latestActivity?.created_at ?? ""), candidate.latestAt);
     const existing = progressByAgent.get(key);
     const history = [...runActivities, ...(existing?.history ?? [])]
@@ -414,12 +430,12 @@ export function activeProgressByAgent(
     const compactHistory = compactProgressActivities(history).slice(0, MAX_PROGRESS_HISTORY_ITEMS);
     progressByAgent.set(key, {
       key,
-      agent: existing?.agent ?? agentsByHandle.get(handle) ?? {
+      agent: existing?.agent ?? agent ?? {
         handle: handle || "agent",
         display_name: handle ? `@${handle}` : "Agent",
         status: "running",
       },
-      workItem: candidate.workItem ?? existing?.workItem ?? null,
+      workItem: workItem ?? existing?.workItem ?? null,
       queuedItems: existing?.queuedItems ?? [],
       state: existing?.state === "working" || candidate.state === "working" ? "working" : "queued",
       latestActivity: existing && existing.latestAt > latestAt ? existing.latestActivity : latestActivity,
