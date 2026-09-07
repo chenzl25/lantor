@@ -181,8 +181,9 @@ mod tests {
     async fn multipart_send_message_preserves_binary_attachments() {
         let boundary = "lantor-attachment-boundary";
         let channel_id = Uuid::new_v4();
+        let message_id = Uuid::new_v4();
         let metadata = format!(
-            r#"{{"channelId":"{channel_id}","threadRootId":null,"body":"hello","asTask":false}}"#
+            r#"{{"messageId":"{message_id}","channelId":"{channel_id}","threadRootId":null,"body":"hello","asTask":false}}"#
         );
         let mut body = format!(
             "--{boundary}\r\n\
@@ -209,6 +210,7 @@ mod tests {
         let request = parse_multipart_in(multipart, &root).await.unwrap();
 
         assert_eq!(request.channel_id, channel_id);
+        assert_eq!(request.message_id, Some(message_id));
         assert_eq!(request.thread_root_id, None);
         assert_eq!(request.body, "hello");
         assert!(!request.as_task);

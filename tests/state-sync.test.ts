@@ -193,6 +193,29 @@ test("a delta applied after a request started wins over its stale streaming snap
   assert.equal(result.data.messages[0]?.delivery_state, "streaming");
 });
 
+test("sent roots and replies keep one identity across either event/response order and snapshot recovery", () => {
+  for (const threadRootId of [null, "thread-root"]) {
+    const room = channel("room");
+    const pending = message("client-message-id", room.id, { seq: 0, thread_root_id: threadRootId });
+    const persisted = { ...pending, seq: 12 };
+    for (const eventFirst of [true, false]) {
+      let current = bootstrap({ channels: [room] });
+      current = applyOptimisticMutation(current, { type: "message_add", message: pending })!;
+      const event = () => applyBackendEvent(current, { type: "message_upsert", message: persisted }).data!;
+      const response = () => applyOptimisticMutation(current, {
+        type: "message_replace", optimisticMessageId: pending.id, persistedMessage: persisted,
+      })!;
+      current = eventFirst ? event() : response();
+      assert.deepEqual(current.messages, [persisted]);
+      current = applySnapshot(current, bootstrap({ channels: [room], messages: [persisted] }),
+        snapshotOptions({ messages: new Map([[pending.id, pending]]) })).data;
+      assert.deepEqual(current.messages, [persisted]);
+      current = eventFirst ? response() : event();
+      assert.deepEqual(current.messages, [persisted]);
+    }
+  }
+});
+
 test("an optimistic channel tombstone prevents stale snapshot resurrection until acknowledged", () => {
   const doomed = channel("doomed");
   const doomedMessage = message("message-1", doomed.id);

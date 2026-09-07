@@ -13,6 +13,7 @@ use crate::{
 
 #[tauri::command]
 pub(crate) async fn send_message(
+    message_id: Option<Uuid>,
     channel_id: Uuid,
     thread_root_id: Option<Uuid>,
     body: String,
@@ -23,6 +24,7 @@ pub(crate) async fn send_message(
     application::send_message(
         &state.pool,
         SendMessageRequest {
+            message_id,
             channel_id,
             thread_root_id,
             body,

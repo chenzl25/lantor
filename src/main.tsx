@@ -539,7 +539,13 @@ function clientId() {
   if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
     return globalThis.crypto.randomUUID();
   }
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  // randomUUID requires a secure context; LAN HTTP clients still have
+  // getRandomValues. Message identities must also be valid UUIDs there.
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function draftAttachmentFromFile(file: File): DraftAttachment {
@@ -1174,6 +1180,7 @@ function App() {
       perf.phases.parseMs = measurement.parseMs;
     }
     const applyStartedAt = performance.now();
+    for (const message of payload.messages) acknowledgeOptimisticMessage(message);
     const hydration = {
       snapshotInvalidated: refreshInvalidation !== refreshInvalidationRef.current,
       loadedHistoricalMessageIds: new Set([
@@ -1404,6 +1411,7 @@ function App() {
     void apiInvoke("load_thread_messages", { threadRootId: threadId }).then((messages) => {
       if (cancelled) return;
       for (const message of messages) {
+        acknowledgeOptimisticMessage(message);
         knownMessageIdsRef.current?.add(message.id);
         loadedHistoricalMessageIdsRef.current.add(message.id);
       }
@@ -1482,6 +1490,7 @@ function App() {
         setExhaustedOlderChannelIds((current) => new Set(current).add(channelId));
       }
       for (const message of page.messages) {
+        acknowledgeOptimisticMessage(message);
         hydratedMessageIdsRef.current.add(message.id);
         hydratedMessageBodiesRef.current.set(message.id, message.body);
         knownMessageIdsRef.current?.add(message.id);
@@ -1537,6 +1546,7 @@ function App() {
       }
       paginatedChannelIdsRef.current.add(channelId);
       for (const message of page.messages) {
+        acknowledgeOptimisticMessage(message);
         loadedHistoricalMessageIdsRef.current.add(message.id);
         hydratedMessageIdsRef.current.add(message.id);
         hydratedMessageBodiesRef.current.set(message.id, message.body);
@@ -1590,6 +1600,7 @@ function App() {
   }
 
   function applyMessageUpsert(message: Message, preserveBufferedDeltas = false) {
+    acknowledgeOptimisticMessage(message);
     const perf = shouldEnablePerfTelemetry() ? createPerfDraft("message-upsert") : null;
     if (!preserveBufferedDeltas) {
       messageDeltaBufferRef.current.delete(message.id);
@@ -1958,6 +1969,11 @@ function App() {
           continue;
         }
         if (event.type === "agent_run_upsert") {
+          // Run patches do not contain the agent's current status. Re-read it
+          // for lifecycle changes, including completion and failure. A newer
+          // run may already be queued, so never infer idle from an old run.
+          // Usage-only updates stay on the inexpensive buffered path.
+          if (event.reason !== "run_usage") requestUiState(["agents"]);
           // Run terminal transitions MUST land immediately so the UI shows
           // completion / failure without waiting for the buffer. Drop any
           // stale pending ephemeral for the same run id first to avoid the
@@ -4164,7 +4180,9 @@ function App() {
     asTask: boolean,
     attachments: DraftAttachment[] = [],
   ) {
-    const id = `local-${clientId()}`;
+    // Use the same identity for the optimistic row, committed event and HTTP
+    // response. Either transport can acknowledge the send first.
+    const id = clientId();
     const createdAt = new Date().toISOString();
     const optimisticMessage: Message = {
       id,
@@ -4198,8 +4216,16 @@ function App() {
     return id;
   }
 
+  function acknowledgeOptimisticMessage(message: Message) {
+    if (message.seq > 0 && optimisticMessagesRef.current.delete(message.id)) {
+      releaseOptimisticAttachmentUrls(message.id);
+    }
+  }
+
   function removeOptimisticMessage(messageId: string) {
-    optimisticMessagesRef.current.delete(messageId);
+    // A committed event (or snapshot) may have acknowledged this send even if
+    // the HTTP response failed. Keep the message and the user's newer draft.
+    if (!optimisticMessagesRef.current.delete(messageId)) return false;
     releaseOptimisticAttachmentUrls(messageId);
     knownMessageIdsRef.current?.delete(messageId);
     invalidatePendingRefreshResult();
@@ -4209,6 +4235,7 @@ function App() {
         messageId,
       }),
     );
+    return true;
   }
 
   function settleOptimisticMessage(messageId: string, persistedMessage: Message) {
@@ -4482,6 +4509,7 @@ function App() {
     try {
       const persistedMessage = await sendMessage(
         {
+          messageId: optimisticId,
           channelId: channel.id,
           threadRootId: null,
           body,
@@ -4491,7 +4519,7 @@ function App() {
       );
       settleOptimisticMessage(optimisticId, persistedMessage);
     } catch (err) {
-      removeOptimisticMessage(optimisticId);
+      if (!removeOptimisticMessage(optimisticId)) return;
       updateRootComposerDraft(channel.id, () => ({ text: body, attachments }));
       const message = errorMessage(err, "Failed to send message");
       setAppError(message);
@@ -4524,6 +4552,7 @@ function App() {
     try {
       const persistedMessage = await sendMessage(
         {
+          messageId: optimisticId,
           channelId: channel.id,
           threadRootId: activeRoot.id,
           body,
@@ -4533,7 +4562,7 @@ function App() {
       );
       settleOptimisticMessage(optimisticId, persistedMessage);
     } catch (err) {
-      removeOptimisticMessage(optimisticId);
+      if (!removeOptimisticMessage(optimisticId)) return;
       updateReplyComposerDraft(activeRoot.id, () => ({ text: body, attachments }));
       const message = errorMessage(err, "Failed to send reply");
       setAppError(message);

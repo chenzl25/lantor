@@ -124,6 +124,7 @@ async fn owner_task_without_mentions_auto_assigns_single_channel_agent() {
 
         send_owner_message_in_pool(
             &pool,
+            None,
             channel_id,
             None,
             "Implement the compact task flow",
@@ -181,6 +182,7 @@ async fn owner_task_without_mentions_stays_unassigned_with_multiple_channel_agen
 
         send_owner_message_in_pool(
             &pool,
+            None,
             channel_id,
             None,
             "Implement the unassigned queue",

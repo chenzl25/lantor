@@ -1017,6 +1017,7 @@ pub(crate) async fn insert_agent_message_with_options(
 
 pub(crate) async fn send_owner_message_in_pool(
     pool: &SqlitePool,
+    message_id: Option<Uuid>,
     channel_id: Uuid,
     thread_root_id: Option<Uuid>,
     body: &str,
@@ -1052,11 +1053,12 @@ pub(crate) async fn send_owner_message_in_pool(
 
     let msg_id: Uuid = sqlx::query_scalar(
         r#"
-        insert into messages (channel_id, thread_root_id, sender_name, sender_role, body, is_task)
-        values ($1, $2, $3, 'owner', $4, $5)
+        insert into messages (id, channel_id, thread_root_id, sender_name, sender_role, body, is_task)
+        values ($1, $2, $3, $4, 'owner', $5, $6)
         returning id
         "#,
     )
+    .bind(message_id.unwrap_or_else(Uuid::new_v4))
     .bind(channel_id)
     .bind(thread_root_id)
     .bind(owner_display_name)
