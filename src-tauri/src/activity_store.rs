@@ -293,6 +293,20 @@ fn parse_json_value(raw: String) -> Value {
     serde_json::from_str(&raw).unwrap_or_else(|_| json!({}))
 }
 
+pub(crate) async fn load_agent_detail_activities(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+) -> CommandResult<Vec<AgentActivity>> {
+    load_agent_activities_with_limit(pool, DEFAULT_AGENT_ACTIVITY_LIMIT_PER_AGENT, Some(agent_id))
+        .await
+}
+pub(crate) async fn load_agent_detail_work_items(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+) -> CommandResult<Vec<AgentWorkItem>> {
+    load_agent_work_items_with_context(pool, true, Some(agent_id)).await
+}
+
 #[cfg(test)]
 mod tests {
     use sqlx::SqlitePool;
@@ -420,18 +434,4 @@ mod tests {
         drop_test_schema(pool, schema).await;
         assert!(result.is_ok(), "{:?}", result.err());
     }
-}
-
-pub(crate) async fn load_agent_detail_activities(
-    pool: &SqlitePool,
-    agent_id: Uuid,
-) -> CommandResult<Vec<AgentActivity>> {
-    load_agent_activities_with_limit(pool, DEFAULT_AGENT_ACTIVITY_LIMIT_PER_AGENT, Some(agent_id))
-        .await
-}
-pub(crate) async fn load_agent_detail_work_items(
-    pool: &SqlitePool,
-    agent_id: Uuid,
-) -> CommandResult<Vec<AgentWorkItem>> {
-    load_agent_work_items_with_context(pool, true, Some(agent_id)).await
 }
