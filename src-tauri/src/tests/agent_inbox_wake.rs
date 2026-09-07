@@ -284,6 +284,7 @@ async fn inbox_wake_context_exposes_root_message_attachments() {
 
         let message = send_owner_message_in_pool(
             &pool,
+            None,
             channel_id,
             None,
             "@file-agent please inspect the attached plan",
@@ -339,6 +340,7 @@ async fn inbox_wake_creates_work_items_without_serializing_unread_items() {
 
         send_owner_message_in_pool(
             &pool,
+            None,
             dm_channel_id,
             None,
             "first inbox item",
@@ -348,6 +350,7 @@ async fn inbox_wake_creates_work_items_without_serializing_unread_items() {
         .await?;
         send_owner_message_in_pool(
             &pool,
+            None,
             dm_channel_id,
             None,
             "second inbox item",
@@ -468,6 +471,7 @@ async fn inbox_wake_batches_unread_items_for_same_thread() {
 
         send_owner_message_in_pool(
             &pool,
+            None,
             channel_id,
             Some(root_id),
             "first pending follow-up",
@@ -477,6 +481,7 @@ async fn inbox_wake_batches_unread_items_for_same_thread() {
         .await?;
         send_owner_message_in_pool(
             &pool,
+            None,
             channel_id,
             Some(root_id),
             "second pending follow-up",

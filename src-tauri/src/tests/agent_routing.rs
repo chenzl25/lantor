@@ -53,7 +53,7 @@ async fn dm_rejects_tasks_and_auto_dispatches_owner_messages() {
                 .map_err(|err| err.to_string())?;
 
         let owner_task_err =
-            send_owner_message_in_pool(&pool, dm_channel_id, None, "task body", true, vec![])
+            send_owner_message_in_pool(&pool, None, dm_channel_id, None, "task body", true, vec![])
                 .await
                 .unwrap_err();
         assert!(owner_task_err.contains("direct messages do not support tasks"));
@@ -66,6 +66,7 @@ async fn dm_rejects_tasks_and_auto_dispatches_owner_messages() {
 
         send_owner_message_in_pool(
             &pool,
+            None,
             dm_channel_id,
             None,
             "please inspect this",
@@ -147,6 +148,7 @@ async fn owner_channel_root_message_without_mentions_delivers_to_member_agent_in
 
         send_owner_message_in_pool(
             &pool,
+            None,
             channel_id,
             None,
             "Lantor README needs a quick review",
@@ -228,6 +230,7 @@ async fn owner_channel_root_message_does_not_dispatch_error_agent() {
 
         send_owner_message_in_pool(
             &pool,
+            None,
             channel_id,
             None,
             "This should not wake a quota-limited agent",
@@ -273,6 +276,7 @@ async fn owner_mention_does_not_dispatch_error_agent() {
 
         send_owner_message_in_pool(
             &pool,
+            None,
             channel_id,
             None,
             "@quota-mentioned please check this",
@@ -319,6 +323,7 @@ async fn owner_mention_resolves_agent_handle_case_insensitively() {
 
         send_owner_message_in_pool(
             &pool,
+            None,
             channel_id,
             None,
             "@mixedcaseagent please inspect this",
@@ -390,6 +395,7 @@ async fn owner_thread_followup_dispatches_to_thread_agents_without_mentions() {
 
         send_owner_message_in_pool(
             &pool,
+            None,
             channel_id,
             Some(root_id),
             "我补充一下：这个复现只在 thread 里出现",
@@ -499,6 +505,7 @@ async fn owner_thread_followup_with_explicit_mention_does_not_fan_out_to_thread_
 
         send_owner_message_in_pool(
             &pool,
+            None,
             channel_id,
             Some(root_id),
             "@mentioned-agent 这个后续只给被点名的 agent",
@@ -587,6 +594,7 @@ async fn owner_thread_followup_with_unknown_mention_does_not_fall_back_to_thread
 
         send_owner_message_in_pool(
             &pool,
+            None,
             channel_id,
             Some(root_id),
             "@missing-agent 这个后续不应该 fallback 给 thread 参与者",
@@ -660,6 +668,7 @@ async fn owner_thread_followup_uses_agent_thread_subscription_after_work_done() 
 
         send_owner_message_in_pool(
             &pool,
+            None,
             channel_id,
             Some(root_id),
             "继续补充，不需要重新 @ agent",
@@ -705,6 +714,7 @@ async fn mentions_create_agent_requests_but_only_task_mode_creates_global_tasks(
 
         send_owner_message_in_pool(
             &pool,
+            None,
             channel_id,
             None,
             "@task-agent please look at this",
@@ -728,6 +738,7 @@ async fn mentions_create_agent_requests_but_only_task_mode_creates_global_tasks(
 
         send_owner_message_in_pool(
             &pool,
+            None,
             channel_id,
             None,
             "@task-agent implement the tracked feature",

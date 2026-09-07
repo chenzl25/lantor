@@ -13,6 +13,7 @@
     "test:attachments": "cargo test --manifest-path src-tauri/Cargo.toml web::attachment_tests::browser_cache_range_and_upload_memory -- --ignored --nocapture",
     "test:sse-push": "cargo test --manifest-path src-tauri/Cargo.toml web::sse_push_tests::browser_cross_process_delivery_and_query_scaling -- --ignored --nocapture",
     "test:web-sync": "node tests/web-sync.e2e.mjs",
+    "test:message-state-races": "node tests/message-state-races.e2e.mjs",
     "test:web-math": "node tests/web-math.e2e.mjs",
     "test:message-rows": "node tests/message-rows.e2e.mjs",
     "test:avatar-cache": "node tests/avatar-cache.e2e.mjs",

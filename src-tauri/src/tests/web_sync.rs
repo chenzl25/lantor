@@ -8,6 +8,7 @@ use axum::{
 use serde_json::{json, Value};
 use std::{path::PathBuf, sync::Arc};
 use tower::ServiceExt;
+use uuid::Uuid;
 
 async fn post(app: &Router, command: &str, args: Value) -> Value {
     let response = app
@@ -115,5 +116,87 @@ async fn web_mutations_replay_entities_and_read_only_affected_state() {
             .await
             .is_err()
     );
+    drop_test_schema(pool, path).await;
+}
+
+#[tokio::test]
+async fn client_message_ids_match_responses_replay_and_thread_history() {
+    let (pool, path) = test_pool().await.expect("SQLite fixture");
+    let channel = insert_test_channel(&pool, "message-id-test").await.unwrap();
+    let app = web_router(
+        Arc::new(WebState {
+            pool: pool.clone(),
+            db_url: "synthetic".into(),
+        }),
+        PathBuf::from("/nonexistent"),
+    );
+    let root_id = Uuid::new_v4();
+    let root = post(
+        &app,
+        "send_message",
+        json!({
+            "messageId": root_id, "channelId": channel, "body": "Same text", "asTask": true
+        }),
+    )
+    .await;
+    assert_eq!(root["id"], root_id.to_string());
+    assert!(root["seq"].as_i64().unwrap() > 0);
+    let reply_id = Uuid::new_v4();
+    let reply = post(
+        &app,
+        "send_message",
+        json!({
+            "messageId": reply_id, "channelId": channel, "threadRootId": root_id,
+            "body": "Same text", "asTask": false
+        }),
+    )
+    .await;
+    assert_eq!(reply["id"], reply_id.to_string());
+    assert_eq!(reply["thread_root_id"], root["id"]);
+    assert!(reply["seq"].as_i64().unwrap() > root["seq"].as_i64().unwrap());
+    let history = post(
+        &app,
+        "load_thread_messages",
+        json!({"threadRootId": root_id}),
+    )
+    .await;
+    assert_eq!(history.as_array().unwrap().len(), 2);
+    let replay = post(&app, "replay_ui_events", json!({"cursor": 0})).await;
+    let messages: Vec<Value> = replay["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|delivery| serde_json::from_str::<Value>(delivery["event"].as_str().unwrap()).unwrap())
+        .filter(|event| event["type"] == "message_upsert")
+        .map(|event| event["message"].clone())
+        .collect();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["id"], root["id"]);
+    assert_eq!(messages[1]["id"], reply["id"]);
+
+    // An identity collision cannot overwrite a message, enqueue another event,
+    // or create a second task. Older callers without an id are covered above.
+    let collision = crate::message_store::send_owner_message_in_pool(
+        &pool,
+        Some(root_id),
+        channel,
+        None,
+        "Overwrite attempt",
+        true,
+        vec![],
+    )
+    .await;
+    assert!(collision.is_err());
+    let unchanged = post(&app, "load_message", json!({"messageId": root_id})).await;
+    assert_eq!(unchanged["body"], "Same text");
+    let tasks = post(&app, "load_ui_state", json!({"scopes": ["tasks"]})).await;
+    assert_eq!(tasks["tasks"].as_array().unwrap().len(), 1);
+    let replay = post(
+        &app,
+        "replay_ui_events",
+        json!({"cursor": replay["cursor"]}),
+    )
+    .await;
+    assert_eq!(replay["events"], json!([]));
     drop_test_schema(pool, path).await;
 }

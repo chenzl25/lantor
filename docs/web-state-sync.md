@@ -1,6 +1,8 @@
 # Web state synchronization
 
-`bootstrap` initializes the UI and captures the durable `ui_events.id` cursor before loading state. Normal writes no longer wait for another bootstrap. Message responses replace optimistic rows by id; committed entity events update the other clients. Refresh events invalidate only the collections listed in `src/ui-state-sync.ts`, read through `load_ui_state`. That endpoint does not read message history, run logs, or artifact content.
+`bootstrap` initializes the UI and captures the durable `ui_events.id` cursor before loading state. Normal writes no longer wait for another bootstrap. Owner sends supply an optional client-generated `messageId` UUID, shared by the optimistic row, persisted message, committed event and response. SSE/Tauri delivery may precede the send response; either path reconciles the same row. A committed event or snapshot also acknowledges the send if its HTTP response later fails. Older callers that omit `messageId` still receive a server-generated UUID. Refresh events invalidate only the collections listed in `src/ui-state-sync.ts`, read through `load_ui_state`. That endpoint does not read message history, run logs, or artifact content.
+
+Run lifecycle events invalidate the `agents` collection as well as updating their run row. The server's current agent status is authoritative: an old run finishing does not imply idleness if a successor is already queued or running. Profile reads use the same versioned, coalesced scope queue, so a response started before completion cannot restore a stale busy status. Usage-only run events remain buffered and do not trigger profile reads.
 
 Web SSE and Tauri share the committed event hub described in [ui-event-delivery.md](ui-event-delivery.md). It replaces per-connection polling with one cross-process metadata observer and broadcast delivery.
 
@@ -15,5 +17,6 @@ When adding a mutation, publish its affected entity or a scoped invalidation in 
 Validation:
 
 - `npm test`: state patches, optimistic preservation, cursor deduplication, backoff and disposal.
+- `npm run test:message-state-races`: hold send responses after committed SSE delivery, check roots/replies and identical real sends, lose an acknowledged response, and race lifecycle changes against in-flight profile reads. Set `LANTOR_RACE_ENGINE=webkit` for WebKit coverage.
 - `npm run build` followed by `npm run test:web-sync`: production React UI and real EventSource against an isolated synthetic HTTP service; send/read/task operations, stale collection response, simulated hidden lifecycle for 65 seconds, real SSE outage for 10 seconds, and unchanged foreground checks.
 - `cargo test --manifest-path src-tauri/Cargo.toml`: real SQLite and Axum mutation, scoped read and replay contracts, alongside existing backend coverage.

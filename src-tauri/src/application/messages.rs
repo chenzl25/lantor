@@ -20,6 +20,7 @@ use crate::{
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SendMessageRequest {
+    pub(crate) message_id: Option<Uuid>,
     pub(crate) channel_id: Uuid,
     pub(crate) thread_root_id: Option<Uuid>,
     pub(crate) body: String,
@@ -81,6 +82,7 @@ pub(crate) async fn send_message(
 ) -> CommandResult<Message> {
     send_owner_message_in_pool(
         pool,
+        request.message_id,
         request.channel_id,
         request.thread_root_id,
         &request.body,

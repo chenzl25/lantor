@@ -470,6 +470,7 @@ async fn agent_context_inbox_tools_list_read_and_archive_items() {
             .map_err(|err| err.to_string())?;
         let message = send_owner_message_in_pool(
             &pool,
+            None,
             dm_channel_id,
             None,
             "please inspect inbox tools",

@@ -82,6 +82,7 @@ export type ApiContract = {
   };
   send_message: {
     args: {
+      messageId?: string | null;
       channelId: string;
       threadRootId?: string | null;
       body: string;
