@@ -2,6 +2,8 @@ import { activeDialog } from "./dialog-layers";
 import { AppToast } from "./components/AppToast";
 import { UI_ERROR_EVENT } from "./ui-notice";
 import { reportClientCrash, watchWindowErrors } from "./crash-report";
+import type { FailedMessageDraft } from "./components/FailedMessageDrafts";
+import { WorkItemActionsProvider } from "./components/WorkItemActions";
 import {
   Component,
   Profiler,
@@ -781,6 +783,8 @@ function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("chat");
   const [rootComposerDrafts, setRootComposerDrafts] = useState<Record<string, ComposerDraftState>>({});
   const [replyComposerDrafts, setReplyComposerDrafts] = useState<Record<string, ComposerDraftState>>({});
+  const [failedRootDrafts, setFailedRootDrafts] = useState<Record<string, FailedMessageDraft[]>>({});
+  const [failedReplyDrafts, setFailedReplyDrafts] = useState<Record<string, FailedMessageDraft[]>>({});
   const [taskTitleDrafts, setTaskTitleDrafts] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const [searchScope, setSearchScope] = useState<SearchScope>("all");
@@ -4548,8 +4552,10 @@ function App() {
       settleOptimisticMessage(optimisticId, persistedMessage);
     } catch (err) {
       if (!removeOptimisticMessage(optimisticId)) return;
-      updateRootComposerDraft(channel.id, () => ({ text: body, attachments }));
       const message = errorMessage(err, "Failed to send message");
+      setFailedRootDrafts((current) => ({ ...current, [channel.id]: [...(current[channel.id] ?? []), {
+        id: optimisticId, text: rawBody, attachments, error: message, asTask: sendAsTask,
+      }] }));
       setAppError(message);
       console.error(err);
     }
@@ -4591,8 +4597,10 @@ function App() {
       settleOptimisticMessage(optimisticId, persistedMessage);
     } catch (err) {
       if (!removeOptimisticMessage(optimisticId)) return;
-      updateReplyComposerDraft(activeRoot.id, () => ({ text: body, attachments }));
       const message = errorMessage(err, "Failed to send reply");
+      setFailedReplyDrafts((current) => ({ ...current, [activeRoot.id]: [...(current[activeRoot.id] ?? []), {
+        id: optimisticId, text: rawBody, attachments, error: message, asTask: false,
+      }] }));
       setAppError(message);
       console.error(err);
     }
@@ -5091,6 +5099,7 @@ function App() {
   }
 
   return (
+    <WorkItemActionsProvider onChanged={() => requestUiState(["agent_work_items", "agent_runs", "agents", "agent_activities"])}>
     <main
       className={`app theme-liquid ${selectedAgent || showThread ? "" : "thread-hidden"} ${selectedAgent || activeThreadId ? "right-panel-active" : ""} ${showMobileSidebar ? "mobile-sidebar-open" : ""} ${mobileDragSurface === "sidebar" ? "mobile-sidebar-dragging" : ""} ${mobileDragSurface === "panel" ? "mobile-panel-dragging" : ""} ${mobileComposerFocused ? "mobile-composer-focused" : ""}`}
       style={{
@@ -5248,6 +5257,12 @@ function App() {
         threadReplySummaries={threadReplySummaries}
         visibleTasks={visibleTasks}
         draft={draft}
+        failedDrafts={failedRootDrafts[activeChannelId]}
+        onDiscardFailedDraft={(id) => setFailedRootDrafts((current) => ({ ...current, [activeChannelId]: (current[activeChannelId] ?? []).filter((item) => item.id !== id) }))}
+        onRecoverFailedDraft={(failed) => {
+          updateRootComposerDraft(activeChannelId, (current) => ({ ...current, attachments: [...current.attachments, ...failed.attachments] }));
+          setFailedRootDrafts((current) => ({ ...current, [activeChannelId]: (current[activeChannelId] ?? []).filter((item) => item.id !== failed.id) }));
+        }}
         draftAttachments={draftAttachments}
         taskTitleDrafts={taskTitleDrafts}
         setActiveTab={setActiveTab}
@@ -5332,6 +5347,15 @@ function App() {
           unreadCount={activeThreadId ? threadUnreadCounts[activeThreadId] ?? 0 : 0}
           taskTitleDrafts={taskTitleDrafts}
           replyDraft={replyDraft}
+          failedDrafts={activeThreadId ? failedReplyDrafts[activeThreadId] : undefined}
+          onDiscardFailedDraft={(id) => {
+            if (activeThreadId) setFailedReplyDrafts((current) => ({ ...current, [activeThreadId]: (current[activeThreadId] ?? []).filter((item) => item.id !== id) }));
+          }}
+          onRecoverFailedDraft={(failed) => {
+            if (!activeThreadId) return;
+            updateReplyComposerDraft(activeThreadId, (current) => ({ ...current, attachments: [...current.attachments, ...failed.attachments] }));
+            setFailedReplyDrafts((current) => ({ ...current, [activeThreadId]: (current[activeThreadId] ?? []).filter((item) => item.id !== failed.id) }));
+          }}
           replyAttachments={replyAttachments}
           onClose={closeThreadPanel}
           setTaskTitleDraft={setTaskTitleDraft}
@@ -5513,6 +5537,7 @@ function App() {
       />
 
     </main>
+    </WorkItemActionsProvider>
   );
 }
 

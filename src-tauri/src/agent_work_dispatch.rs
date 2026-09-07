@@ -736,104 +736,44 @@ pub(crate) async fn cancel_agent_work_in_pool(
     pool: &SqlitePool,
     work_item_id: Uuid,
 ) -> CommandResult<()> {
-    let row = sqlx::query(
-        r#"
-        select agent_id, run_id, status
-        from agent_work_items
-        where id = $1
-        "#,
-    )
-    .bind(work_item_id)
-    .fetch_one(pool)
-    .await
-    .map_err(to_string)?;
+    // Serialize the status check with dispatch/completion. A queued request can
+    // start while the user clicks Stop; its stop command must commit with the
+    // cancelling state so a lost response cannot strand it.
+    let mut transaction = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(to_string)?;
+    let row = sqlx::query("select agent_id, run_id, status from agent_work_items where id = $1")
+        .bind(work_item_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(to_string)?;
     let agent_id: Uuid = row.get("agent_id");
     let run_id: Option<Uuid> = row.get("run_id");
     let status: String = row.get("status");
-
-    match status.as_str() {
-        "queued" => {
-            let mut transaction = pool.begin().await.map_err(to_string)?;
-            sqlx::query(
-                r#"
-                update agent_work_items
-                set status = 'cancelled',
-                    completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-                    updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-                where id = $1
-                "#,
-            )
-            .bind(work_item_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(to_string)?;
-            sqlx::query(
-                r#"
-                update supervisor_commands
-                set status = 'done',
-                    error = 'cancelled',
-                    updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-                where work_item_id = $1 and status = 'pending'
-                "#,
-            )
-            .bind(work_item_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(to_string)?;
-            enqueue_ui_work_item_changed_in_tx(
-                &mut transaction,
-                work_item_id,
-                "work_item_cancelled",
-            )
-            .await?;
-            transaction.commit().await.map_err(to_string)?;
-            reconcile_work_item_change(pool, work_item_id, "work_item_cancelled").await?;
-        }
-        "running" => {
-            let Some(run_id) = run_id else {
-                return Err("running agent request does not have a run id".to_owned());
-            };
-            let mut transaction = pool.begin().await.map_err(to_string)?;
-            sqlx::query(
-                r#"
-                update agent_work_items
-                set status = 'cancelling',
-                    updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-                where id = $1
-                "#,
-            )
-            .bind(work_item_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(to_string)?;
-            enqueue_ui_work_item_changed_in_tx(
-                &mut transaction,
-                work_item_id,
-                "work_item_cancelling",
-            )
-            .await?;
-            transaction.commit().await.map_err(to_string)?;
-            reconcile_work_item_change(pool, work_item_id, "work_item_cancelling").await?;
-            let pending_stop: Option<Uuid> = sqlx::query_scalar(
-                r#"
-                select id
-                from supervisor_commands
-                where command_type = 'stop_run'
-                  and run_id = $1
-                  and status in ('pending', 'running')
-                limit 1
-                "#,
+    let next_status = match status.as_str() {
+        "queued" => "cancelled",
+        "cancelling" if run_id.is_none() => "cancelled",
+        "running" | "cancelling" => {
+            let run_id =
+                run_id.ok_or_else(|| "running agent request does not have a run id".to_owned())?;
+            let run_live: bool = sqlx::query_scalar(
+                "select exists(select 1 from agent_runs where id = $1 and stopped_at is null)",
             )
             .bind(run_id)
-            .fetch_optional(pool)
+            .fetch_one(&mut *transaction)
             .await
             .map_err(to_string)?;
-            if pending_stop.is_none() {
-                let mut transaction = pool.begin().await.map_err(to_string)?;
+            if run_live {
                 sqlx::query(
                     r#"
                     insert into supervisor_commands (command_type, agent_id, run_id, work_item_id)
-                    values ('stop_run', $1, $2, $3)
+                    select 'stop_run', $1, $2, $3
+                    where not exists (
+                        select 1 from supervisor_commands
+                        where command_type = 'stop_run' and run_id = $2
+                          and status in ('pending', 'running')
+                    )
                     "#,
                 )
                 .bind(agent_id)
@@ -842,77 +782,47 @@ pub(crate) async fn cancel_agent_work_in_pool(
                 .execute(&mut *transaction)
                 .await
                 .map_err(to_string)?;
-                enqueue_ui_event_in_tx(
-                    &mut transaction,
-                    &UiEvent::Refresh {
-                        reason: "supervisor_command",
-                    },
-                )
-                .await?;
-                transaction.commit().await.map_err(to_string)?;
-                let _ = notify_supervisor_wake(pool).await;
+                "cancelling"
+            } else {
+                "cancelled"
             }
         }
-        "cancelling" => {
-            // If the run is already terminal and no stop command is pending,
-            // nothing will ever finalize this item any more: do it now so a
-            // second cancel click recovers a stuck `cancelling` state.
-            let run_live = match run_id {
-                Some(run_id) => {
-                    sqlx::query_scalar::<_, i64>(
-                        "select count(*) from agent_runs where id = $1 and stopped_at is null",
-                    )
-                    .bind(run_id)
-                    .fetch_one(pool)
-                    .await
-                    .map_err(to_string)?
-                        > 0
-                }
-                None => false,
-            };
-            let stop_pending = sqlx::query_scalar::<_, i64>(
-                r#"
-                select count(*)
-                from supervisor_commands
-                where command_type = 'stop_run'
-                  and work_item_id = $1
-                  and status in ('pending', 'running')
-                "#,
-            )
-            .bind(work_item_id)
-            .fetch_one(pool)
-            .await
-            .map_err(to_string)?
-                > 0;
-            if run_live || stop_pending {
-                return Ok(());
-            }
-            let mut transaction = pool.begin().await.map_err(to_string)?;
-            sqlx::query(
-                r#"
-                update agent_work_items
-                set status = 'cancelled',
-                    completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-                    updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-                where id = $1 and status = 'cancelling'
-                "#,
-            )
-            .bind(work_item_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(to_string)?;
-            enqueue_ui_work_item_changed_in_tx(
-                &mut transaction,
-                work_item_id,
-                "work_item_cancelled",
-            )
-            .await?;
-            transaction.commit().await.map_err(to_string)?;
-            reconcile_work_item_change(pool, work_item_id, "work_item_cancelled").await?;
-        }
+        // A second click or a response lost after completion is harmless.
+        "cancelled" | "done" | "failed" | "silent" | "held" => return Ok(()),
         other => return Err(format!("cannot cancel agent request with status {other}")),
+    };
+    sqlx::query(
+        r#"
+        update agent_work_items
+        set status = $2,
+            completed_at = case when $2 = 'cancelled' then strftime('%Y-%m-%dT%H:%M:%f+00:00','now') else completed_at end,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where id = $1
+        "#,
+    )
+    .bind(work_item_id)
+    .bind(next_status)
+    .execute(&mut *transaction)
+    .await
+    .map_err(to_string)?;
+    if next_status == "cancelled" {
+        sqlx::query(
+            "update supervisor_commands set status = 'done', error = 'cancelled', updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where work_item_id = $1 and status = 'pending'",
+        )
+        .bind(work_item_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(to_string)?;
     }
-
+    let reason = if next_status == "cancelling" {
+        "work_item_cancelling"
+    } else {
+        "work_item_cancelled"
+    };
+    enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, reason).await?;
+    transaction.commit().await.map_err(to_string)?;
+    let _ = notify_supervisor_wake(pool).await;
+    reconcile_work_item_change(pool, work_item_id, reason).await?;
     record_agent_activity(
         pool,
         Some(agent_id),
@@ -922,7 +832,6 @@ pub(crate) async fn cancel_agent_work_in_pool(
         work_item_id.to_string(),
     )
     .await?;
-
     Ok(())
 }
 
@@ -938,18 +847,28 @@ pub(crate) async fn retry_agent_work_in_pool(
     pool: &SqlitePool,
     work_item_id: Uuid,
 ) -> CommandResult<Uuid> {
+    // The source work item is the idempotency key, including across clients and
+    // lost responses. Retrying a failed attempt again uses the new attempt ID.
+    let mut transaction = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(to_string)?;
     let row = sqlx::query(
         r#"
         select agent_id, channel_id, thread_root_id, source_message_id, inbox_item_id, task_id,
-               source_kind, title, context, context_max_seq, freshness_generation, status
+               source_kind, title, context, context_max_seq, freshness_generation, status, retry_work_item_id
         from agent_work_items
         where id = $1
         "#,
     )
     .bind(work_item_id)
-    .fetch_one(pool)
+    .fetch_one(&mut *transaction)
     .await
     .map_err(to_string)?;
+    if let Some(existing) = row.get::<Option<Uuid>, _>("retry_work_item_id") {
+        transaction.commit().await.map_err(to_string)?;
+        return Ok(existing);
+    }
     let old_status: String = row.get("status");
     if matches!(old_status.as_str(), "queued" | "running" | "cancelling") {
         return Err(format!(
@@ -960,7 +879,6 @@ pub(crate) async fn retry_agent_work_in_pool(
     let agent_id: Uuid = row.get("agent_id");
     let title: String = row.get("title");
     let context: String = row.get("context");
-    let mut transaction = pool.begin().await.map_err(to_string)?;
     let new_work_item_id: Uuid = sqlx::query_scalar(
         r#"
         insert into agent_work_items (
@@ -985,6 +903,20 @@ pub(crate) async fn retry_agent_work_in_pool(
     .fetch_one(&mut *transaction)
     .await
     .map_err(to_string)?;
+    sqlx::query("update agent_work_items set retry_work_item_id = $2 where id = $1")
+        .bind(work_item_id)
+        .bind(new_work_item_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(to_string)?;
+    // Explicit retry bypasses the automatic launch cooldown for an agent left
+    // in error after its previous run.
+    sqlx::query("update agents set status = 'idle' where id = $1 and status = 'error'")
+        .bind(agent_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(to_string)?;
+    enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "work_item_retried").await?;
     if let Some(inbox_item_id) = row.get::<Option<Uuid>, _>("inbox_item_id") {
         attach_work_item_to_inbox_in_tx(&mut transaction, inbox_item_id, new_work_item_id).await?;
     }

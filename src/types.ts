@@ -434,6 +434,8 @@ export type AgentWorkItem = {
   context: string;
   status: string;
   run_id: string | null;
+  retry_work_item_id?: string | null;
+  failure_detail?: string;
   created_at: string;
   updated_at: string;
   completed_at: string | null;

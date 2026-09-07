@@ -16,7 +16,8 @@ Dispatch is work-item based:
 - One active run is allowed per agent. Extra mentions, retries, and manual dispatches stay queued.
 - The supervisor schedules the oldest queued work item for each idle agent.
 - Cancellation marks queued work as cancelled or sends a stop command for a running run.
-- Retry creates a new queued work item instead of mutating historical state.
+- Retry creates a queued attempt on the original surface and records its ID on the source request. Repeated or concurrent retries of that source return the same attempt, including after a lost response; retry the new attempt if it also fails. Explicit retry recovers agents left in error state.
+- Progress cards and Agent detail expose Stop and Retry. A stop remains pending until the supervisor confirms termination; status and stop-command writes are atomic. The latest unretried failure per agent/channel/thread remains available after refresh, with its error reason.
 
 Warm Codex and Claude runtimes reply with normal assistant text for the current
 channel or thread. Lantor routes that text into the correct chat surface. They

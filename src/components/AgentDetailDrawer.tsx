@@ -25,6 +25,8 @@ import { MessageMarkdown } from "./MessageMarkdown";
 import { Modal } from "./Modal";
 import { sourceKindMeta } from "./ActivityProgressDock";
 import { formatRelativeTime, formatTime } from "../ui-utils";
+import { errorDetail, latestUnretriedFailures, workItemFailure } from "../work-item-state";
+import { WorkItemActions } from "./WorkItemActions";
 
 type AgentPhase = {
   kind: string;
@@ -195,6 +197,7 @@ function isStructuredActivityDetail(detail: string) {
 }
 
 function userFacingActivityDetail(activity: AgentActivity) {
+  if (activity.status === "error") return errorDetail(activity.metadata) || errorDetail(activity.detail);
   const detail = activity.detail.trim();
   if (!detail) return "";
   if (isStructuredActivityDetail(detail)) return "";
@@ -467,6 +470,11 @@ export function AgentDetailDrawer({
             : "";
   const restartDisabled = Boolean(restartDisabledReason);
   const restartLabel = agentStatus === "error" ? `Restart @${agent.handle}` : `Start @${agent.handle}`;
+  const activeWorkItem = workItems.find((item) => ["running", "cancelling"].includes(item.status));
+  const recoveryItems = [
+    ...latestUnretriedFailures(workItems),
+    ...workItems.filter((item) => item.status === "queued" || (item.status === "cancelled" && !item.retry_work_item_id)),
+  ];
   const workspacePath = agent.working_directory.trim();
   const rootWorkspaceEntries = workspaceNodes[""] ?? agent.workspace_entries ?? [];
   const memoryPath = agent.workspace_memory_path || (workspacePath ? `${workspacePath}/MEMORY.md` : "");
@@ -971,6 +979,8 @@ export function AgentDetailDrawer({
                     )}
                   </header>
 
+                  {group.workItem && <WorkItemActions item={group.workItem} />}
+
                   {group.providerRetrying && (
                     <div className="activity-provider-note">
                       <strong>Lantor is retrying automatically.</strong>
@@ -1114,6 +1124,7 @@ export function AgentDetailDrawer({
           </div>
         </div>
         <div className="agent-drawer-head-actions">
+          {activeWorkItem && <WorkItemActions item={activeWorkItem} />}
           <button
             type="button"
             className="agent-head-action"
@@ -1149,6 +1160,14 @@ export function AgentDetailDrawer({
         </div>
       </header>
       <div className="agent-drawer-body">
+        {recoveryItems.length > 0 && <section className="agent-work-recovery" aria-label="Requests needing attention">
+          {recoveryItems.map((item) => <div key={item.id} className="agent-work-recovery-item">
+            <button type="button" className="activity-run-open" onClick={() => onOpenWorkItem(item, item.source_message_id)}>{item.title}</button>
+            <span role="status">{workItemStatusLabel(item.status)}</span>
+            {item.status === "failed" && <p className="work-item-failure">{workItemFailure(item, activities)}</p>}
+            <WorkItemActions item={item} />
+          </div>)}
+        </section>}
         <div className="agent-detail">
           <section className="agent-detail-hero">
             <AgentAvatar agent={agent} size="lg" />

@@ -1165,3 +1165,111 @@ async fn error_agent_launch_waits_for_cooldown_then_relaunches() {
     drop_test_schema(pool, schema).await;
     assert!(result.is_ok(), "{:?}", result.err());
 }
+
+#[tokio::test]
+async fn retry_is_idempotent_across_clients_and_preserves_the_original_surface() {
+    let (pool, schema) = crate::test_support::test_pool_with_connections(4)
+        .await
+        .expect("test database");
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "retry-agent").await?;
+        let channel_id = insert_test_channel(&pool, "retry-channel").await?;
+        let root: Uuid = sqlx::query_scalar("insert into messages (channel_id, sender_name, sender_role, body) values ($1, 'Owner', 'owner', 'Original request') returning id")
+            .bind(channel_id).fetch_one(&pool).await.map_err(|e| e.to_string())?;
+        let old: Uuid = sqlx::query_scalar("insert into agent_work_items (agent_id, channel_id, thread_root_id, source_message_id, source_kind, title, context, status) values ($1, $2, $3, $3, 'thread_followup', 'Original request', 'Original context', 'failed') returning id")
+            .bind(agent_id).bind(channel_id).bind(root).fetch_one(&pool).await.map_err(|e| e.to_string())?;
+        sqlx::query("update agents set status = 'error' where id = $1").bind(agent_id).execute(&pool).await.map_err(|e| e.to_string())?;
+        let (left, right) = tokio::join!(super::retry_agent_work_in_pool(&pool, old), super::retry_agent_work_in_pool(&pool, old));
+        let new = left?;
+        assert_eq!(right?, new);
+        assert_eq!(super::retry_agent_work_in_pool(&pool, old).await?, new, "lost-response retry reuses its attempt");
+        let row = sqlx::query("select * from agent_work_items where id = $1").bind(new).fetch_one(&pool).await.map_err(|e| e.to_string())?;
+        assert_eq!(row.get::<Uuid, _>("channel_id"), channel_id);
+        assert_eq!(row.get::<Uuid, _>("thread_root_id"), root);
+        assert_eq!(row.get::<Uuid, _>("source_message_id"), root);
+        assert_eq!(row.get::<String, _>("context"), "Original context");
+        let commands: i64 = sqlx::query_scalar("select count(*) from supervisor_commands where work_item_id = $1").bind(new).fetch_one(&pool).await.map_err(|e| e.to_string())?;
+        assert_eq!(commands, 1, "only one execution is scheduled even from error state");
+        assert!(super::retry_agent_work_in_pool(&pool, new).await.is_err(), "cannot retry queued work");
+        sqlx::query("update agent_work_items set status = 'failed' where id = $1").bind(new).execute(&pool).await.map_err(|e| e.to_string())?;
+        let next = super::retry_agent_work_in_pool(&pool, new).await?;
+        assert_ne!(next, new);
+        assert_eq!(super::retry_agent_work_in_pool(&pool, old).await?, new);
+        // A subsequent startup/migration preserves the idempotency link.
+        crate::db::migrate(&pool).await.map_err(|e| e.to_string())?;
+        assert_eq!(super::retry_agent_work_in_pool(&pool, old).await?, new);
+        let items = crate::activity_store::load_agent_work_items(&pool).await?;
+        assert_eq!(items.iter().find(|item| item.id == old).unwrap().retry_work_item_id, Some(new));
+        Ok(())
+    }.await;
+    drop_test_schema(pool, schema).await;
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[tokio::test]
+async fn cancellation_is_atomic_idempotent_and_targets_only_the_selected_run() {
+    let (pool, schema) = crate::test_support::test_pool_with_connections(4)
+        .await
+        .expect("test database");
+    let result: Result<(), String> = async {
+        let agent = insert_test_agent(&pool, "stop-agent").await?;
+        let other_agent = insert_test_agent(&pool, "other-agent").await?;
+        let mut pairs = Vec::new();
+        for agent_id in [agent, other_agent] {
+            let run: Uuid = sqlx::query_scalar("insert into agent_runs (agent_id, command, working_directory, status) values ($1, 'test', '/tmp', 'running') returning id")
+                .bind(agent_id).fetch_one(&pool).await.map_err(|e| e.to_string())?;
+            let work: Uuid = sqlx::query_scalar("insert into agent_work_items (agent_id, title, status, run_id) values ($1, 'Stop test', 'running', $2) returning id")
+                .bind(agent_id).bind(run).fetch_one(&pool).await.map_err(|e| e.to_string())?;
+            pairs.push((run, work));
+        }
+        let (run, work) = pairs[0];
+        let (left, right) = tokio::join!(super::cancel_agent_work_in_pool(&pool, work), super::cancel_agent_work_in_pool(&pool, work));
+        left?; right?;
+        let status: String = sqlx::query_scalar("select status from agent_work_items where id = $1").bind(work).fetch_one(&pool).await.map_err(|e| e.to_string())?;
+        assert_eq!(status, "cancelling");
+        let commands: Vec<Uuid> = sqlx::query_scalar("select run_id from supervisor_commands where command_type = 'stop_run'").fetch_all(&pool).await.map_err(|e| e.to_string())?;
+        assert_eq!(commands, vec![run]);
+        let other_status: String = sqlx::query_scalar("select status from agent_work_items where id = $1").bind(pairs[1].1).fetch_one(&pool).await.map_err(|e| e.to_string())?;
+        assert_eq!(other_status, "running");
+        sqlx::query("update agent_runs set status = 'cancelled', stopped_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where id = $1").bind(run).execute(&pool).await.map_err(|e| e.to_string())?;
+        super::cancel_agent_work_in_pool(&pool, work).await?;
+        super::cancel_agent_work_in_pool(&pool, work).await?;
+        let status: String = sqlx::query_scalar("select status from agent_work_items where id = $1").bind(work).fetch_one(&pool).await.map_err(|e| e.to_string())?;
+        assert_eq!(status, "cancelled");
+        sqlx::query("update agent_work_items set status = 'done' where id = $1").bind(work).execute(&pool).await.map_err(|e| e.to_string())?;
+        super::cancel_agent_work_in_pool(&pool, work).await?;
+        let status: String = sqlx::query_scalar("select status from agent_work_items where id = $1").bind(work).fetch_one(&pool).await.map_err(|e| e.to_string())?;
+        assert_eq!(status, "done", "a late stop must not overwrite completion");
+        Ok(())
+    }.await;
+    drop_test_schema(pool, schema).await;
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[tokio::test]
+async fn old_failures_keep_their_reason_and_live_work_survives_busy_history() {
+    let (pool, schema) = test_pool().await.expect("test database");
+    let result: Result<(), String> = async {
+        let agent = insert_test_agent(&pool, "failure-history-agent").await?;
+        let run: Uuid = sqlx::query_scalar("insert into agent_runs (agent_id, command, working_directory, status) values ($1, 'test', '/tmp', 'failed') returning id")
+            .bind(agent).fetch_one(&pool).await.map_err(|e| e.to_string())?;
+        let failure: Uuid = sqlx::query_scalar("insert into agent_work_items (agent_id, title, status, run_id, created_at) values ($1, 'Old failure', 'failed', $2, '2026-01-01T00:00:00Z') returning id")
+            .bind(agent).bind(run).fetch_one(&pool).await.map_err(|e| e.to_string())?;
+        let queued: Uuid = sqlx::query_scalar("insert into agent_work_items (agent_id, title, status, created_at) values ($1, 'Old queued work', 'queued', '2026-01-01T00:00:00Z') returning id")
+            .bind(agent).fetch_one(&pool).await.map_err(|e| e.to_string())?;
+        let detail = r#"{"error":{"message":"Provider connection closed"}}"#;
+        crate::events::activity::record_agent_activity(&pool, Some(agent), Some(run), "run_error", "Failed", detail.to_owned()).await?;
+        for _ in 0..90 {
+            sqlx::query("insert into agent_work_items (agent_id, title, status) values ($1, 'New completed work', 'done')")
+                .bind(agent).execute(&pool).await.map_err(|e| e.to_string())?;
+        }
+        let items = crate::activity_store::load_agent_work_item_summaries(&pool).await?;
+        assert_eq!(items.len(), 82);
+        let failed = items.iter().find(|item| item.id == failure).expect("old failure remains in bootstrap");
+        assert_eq!(failed.failure_detail, detail);
+        assert!(items.iter().any(|item| item.id == queued), "live work remains in bootstrap");
+        Ok(())
+    }.await;
+    drop_test_schema(pool, schema).await;
+    assert!(result.is_ok(), "{result:?}");
+}

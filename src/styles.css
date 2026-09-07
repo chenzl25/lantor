@@ -7553,20 +7553,20 @@ body.resizing-column * {
 .thread-scroll-shell {
   position: relative;
   display: grid;
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
 }
 
 .thread-progress-layer {
-  position: absolute;
-  top: 0;
+  position: relative;
+  top: auto;
   right: 0;
   left: 0;
 }
 
 .thread-scroll {
-  grid-area: 1 / 1;
+  grid-area: 2 / 1;
   height: 100%;
   min-height: 0;
   overflow: auto;
@@ -11917,6 +11917,7 @@ body.resizing-column * {
     grid-template-columns: 44px 44px minmax(0, 1fr) 44px;
     grid-template-areas:
       "references references references references"
+      "failed failed failed failed"
       "picker picker picker picker"
       "attachments attachments attachments attachments"
       "attach task input send";
@@ -11927,6 +11928,7 @@ body.resizing-column * {
     grid-template-columns: 44px minmax(0, 1fr) 44px;
     grid-template-areas:
       "references references references"
+      "failed failed failed"
       "picker picker picker"
       "attachments attachments attachments"
       "attach input send";
@@ -13308,3 +13310,64 @@ body.resizing-column * {
   .task-board-summary span { font-size: var(--type-size-caption); text-transform: none; }
   .task-row-actions { gap: 4px; }
 }
+.activity-progress-stack {
+  display: grid;
+  gap: 6px;
+  width: min(100%, 680px);
+  max-height: 40vh;
+  overflow-y: auto;
+  pointer-events: auto;
+}
+.activity-progress-stack .activity-progress-dock { width: 100%; }
+.activity-progress-summary[data-state="failed"] { border-color: var(--status-danger-border); }
+.activity-progress-summary[data-state="stopping"] { border-color: var(--status-warning-border); }
+.work-item-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 4px; }
+.work-item-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 5px 9px;
+  color: var(--ink-primary);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.work-item-actions button:disabled { opacity: 0.65; cursor: default; }
+.work-item-actions [role="alert"], .work-item-failure {
+  margin: 0;
+  color: var(--ink-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.activity-progress-dock > .work-item-failure {
+  padding: 8px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--status-danger-border);
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.agent-work-recovery { display: grid; gap: 8px; margin-bottom: 12px; }
+.agent-work-recovery-item { display: grid; gap: 5px; padding: 10px; border: 1px solid var(--border-strong); border-radius: 8px; }
+.agent-work-recovery-item > span { color: var(--ink-muted); font-size: 12px; }
+.thread-reply-summary[data-state="failed"] { color: var(--status-danger); }
+@media (pointer: coarse) { .work-item-actions button { min-height: 44px; } }
+.failed-message-drafts { display: grid; gap: 8px; max-height: 220px; overflow-y: auto; margin-bottom: 8px; }
+.failed-message-draft { padding: 9px 11px; border: 1px solid var(--status-danger-border); border-radius: 8px; font-size: 12px; }
+.failed-message-draft p { margin: 5px 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-secondary); }
+.failed-message-draft summary { cursor: pointer; }
+.failed-message-draft button { min-height: 32px; margin: 5px 8px 0 0; padding: 5px 9px; color: var(--ink-primary); background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: 7px; font: inherit; cursor: pointer; }
+@media (pointer: coarse) { .failed-message-draft button { min-height: 44px; } }
+.activity-progress-controls { display: flex; align-items: center; }
+.activity-progress-controls .work-item-actions { max-width: 180px; }
+
+.thread-progress-layer:empty { padding: 0; }
+.failed-message-drafts { grid-column: 1 / -1; }
+@media (max-width: 760px) { .failed-message-drafts { grid-area: failed; } }

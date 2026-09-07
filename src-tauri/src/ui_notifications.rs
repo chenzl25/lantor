@@ -622,6 +622,12 @@ async fn load_agent_work_item_patch(
             w.title,
             w.status,
             w.run_id,
+            w.retry_work_item_id,
+            case when w.status = 'failed' then coalesce((
+                select detail from agent_activities
+                where run_id = w.run_id and kind = 'run_error'
+                order by created_at desc limit 1
+            ), '') else '' end as failure_detail,
             w.created_at,
             w.updated_at,
             w.completed_at
@@ -661,6 +667,12 @@ async fn load_agent_work_item_patch_in_tx(
             w.title,
             w.status,
             w.run_id,
+            w.retry_work_item_id,
+            case when w.status = 'failed' then coalesce((
+                select detail from agent_activities
+                where run_id = w.run_id and kind = 'run_error'
+                order by created_at desc limit 1
+            ), '') else '' end as failure_detail,
             w.created_at,
             w.updated_at,
             w.completed_at
@@ -695,6 +707,8 @@ fn agent_work_item_patch_from_row(row: &SqliteRow) -> AgentWorkItemPatch {
         title: row.get("title"),
         status: row.get("status"),
         run_id: row.get("run_id"),
+        retry_work_item_id: row.get("retry_work_item_id"),
+        failure_detail: row.get("failure_detail"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
         completed_at: row.get("completed_at"),

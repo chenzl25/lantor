@@ -1,3 +1,4 @@
+import { FailedMessageDrafts, appendRecoveredText, type FailedMessageDraftProps } from "./FailedMessageDrafts";
 import { ArrowDown, ArrowLeft, CheckCircle2, Crosshair, FileImage, Hash, Maximize2, MessageSquare, Minimize2, MoreHorizontal, Paperclip, Quote, RotateCcw, Send, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type TextareaHTMLAttributes, type WheelEvent as ReactWheelEvent } from "react";
 import { useEventCallback } from "../hooks/useEventCallback";
@@ -73,7 +74,7 @@ function waitForNextFrame() {
   });
 }
 
-type ThreadPanelProps = {
+type ThreadPanelProps = FailedMessageDraftProps & {
   channel: Channel | null;
   channels: Channel[];
   agents: Agent[];
@@ -163,6 +164,9 @@ function pruneThreadScrollState(entries: Map<string, ThreadScrollState>, now: nu
 }
 
 export function ThreadPanel({
+  failedDrafts,
+  onRecoverFailedDraft,
+  onDiscardFailedDraft,
   channel,
   channels,
   agents,
@@ -1083,6 +1087,9 @@ export function ThreadPanel({
         </div>
 
         <ThreadReplyComposer
+          failedDrafts={failedDrafts}
+          onRecoverFailedDraft={onRecoverFailedDraft}
+          onDiscardFailedDraft={onDiscardFailedDraft}
           activeRoot={activeRoot}
           isDm={isDm}
           dmAgent={dmAgent}
@@ -1102,7 +1109,7 @@ export function ThreadPanel({
   );
 }
 
-type ThreadReplyComposerProps = {
+type ThreadReplyComposerProps = FailedMessageDraftProps & {
   activeRoot: Message | null;
   isDm: boolean;
   dmAgent: Agent | null;
@@ -1166,6 +1173,9 @@ function useBufferedComposerText(draft: string, resetKey: string | null | undefi
 }
 
 function ThreadReplyComposer({
+  failedDrafts,
+  onRecoverFailedDraft,
+  onDiscardFailedDraft,
   activeRoot,
   isDm,
   dmAgent,
@@ -1349,6 +1359,14 @@ function ThreadReplyComposer({
           commitText(nextText);
         }}
       />
+      <FailedMessageDrafts failedDrafts={failedDrafts} onDiscardFailedDraft={onDiscardFailedDraft}
+        onRecoverFailedDraft={(failed) => {
+          const nextText = appendRecoveredText(textareaRef.current?.value ?? text, failed.text);
+          updateText(nextText);
+          commitText(nextText);
+          onRecoverFailedDraft?.(failed);
+          focusComposer();
+        }} />
       <DraftAttachmentsPreview attachments={replyAttachments} onRemove={removeReplyAttachment} />
       <ComposerReferenceTextarea
         ref={textareaRef}

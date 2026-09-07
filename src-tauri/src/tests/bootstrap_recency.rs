@@ -86,8 +86,8 @@ async fn recency_indexes_upgrade_existing_databases_without_changing_recent_resu
         .await
         .unwrap();
         sqlx::query(
-            "insert into agent_work_items (agent_id, title, context, created_at) \
-             values ($1, $2, 'fixture context', strftime('%Y-%m-%dT%H:%M:%f+00:00', '2026-01-01', $3))",
+            "insert into agent_work_items (agent_id, title, context, status, created_at) \
+             values ($1, $2, 'fixture context', 'done', strftime('%Y-%m-%dT%H:%M:%f+00:00', '2026-01-01', $3))",
         )
         .bind(agent_id)
         .bind(format!("work-{index}"))

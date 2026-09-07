@@ -1,3 +1,4 @@
+import { FailedMessageDrafts, appendRecoveredText, type FailedMessageDraftProps } from "./FailedMessageDrafts";
 import {
   ArrowDown,
   ArrowLeft,
@@ -48,7 +49,7 @@ type WritingSuggestionsTextareaAttrs = TextareaHTMLAttributes<HTMLTextAreaElemen
 
 const disableWritingSuggestionsAttrs: WritingSuggestionsTextareaAttrs = { writingsuggestions: "false" };
 
-type ConversationProps = {
+type ConversationProps = FailedMessageDraftProps & {
   channel: Channel | null;
   channels: Channel[];
   agents: Agent[];
@@ -122,6 +123,9 @@ function compactReferencePreview(body: string) {
 }
 
 export function Conversation({
+  failedDrafts,
+  onRecoverFailedDraft,
+  onDiscardFailedDraft,
   channel,
   channels,
   agents,
@@ -635,6 +639,9 @@ export function Conversation({
 
       {activeTab === "chat" && (
         <ConversationComposer
+          failedDrafts={failedDrafts}
+          onRecoverFailedDraft={onRecoverFailedDraft}
+          onDiscardFailedDraft={onDiscardFailedDraft}
           channel={channel}
           isDm={isDm}
           dmAgent={dmAgent}
@@ -653,7 +660,7 @@ export function Conversation({
   );
 }
 
-type ConversationComposerProps = {
+type ConversationComposerProps = FailedMessageDraftProps & {
   channel: Channel | null;
   isDm: boolean;
   dmAgent: Agent | null;
@@ -717,6 +724,9 @@ function useBufferedComposerText(draft: string, resetKey: string | null | undefi
 }
 
 function ConversationComposer({
+  failedDrafts,
+  onRecoverFailedDraft,
+  onDiscardFailedDraft,
   channel,
   isDm,
   dmAgent,
@@ -939,6 +949,15 @@ function ConversationComposer({
           setDraft(nextText);
         }}
       />
+      <FailedMessageDrafts failedDrafts={failedDrafts} onDiscardFailedDraft={onDiscardFailedDraft}
+        onRecoverFailedDraft={(failed) => {
+          const nextText = appendRecoveredText(textareaRef.current?.value ?? text, failed.text);
+          updateText(nextText);
+          commitText(nextText);
+          if (failed.asTask) setSendAsTask(true);
+          onRecoverFailedDraft?.(failed);
+          focusComposer();
+        }} />
       <DraftAttachmentsPreview attachments={draftAttachments} onRemove={removeDraftAttachment} />
       <ComposerReferenceTextarea
         ref={textareaRef}

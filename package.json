@@ -8,6 +8,7 @@
     "test": "tsx --test tests/*.test.ts",
     "test:dialogs": "node tests/dialogs.e2e.mjs",
     "test:ui-panels": "node tests/ui-panels.e2e.mjs",
+    "test:ux-recovery": "node tests/ux-recovery.e2e.mjs",
     "test:app-shell": "node tests/app-shell.e2e.mjs",
     "test:streaming": "node tests/streaming.e2e.mjs",
     "test:attachments": "cargo test --manifest-path src-tauri/Cargo.toml web::attachment_tests::browser_cache_range_and_upload_memory -- --ignored --nocapture",

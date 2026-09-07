@@ -83,12 +83,16 @@ test("ended runs override orphaned streams and stale running work without a term
   }
 });
 
-test("settled work clears immediately without requiring a later event to expire it", () => {
+test("settled work clears active progress immediately while failures retain a recovery card", () => {
   for (const status of ["done", "failed", "cancelled", "silent"]) {
     const item = { ...work("w", "root", progressRunId, status), updated_at: new Date().toISOString() };
     const index = indexProgress([], [], [item], []);
-    assert.deepEqual(activeProgressByAgent([], index, "channel", "root"), [], status);
-    assert.deepEqual(activeProgressByAgent([emptyStream], index, "channel", "root"), [], `${status} overrides orphaned stream`);
+    const expected = status === "failed" ? [["failed", item.id]] : [];
+    for (const messages of [[], [emptyStream]]) {
+      const cards = activeProgressByAgent(messages, index, "channel", "root");
+      assert.deepEqual(cards.map((card) => [card.state, card.workItem?.id]), expected,
+        `${status} cannot revive working progress from an orphaned stream`);
+    }
   }
 });
 

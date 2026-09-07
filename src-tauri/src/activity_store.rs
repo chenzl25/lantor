@@ -80,6 +80,25 @@ async fn load_agent_work_items_with_context(
 ) -> CommandResult<Vec<AgentWorkItem>> {
     let rows = sqlx::query(
         r#"
+        with recent as (
+            select id from agent_work_items
+            where ($2 is null or agent_id = $2)
+            order by created_at desc limit 80
+        ), failures as (
+            select id, row_number() over (
+                partition by agent_id, channel_id, thread_root_id
+                order by created_at desc, id desc
+            ) as position
+            from agent_work_items
+            where status = 'failed' and retry_work_item_id is null
+              and ($2 is null or agent_id = $2)
+        ), retained as (
+            select id from recent
+            union select id from failures where position = 1
+            union select id from agent_work_items
+                where status in ('queued', 'running', 'cancelling')
+                  and ($2 is null or agent_id = $2)
+        )
         select
             w.id,
             w.agent_id,
@@ -96,16 +115,21 @@ async fn load_agent_work_items_with_context(
             case when $1 then w.context else '' end as context,
             w.status,
             w.run_id,
+            w.retry_work_item_id,
+            case when w.status = 'failed' then coalesce((
+                select detail from agent_activities
+                where run_id = w.run_id and kind = 'run_error'
+                order by created_at desc limit 1
+            ), '') else '' end as failure_detail,
             w.created_at,
             w.updated_at,
             w.completed_at
-        from agent_work_items w
+        from retained
+        join agent_work_items w on w.id = retained.id
         join agents a on a.id = w.agent_id
         left join channels c on c.id = w.channel_id
         left join tasks t on t.id = w.task_id
-        where ($2 is null or w.agent_id = $2)
         order by w.created_at desc
-        limit 80
         "#,
     )
     .bind(include_context)
@@ -132,6 +156,8 @@ async fn load_agent_work_items_with_context(
             context: row.get("context"),
             status: row.get("status"),
             run_id: row.get("run_id"),
+            retry_work_item_id: row.get("retry_work_item_id"),
+            failure_detail: row.get("failure_detail"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
             completed_at: row.get("completed_at"),

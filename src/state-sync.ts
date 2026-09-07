@@ -1,3 +1,4 @@
+import { retainWorkItems } from "./work-item-state";
 import type {
   AgentActivity,
   AgentRun,
@@ -711,7 +712,7 @@ export function applyBackendEvent(
     );
     return transition({
       ...current,
-      agent_work_items: workItems.slice(0, 80),
+      agent_work_items: retainWorkItems(workItems),
     });
   }
 

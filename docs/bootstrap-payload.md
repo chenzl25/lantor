@@ -6,7 +6,7 @@ Web bootstrap and `currentChannelOnly` desktop bootstrap return summaries for th
 | --- | --- | --- |
 | Messages | Latest 20 roots per channel, latest 2 replies per root; artifact bodies omitted | Existing channel pagination; `load_thread_messages` on thread expansion; existing message/artifact lookup |
 | Agents | Profile summary with `details_loaded: false`; no launch command, environment or workspace scan | `load_agent_detail` on drawer open or before editing |
-| Work items | Latest 80 without context | Agent detail and existing scoped collection reads |
+| Work items | Latest 80 plus live requests and the latest unretried failure per agent/channel/thread; no context; includes retry link and failure reason | Agent detail and existing scoped collection reads |
 | Activities | Latest 3 per owner; detail capped at 240 characters; small scalar metadata retained | Agent detail returns up to 80 activities for that agent; search loads its collection context |
 | Thread activity | Loaded roots and unread threads; includes total visible `reply_count` | Activity/search and thread expansion reload thread metadata |
 | Inbox markers | Keys for returned entities, channels and the saved-message marker | Activity/search load complete marker collections |

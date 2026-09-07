@@ -5,6 +5,7 @@ import type { MessageRowData } from "../hooks/useMessageRows";
 import { formatTime } from "../ui-utils";
 import { AgentAvatar } from "./AgentAvatar";
 import { isPrimaryUnmodifiedClick } from "../message-interactions";
+import { workItemFailure } from "../work-item-state";
 
 function compactReplyProgressText(value: string, limit: number) {
   const normalized = value.replace(/\s+/g, " ").trim();
@@ -45,6 +46,11 @@ function userFacingReplyProgressDetail(value: string) {
 }
 
 function replyProgressSummary(progress: ReplyProgress) {
+  if (progress.state === "failed") return {
+    title: "Request failed",
+    detail: progress.workItem ? compactReplyProgressText(workItemFailure(progress.workItem, progress.history), 72) : "",
+  };
+  if (progress.state === "stopping") return { title: "Stopping", detail: "Waiting for the agent to stop" };
   if (progress.latestActivity) {
     const title = userFacingReplyProgressTitle(progress.latestActivity.summary || progress.latestActivity.title || "Working");
     const detail = compactReplyProgressText(userFacingReplyProgressDetail(progress.latestActivity.detail), 72);
@@ -94,6 +100,7 @@ export function MessageReplySummary({ reply, replyCount, unreadReplyCount, onOpe
       <button
         type="button"
         className={replySummaryClassName}
+        data-state={activeReplyProgress.some((item) => item.state === "failed") ? "failed" : undefined}
         data-active-menu-placement={hasActiveReplyProgress ? activeReplyMenuPlacement : undefined}
         title="View thread replies"
         aria-label={hasActiveReplyProgress
@@ -126,7 +133,7 @@ export function MessageReplySummary({ reply, replyCount, unreadReplyCount, onOpe
             ))}
           </div>
         )}
-        {hasActiveReplyProgress && (
+        {activeReplyProgress.some((item) => item.state === "working") && (
           <span className="thread-reply-progress-dots" aria-hidden="true">...</span>
         )}
         {replyCount > 0 && (

@@ -25,6 +25,8 @@ import type { Agent, AgentActivity, AgentRun, AgentWorkItem, Message } from "../
 import { messageHasVisibleContent, messageRunId } from "../message-grouping";
 import { formatClockTime } from "../ui-utils";
 import { AgentAvatar } from "./AgentAvatar";
+import { WorkItemActions } from "./WorkItemActions";
+import { errorDetail, latestUnretriedFailures, workItemFailure } from "../work-item-state";
 
 type ActivityProgressDockProps = {
   progress: ActiveAgentProgress[];
@@ -88,7 +90,7 @@ export type ActiveAgentProgress = {
   key: string;
   agent: Pick<Agent, "handle" | "display_name" | "status"> &
     Partial<Pick<Agent, "id" | "runtime" | "model" | "role" | "avatar" | "description">>;
-  state: "working" | "queued";
+  state: "working" | "queued" | "stopping" | "failed";
   workItem: AgentWorkItem | null;
   queuedItems: AgentWorkItem[];
   latestActivity: AgentActivity | null;
@@ -210,6 +212,7 @@ function isProviderRetryActivity(activity: AgentActivity | null) {
 }
 
 function activityDetail(activity: AgentActivity) {
+  if (activity.status === "error") return errorDetail(activity.metadata) || errorDetail(activity.detail);
   const metadata = activity.metadata ?? {};
   const preferred = [
     metadata.command,
@@ -367,6 +370,9 @@ export function activeProgressByAgent(
 
   streamingMessages.forEach(({ message, runId }) => {
     if (!runId) return;
+    const run = runsById.get(runId);
+    if (run && !ACTIVE_RUN_STATUSES.has(run.status)) return;
+    if (surfaceWorkItems.some((item) => item.run_id === runId && ["failed", "cancelled"].includes(item.status))) return;
     addCandidate(runId, {
       message,
       workItem: null,
@@ -376,7 +382,7 @@ export function activeProgressByAgent(
   });
 
   surfaceWorkItems
-    .filter((workItem) => workItem.run_id)
+    .filter((workItem) => workItem.run_id && workItem.status !== "failed" && !workItem.retry_work_item_id)
     .forEach((workItem) => {
       const runId = workItem.run_id;
       if (!runId) return;
@@ -472,6 +478,24 @@ export function activeProgressByAgent(
       });
     });
 
+  for (const item of progressByAgent.values()) {
+    if (item.workItem?.status === "cancelling") item.state = "stopping";
+  }
+  for (const workItem of latestUnretriedFailures(surfaceWorkItems)) {
+    const history = workItem.run_id ? activitiesByRun.get(workItem.run_id) ?? [] : [];
+    const key = `failed:${workItem.id}`;
+    progressByAgent.set(key, {
+      key,
+      agent: agentsById.get(workItem.agent_id) ?? {
+        id: workItem.agent_id, handle: workItem.agent_handle,
+        display_name: `@${workItem.agent_handle}`, status: "error",
+      },
+      state: "failed", workItem, queuedItems: [],
+      latestActivity: history[0] ?? null,
+      history: compactProgressActivities(history).slice(0, MAX_PROGRESS_HISTORY_ITEMS),
+      latestAt: timestamp(workItem.updated_at),
+    });
+  }
   return Array.from(progressByAgent.values())
     .sort((left, right) => right.latestAt - left.latestAt);
 }
@@ -480,18 +504,28 @@ function ActivityProgressDockContent({ progress, onOpenWorkItem }: ActivityProgr
   const [historyOpen, setHistoryOpen] = useState(false);
   if (progress.length === 0) return null;
 
+  // Each agent/request keeps its own controls and failure, even when another
+  // agent on the same thread is still working.
+  if (progress.length > 1) return <div className="activity-progress-stack">
+    {progress.map((item) => <ActivityProgressDock key={item.key} progress={[item]} onOpenWorkItem={onOpenWorkItem} />)}
+  </div>;
+
   const workingCount = progress.filter((item) => item.state === "working").length;
   const latest = progress.find((item) => item.state === "working") ?? progress[0];
   const latestActivity = latest.latestActivity;
   const latestWorking = latest.state === "working";
-  const Icon = progressIcon(latestActivity);
+  const failed = latest.state === "failed";
+  const stopping = latest.state === "stopping";
+  const Icon = failed ? AlertCircle : progressIcon(latestActivity);
   const providerRetrying = isProviderRetryActivity(latestActivity);
   const queuedCount = progress.reduce((count, item) => count + item.queuedItems.length, 0);
   const latestSourceWorkItem = latest.workItem ?? latest.queuedItems[0] ?? null;
   const latestKindMeta = sourceKindMeta(latestSourceWorkItem);
   const KindIcon = latestKindMeta.icon;
   const jumpable = Boolean(latestSourceWorkItem) && latestKindMeta.jumpable && Boolean(onOpenWorkItem);
-  const title = progress.length === 1
+  const title = failed ? `${latest.agent.display_name}: request failed`
+    : stopping ? `${latest.agent.display_name} is stopping`
+    : progress.length === 1
     ? providerRetrying
       ? `${latest.agent.display_name} is waiting on provider`
       : latestWorking
@@ -500,7 +534,7 @@ function ActivityProgressDockContent({ progress, onOpenWorkItem }: ActivityProgr
     : workingCount > 0
       ? `${workingCount} ${workingCount === 1 ? "agent is" : "agents are"} working`
       : `${progress.length} agents have queued work`;
-  const latestTitle = latestActivity ? userFacingActivityTitle(latestActivity) : latestWorking ? "Working" : "Queued";
+  const latestTitle = failed ? latest.workItem?.title || "Request failed" : stopping ? "Waiting for the agent to stop" : latestActivity ? userFacingActivityTitle(latestActivity) : latestWorking ? "Working" : "Queued";
   const latestDetail = latestActivity ? activityDetail(latestActivity) : "";
   const history = progress
     .flatMap((item) =>
@@ -512,7 +546,7 @@ function ActivityProgressDockContent({ progress, onOpenWorkItem }: ActivityProgr
     )
     .sort((left, right) => timestamp(right.activity.created_at) - timestamp(left.activity.created_at))
     .slice(0, MAX_PROGRESS_HISTORY_ITEMS);
-  const state = providerRetrying ? "provider-retrying" : latestWorking ? "working" : "queued";
+  const state = failed ? "failed" : stopping ? "stopping" : providerRetrying ? "provider-retrying" : latestWorking ? "working" : "queued";
 
   const handleJump = () => {
     if (!latestSourceWorkItem || !onOpenWorkItem) return;
@@ -542,13 +576,13 @@ function ActivityProgressDockContent({ progress, onOpenWorkItem }: ActivityProgr
             ))}
           </span>
           <span className="activity-progress-copy">
-            <strong>{title}</strong>
+            <strong role="status">{title}</strong>
             <small>
               <KindIcon className="activity-progress-kind-icon" size={13} aria-hidden="true" />
               <span className="activity-progress-kind-label">{latestKindMeta.label}</span>
               <Icon className="activity-progress-phase-icon" size={13} aria-hidden="true" />
               <span>{latestTitle}</span>
-              {latestDetail && <em>{compact(latestDetail, 80)}</em>}
+              {!failed && latestDetail && <em>{compact(latestDetail, 80)}</em>}
               {queuedCount > 0 && <em>{queuedCount} queued on this surface</em>}
             </small>
           </span>
@@ -556,6 +590,8 @@ function ActivityProgressDockContent({ progress, onOpenWorkItem }: ActivityProgr
             <span className="activity-progress-jump-arrow" aria-hidden="true">→</span>
           )}
         </button>
+        <div className="activity-progress-controls">
+        {latestSourceWorkItem && <WorkItemActions item={latestSourceWorkItem} />}
         {history.length > 0 && (
           <button
             type="button"
@@ -571,7 +607,9 @@ function ActivityProgressDockContent({ progress, onOpenWorkItem }: ActivityProgr
             />
           </button>
         )}
+        </div>
       </div>
+      {failed && latest.workItem && <p className="work-item-failure" role="status">{workItemFailure(latest.workItem, latest.history)}</p>}
       {historyOpen && history.length > 0 && (
         <ol className="activity-progress-history">
           {history.map(({ activity, agent, workItem }) => {
