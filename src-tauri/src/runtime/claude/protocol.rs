@@ -17,6 +17,17 @@ pub(super) fn claude_text_delta(value: &Value) -> Option<&str> {
     if value.get("type").and_then(Value::as_str) != Some("stream_event") {
         return None;
     }
+    if value.pointer("/event/type").and_then(Value::as_str) == Some("content_block_start")
+        && value
+            .pointer("/event/content_block/type")
+            .and_then(Value::as_str)
+            == Some("text")
+    {
+        return value
+            .pointer("/event/content_block/text")
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty());
+    }
     if value.pointer("/event/delta/type").and_then(Value::as_str) != Some("text_delta") {
         return None;
     }
@@ -27,23 +38,32 @@ pub(super) fn claude_session_id(value: &Value) -> Option<&str> {
     value.get("session_id").and_then(Value::as_str)
 }
 
-pub(super) fn claude_message_text(value: &Value) -> Option<String> {
+/// Text blocks of an `assistant` message in content order. Claude Code emits
+/// one `assistant` line per content block, so this is usually a single entry.
+pub(super) fn claude_message_text_blocks(value: &Value) -> Option<Vec<String>> {
     if value.get("type").and_then(Value::as_str) != Some("assistant") {
         return None;
     }
     let content = value.pointer("/message/content")?.as_array()?;
-    let text = content
+    let blocks = content
         .iter()
         .filter_map(|block| {
             if block.get("type").and_then(Value::as_str) == Some("text") {
-                block.get("text").and_then(Value::as_str)
+                block.get("text").and_then(Value::as_str).map(str::to_owned)
             } else {
                 None
             }
         })
-        .collect::<Vec<_>>()
-        .join("");
-    (!text.trim().is_empty()).then_some(text)
+        .collect::<Vec<_>>();
+    blocks
+        .iter()
+        .any(|text| !text.trim().is_empty())
+        .then_some(blocks)
+}
+
+#[cfg(test)]
+pub(super) fn claude_message_text(value: &Value) -> Option<String> {
+    claude_message_text_blocks(value).map(|blocks| blocks.join(""))
 }
 
 pub(super) fn claude_result_text(value: &Value) -> Option<String> {

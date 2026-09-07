@@ -36,6 +36,7 @@ fn drop_sqlite_test_files(database_path: &str) {
     let _ = fs::remove_file(database_path);
     let _ = fs::remove_file(format!("{database_path}-wal"));
     let _ = fs::remove_file(format!("{database_path}-shm"));
+    let _ = fs::remove_dir_all(std::path::Path::new(database_path).with_extension("run-logs"));
 }
 
 pub(crate) async fn drop_test_schema(pool: SqlitePool, database_path: String) {

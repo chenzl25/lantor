@@ -173,7 +173,17 @@ impl StreamControlGate {
                     if preserve_incomplete {
                         self.visible(self.pending.len(), &mut output);
                     } else {
+                        // Never publish a half control as prose, but do not lose it
+                        // silently either: surface what was dropped.
+                        let dropped = self.pending.len();
                         self.pending.clear();
+                        self.line_start = true;
+                        output.events.push(json!({
+                            "type": "activity",
+                            "kind": "error",
+                            "title": "Incomplete control line dropped",
+                            "detail": format!("An unfinished control ({dropped} bytes) was discarded at the end of the stream."),
+                        }).to_string());
                     }
                 }
                 break;
@@ -197,6 +207,23 @@ impl StreamControlGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interrupted_control_reports_discard_without_exposing_payload() {
+        let mut gate = StreamControlGate::new(true);
+        assert!(gate
+            .push("LANTOR_EVENT {\"type\":\"memory_append\",\"body\":\"private")
+            .visible
+            .is_empty());
+        let output = gate.finish(false);
+        assert!(output.visible.is_empty());
+        assert_eq!(output.events.len(), 1);
+        let event: serde_json::Value = serde_json::from_str(&output.events[0]).unwrap();
+        assert_eq!(event["kind"], "error");
+        assert_eq!(event["title"], "Incomplete control line dropped");
+        assert!(!output.events[0].contains("private"));
+        assert!(gate.finish(false).events.is_empty());
+    }
 
     #[test]
     fn every_utf8_boundary_filters_controls_without_changing_visible_text() {

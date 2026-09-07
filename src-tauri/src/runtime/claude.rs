@@ -25,7 +25,7 @@ use crate::runtime::{
     runtime_environment_changed,
     streaming::{
         append_streaming_agent_message, ensure_streaming_agent_message,
-        start_streaming_agent_text_block, streaming_message_exists,
+        reconcile_streaming_agent_message, start_streaming_agent_text_block,
     },
 };
 use crate::subscription_status::{
@@ -39,10 +39,16 @@ use crate::usage::{record_run_usage, usage_from_runtime_event};
 
 mod protocol;
 mod reaper;
+mod text;
 mod turn;
 
+use text::ClaudeTextState;
+
+#[cfg(test)]
+mod recovery_tests;
+
 use protocol::{
-    claude_message_text, claude_result_error, claude_result_text, claude_session_id,
+    claude_message_text_blocks, claude_result_error, claude_result_text, claude_session_id,
     claude_stream_event_activity, claude_stream_key, claude_streaming_command_text,
     claude_surface_boundary_marker, claude_text_delta, claude_user_input, claude_write_input,
     CLAUDE_MAX_RETRIES_ENV, DEFAULT_CLAUDE_MAX_RETRIES,
@@ -83,6 +89,73 @@ struct ClaudeActiveTurn {
     thread_root_id: Option<Uuid>,
     stream_key: String,
     pending_memory_context: Option<Option<String>>,
+    text: ClaudeTextState,
+}
+
+/// Reconcile complete provider text before finalization flushes the control gate.
+async fn reconcile_final_text(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    runtime: &Arc<WarmClaudeRuntime>,
+    value: &Value,
+) -> CommandResult<()> {
+    let blocks = claude_message_text_blocks(value);
+    let result = claude_result_text(value);
+    if blocks.is_none() && result.is_none() {
+        return Ok(());
+    }
+    let (mut text, run_id, channel_id, thread_root_id, stream_key) = {
+        let state = runtime.state.lock().await;
+        let Some(active) = state.active.as_ref() else {
+            return Ok(());
+        };
+        (
+            active.text.clone(),
+            active.run_id,
+            active.channel_id,
+            active.thread_root_id,
+            active.stream_key.clone(),
+        )
+    };
+    let changed = if let Some(blocks) = blocks {
+        text.assistant(
+            value.get("uuid").and_then(Value::as_str),
+            value.pointer("/message/id").and_then(Value::as_str),
+            &blocks,
+        )
+    } else if let Some(result) = result {
+        text.result(&result)
+    } else {
+        return Ok(());
+    };
+    if changed {
+        if let Some(channel_id) = channel_id {
+            reconcile_streaming_agent_message(
+                pool,
+                agent_id,
+                channel_id,
+                thread_root_id,
+                &stream_key,
+                &text.blocks(),
+            )
+            .await?;
+            record_agent_activity(
+                pool,
+                Some(agent_id),
+                Some(run_id),
+                "warning",
+                "Recovered incomplete streamed reply",
+                "Restored the reply from complete provider text; control events were deduplicated.",
+            )
+            .await?;
+        }
+    }
+    if let Some(active) = runtime.state.lock().await.active.as_mut() {
+        if active.run_id == run_id {
+            active.text = text;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -530,6 +603,7 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
                 thread_root_id,
                 stream_key,
                 pending_memory_context: next_injected_memory_context,
+                text: ClaudeTextState::default(),
             });
             Ok(())
         }
@@ -687,13 +761,24 @@ async fn handle_claude_warm_stdout_line(
     }
 
     if value.get("type").and_then(Value::as_str) == Some("stream_event")
+        && value.pointer("/event/type").and_then(Value::as_str) == Some("message_start")
+    {
+        if let Some(active) = runtime.state.lock().await.active.as_mut() {
+            active
+                .text
+                .start_message(value.pointer("/event/message/id").and_then(Value::as_str));
+        }
+    }
+
+    if value.get("type").and_then(Value::as_str) == Some("stream_event")
         && value.pointer("/event/type").and_then(Value::as_str) == Some("content_block_start")
         && value
             .pointer("/event/content_block/type")
             .and_then(Value::as_str)
             == Some("text")
     {
-        let active = runtime.state.lock().await.active.as_ref().map(|active| {
+        let active = runtime.state.lock().await.active.as_mut().map(|active| {
+            active.text.start_block();
             (
                 active.channel_id,
                 active.thread_root_id,
@@ -726,6 +811,7 @@ async fn handle_claude_warm_stdout_line(
                 } else {
                     None
                 };
+                active.text.push_delta(delta);
                 let active = (
                     active.run_id,
                     active.channel_id,
@@ -755,32 +841,7 @@ async fn handle_claude_warm_stdout_line(
         return Ok(());
     }
 
-    if let Some(text) = claude_message_text(&value).or_else(|| claude_result_text(&value)) {
-        let active = {
-            let state = runtime.state.lock().await;
-            state.active.as_ref().map(|active| {
-                (
-                    active.run_id,
-                    active.channel_id,
-                    active.thread_root_id,
-                    active.stream_key.clone(),
-                )
-            })
-        };
-        if let Some((_, Some(channel_id), thread_root_id, stream_key)) = active {
-            if !streaming_message_exists(pool, &stream_key).await? {
-                append_streaming_agent_message(
-                    pool,
-                    agent_id,
-                    channel_id,
-                    thread_root_id,
-                    &stream_key,
-                    &text,
-                )
-                .await?;
-            }
-        }
-    }
+    reconcile_final_text(pool, agent_id, runtime, &value).await?;
 
     if let Some(error) = claude_result_error(&value) {
         finish_warm_claude_active_turn(pool, agent_id, runtime, false, Some(error)).await?;
@@ -892,7 +953,7 @@ mod tests {
     };
 
     use super::{
-        finish_warm_claude_active_turn, ClaudeActiveTurn, WarmClaudeRuntime,
+        finish_warm_claude_active_turn, ClaudeActiveTurn, ClaudeTextState, WarmClaudeRuntime,
         CLAUDE_DISABLE_AUTO_MEMORY_ENV, CLAUDE_DISABLE_AUTO_MEMORY_VALUE,
     };
 
@@ -907,7 +968,7 @@ mod tests {
         );
     }
 
-    async fn test_runtime_with_active_turn(
+    pub(super) async fn test_runtime_with_active_turn(
         run_id: Uuid,
         work_item_id: Uuid,
         channel_id: Uuid,
@@ -936,6 +997,7 @@ mod tests {
                     thread_root_id: None,
                     stream_key,
                     pending_memory_context: None,
+                    text: ClaudeTextState::default(),
                 }),
                 session_id: Some("test-claude-session".to_owned()),
                 last_surface: None,

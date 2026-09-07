@@ -342,8 +342,117 @@ async fn append_visible_streaming_agent_message(
     Ok(message_id)
 }
 
-/// Claude reuses a stream key across separate text blocks. Retain the logical
-/// boundary so a control at the next block's start cannot join prior prose.
+/// Rebuild a partial reply from authoritative blocks, retaining control framing
+/// and replaying complete controls through the existing receipt deduplication.
+pub(crate) async fn reconcile_streaming_agent_message(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    channel_id: Uuid,
+    thread_root_id: Option<Uuid>,
+    stream_key: &str,
+    blocks: &[String],
+) -> CommandResult<()> {
+    let context = load_streaming_control_context(pool, stream_key).await?;
+    if let Some(delivery) =
+        sqlx::query_scalar::<_, String>("select delivery_state from messages where stream_key=$1")
+            .bind(stream_key)
+            .fetch_optional(pool)
+            .await
+            .map_err(to_string)?
+    {
+        if delivery != "streaming" {
+            return Ok(());
+        }
+    }
+
+    // Replace the partial gate as well as the body. Appending a full block to a
+    // pending prefix would corrupt control JSON; appending only a suffix cannot
+    // repair lost middle deltas or a block already flushed at a boundary.
+    let mut state = PendingStream {
+        gate: StreamControlGate::new(true),
+        agent_id,
+        channel_id,
+        thread_root_id,
+        hide_empty_reply: false,
+        has_visible_text: false,
+        queued_events: Vec::new(),
+    };
+    let mut visible = String::new();
+    let mut events = Vec::new();
+    for (index, block) in blocks.iter().enumerate() {
+        if index > 0 {
+            let output = state.gate.finish(false);
+            state.has_visible_text |= !output.visible.trim().is_empty();
+            if state.has_visible_text {
+                visible.push_str(&output.visible);
+            }
+            events.extend(output.events);
+            if !visible.is_empty() {
+                visible.push_str("\n\n");
+            }
+            state.gate = StreamControlGate::new(true);
+            state.has_visible_text = false;
+        }
+        let output = state.gate.push(block);
+        state.has_visible_text |= !output.visible.trim().is_empty();
+        if state.has_visible_text {
+            visible.push_str(&output.visible);
+        }
+        events.extend(output.events);
+    }
+    state.hide_empty_reply = events
+        .iter()
+        .any(|event| control_event_hides_empty_streaming_reply(event));
+    let hide_empty_reply = state.hide_empty_reply;
+    if context.is_none() {
+        state.queued_events.append(&mut events);
+    }
+    stream_buffers()
+        .lock()
+        .unwrap()
+        .insert(stream_buffer_key(pool, stream_key), state);
+
+    let message_id =
+        ensure_streaming_agent_message(pool, agent_id, channel_id, thread_root_id, stream_key)
+            .await?;
+    let (visible, _) = capped_stream_delta(&visible, 0);
+    let mut transaction = pool.begin().await.map_err(to_string)?;
+    let updated = sqlx::query(
+        "update messages set body=$2 where id=$1 and delivery_state='streaming' and body<>$2",
+    )
+    .bind(message_id)
+    .bind(&visible)
+    .execute(&mut *transaction)
+    .await
+    .map_err(to_string)?
+    .rows_affected();
+    if updated > 0 {
+        let message = load_message_patch_in_tx(&mut transaction, message_id).await?;
+        enqueue_ui_event_in_tx(
+            &mut transaction,
+            &UiEvent::MessageUpsert {
+                reason: "stream_reconciled",
+                message: &message,
+            },
+        )
+        .await?;
+    }
+    transaction.commit().await.map_err(to_string)?;
+
+    if let Some((agent_id, run_id, _)) = context {
+        // The existing per-run receipts make replay safe for controls already
+        // delivered by the stream, including message and memory writes.
+        for event in events {
+            handle_streaming_agent_event_json(pool, agent_id, run_id, &event).await?;
+        }
+        if hide_empty_reply && visible.is_empty() {
+            delete_streaming_agent_message(pool, message_id, "stream_event_consumed").await?;
+        }
+    }
+    Ok(())
+}
+
+/// Keep separate provider blocks from joining a control marker to earlier prose.
 pub(crate) async fn start_streaming_agent_text_block(
     pool: &SqlitePool,
     agent_id: Uuid,

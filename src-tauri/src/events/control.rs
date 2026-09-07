@@ -1366,7 +1366,10 @@ mod tests {
             "Working patch.\nLANTOR_EVENT\n{\"type\":\"activity\",\"title\":\"Step\"",
         );
 
-        assert!(events.is_empty());
+        assert_eq!(events.len(), 1);
+        let event: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
+        assert_eq!(event["title"], "Incomplete control line dropped");
+        assert_eq!(event["kind"], "error");
         assert_eq!(visible, "Working patch.");
     }
 
@@ -1387,7 +1390,10 @@ mod tests {
         );
 
         assert_eq!(visible, "Hello there.");
-        assert!(events.is_empty());
+        assert_eq!(events.len(), 1);
+        let event: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
+        assert_eq!(event["title"], "Incomplete control line dropped");
+        assert_eq!(event["kind"], "error");
     }
 
     #[test]
