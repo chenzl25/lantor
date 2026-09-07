@@ -329,7 +329,10 @@ fn strip_agent_event_prefix(text: &str) -> Option<&str> {
 mod stream_gate;
 pub(crate) use stream_gate::StreamControlGate;
 
-fn split_agent_event_jsons_from_text(text: &str, strip_incomplete_tail: bool) -> (String, Vec<String>) {
+fn split_agent_event_jsons_from_text(
+    text: &str,
+    strip_incomplete_tail: bool,
+) -> (String, Vec<String>) {
     let mut gate = StreamControlGate::new(false);
     let mut output = gate.push(text);
     let tail = gate.finish(!strip_incomplete_tail);
@@ -391,10 +394,12 @@ pub(crate) fn silent_reply_reason(body: &str) -> Option<String> {
     Some(reason.to_owned())
 }
 
+#[cfg(test)]
 pub(crate) fn split_streaming_agent_event_lines(body: &str) -> (String, Vec<String>) {
     split_agent_event_jsons_from_text(body, false)
 }
 
+#[cfg(test)]
 pub(crate) fn split_complete_streaming_agent_event_lines(body: &str) -> (String, Vec<String>) {
     split_streaming_agent_event_lines(body)
 }
@@ -1333,7 +1338,8 @@ mod tests {
             "引用 LANTOR_EVENT {\"type\":\"activity\"，这是不完整的示例。",
         ] {
             let (visible, events) = split_complete_streaming_agent_event_lines(body);
-            let (terminal_visible, terminal_events) = split_terminal_streaming_agent_event_lines(body);
+            let (terminal_visible, terminal_events) =
+                split_terminal_streaming_agent_event_lines(body);
             assert_eq!(visible, body);
             assert_eq!(terminal_visible, body);
             assert!(events.is_empty());

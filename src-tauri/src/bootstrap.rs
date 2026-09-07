@@ -359,7 +359,11 @@ async fn load_bootstrap_with_options(
                 .map(|item| item.thread_root_id.to_string()),
         );
         let relevant = |key: &String| {
-            key == "saved-messages" || key.rsplit(':').next().is_some_and(|id| relevant_ids.contains(id))
+            key == "saved-messages"
+                || key
+                    .rsplit(':')
+                    .next()
+                    .is_some_and(|id| relevant_ids.contains(id))
         };
         read_inbox_items.retain(|key, _| relevant(key));
         dismissed_inbox_items.retain(|key, _| relevant(key));

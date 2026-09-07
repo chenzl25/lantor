@@ -64,8 +64,7 @@ use crate::system_commands::check_runtime_in_env;
 use crate::ui_notifications::{enqueue_ui_event, enqueue_ui_event_in_tx, UiEvent};
 use crate::web_upload::parse_multipart_send_message;
 use crate::{
-    app::{to_string, CommandResult},
-    cancel_agent_work_in_pool, claim_task_in_pool, retry_agent_work_in_pool,
+    app::to_string, cancel_agent_work_in_pool, claim_task_in_pool, retry_agent_work_in_pool,
 };
 
 const WEB_SEND_MESSAGE_BODY_LIMIT: usize = 128 * 1024 * 1024;
@@ -335,7 +334,11 @@ fn web_router(state: Arc<WebState>, dist_dir: PathBuf) -> Router {
             ServeDir::new(&dist_dir)
                 .precompressed_gzip()
                 .precompressed_br()
-                .fallback(ServeFile::new(index).precompressed_gzip().precompressed_br()),
+                .fallback(
+                    ServeFile::new(index)
+                        .precompressed_gzip()
+                        .precompressed_br(),
+                ),
         )
     } else {
         app.fallback(get(move || missing_dist(dist_dir)))
@@ -480,12 +483,10 @@ async fn extract_send_message_request(
                 "multipart request is larger than 64MiB".to_owned(),
             ));
         }
-        let multipart = Multipart::from_request(
-            crate::web_upload::bounded_multipart_body(request),
-            state,
-        )
-        .await
-        .map_err(|rejection| rejection.into_response())?;
+        let multipart =
+            Multipart::from_request(crate::web_upload::bounded_multipart_body(request), state)
+                .await
+                .map_err(|rejection| rejection.into_response())?;
         return parse_multipart_send_message(multipart)
             .await
             .map_err(|error| api_error_status(error.status, error.message));
@@ -999,7 +1000,7 @@ fn requested_event_cursor(headers: &HeaderMap, query: &EventsQuery) -> Option<i6
 async fn event_stream_start(
     pool: &SqlitePool,
     requested_cursor: Option<i64>,
-) -> CommandResult<(i64, bool)> {
+) -> crate::app::CommandResult<(i64, bool)> {
     let mut subscription =
         crate::ui_event_hub::UiEventSubscription::connect(pool, requested_cursor).await?;
     let batch = subscription.recv().await?;
