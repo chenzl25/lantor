@@ -67,6 +67,11 @@ reminder worker, event pruning, and web server, then serves Lantor at
 `http://127.0.0.1:8787/` by default. Set `LANTOR_WEB_BIND` only when you need
 another bind address, or set it to `off` to disable browser access.
 
+During `npm run tauri:dev`, the desktop window uses Vite, while browser access
+on port 8787 serves `dist/`. After pulling frontend updates, run `npm run build`
+and refresh those browser pages to load the updates; restarting the desktop
+development app alone does not rebuild the browser bundle.
+
 `npm run build` also generates gzip/Brotli sidecars for text assets. The web
 server negotiates them via `Accept-Encoding` and keeps the original files for
 other clients; API/SSE routes are not affected. Serve the complete `dist/`

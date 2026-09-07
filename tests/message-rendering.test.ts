@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { retainEqual } from "../src/render-identity";
 import { activeProgressByAgent, indexProgress } from "../src/components/ActivityProgressDock";
-import type { AgentActivity, AgentRun, AgentWorkItem, Message } from "../src/types";
+import type { Agent, AgentActivity, AgentRun, AgentWorkItem, Message } from "../src/types";
 
 test("bootstrap structural sharing retains equal rows and nested attachments without ignoring edits", () => {
   const before = { a: { body: "plain", attachments: [{ id: "a", size: 3 }] }, b: { body: "old", metadata: { title: "before" } } };
@@ -60,4 +60,55 @@ test("terminal progress clears running candidates while empty streams and queued
   const run = { id: runId, status: "running", started_at: "2026-09-06T12:00:00Z", stopped_at: null } as AgentRun;
   assert.equal(activeProgressByAgent([], indexProgress([], [run], [{ ...item, status: "done" }], []), "channel", "root").length, 1, "active run wins over a settled work item");
   assert.deepEqual(activeProgressByAgent([], indexProgress([], [], [{ ...item, status: "done", updated_at: "2000-01-01T00:00:00Z" }], []), "channel", "root"), [], "expired completion does not stay active");
+});
+
+const progressRunId = "00000000-0000-4000-8000-000000000002";
+const progressAgent = { id: "agent", handle: "Hancock", display_name: "Air-Hancock", status: "idle" } as Agent;
+const progressRun = (status: string) => ({
+  id: progressRunId, agent_id: progressAgent.id, status,
+  started_at: "2026-09-06T12:00:00Z", stopped_at: status === "running" ? null : "2026-09-06T12:02:00Z",
+}) as AgentRun;
+const emptyStream = {
+  sender_agent_id: progressAgent.id, sender_name: progressAgent.display_name, sender_role: "agent",
+  delivery_state: "streaming", body: "", attachments: [], artifacts: [], stream_key: `${progressRunId}:pending`,
+  created_at: "2026-09-06T12:00:00Z", updated_at: "2026-09-06T12:01:00Z",
+} as Message;
+
+test("ended runs override orphaned streams and stale running work without a terminal activity", () => {
+  const activities = [activity("last-command", progressRunId, "Running command", 1)];
+  for (const status of ["exited", "failed", "cancelled", "unknown", "stopped", "completed"]) {
+    const runs = [progressRun(status)];
+    assert.deepEqual(activeProgressByAgent([emptyStream], indexProgress(activities, runs, [], [progressAgent]), "channel", "root"), [], status);
+    assert.deepEqual(activeProgressByAgent([], indexProgress(activities, runs, [work("w", "root", progressRunId)], [progressAgent]), "channel", "root"), [], `${status} overrides stale work`);
+  }
+});
+
+test("settled work clears immediately without requiring a later event to expire it", () => {
+  for (const status of ["done", "failed", "cancelled", "silent"]) {
+    const item = { ...work("w", "root", progressRunId, status), updated_at: new Date().toISOString() };
+    const index = indexProgress([], [], [item], []);
+    assert.deepEqual(activeProgressByAgent([], index, "channel", "root"), [], status);
+    assert.deepEqual(activeProgressByAgent([emptyStream], index, "channel", "root"), [], `${status} overrides orphaned stream`);
+  }
+});
+
+test("compacted run history uses agent identity and current state without hiding active work", () => {
+  // Display names differ from handles in real messages. Match sender_agent_id.
+  assert.deepEqual(activeProgressByAgent([emptyStream], indexProgress([], [], [], [progressAgent]), "channel", "root"), []);
+  const active = activeProgressByAgent([emptyStream], indexProgress([], [progressRun("running")], [], [progressAgent]), "channel", "root");
+  assert.equal(active.length, 1, "a live run wins over an older idle profile");
+  assert.equal(active[0].agent.id, progressAgent.id);
+  const item = work("w", "root", progressRunId);
+  assert.equal(activeProgressByAgent([emptyStream], indexProgress([], [], [item], [progressAgent]), "channel", "root").length, 1, "active work survives a missing run and an older idle profile");
+  const newerRun = { ...progressRun("running"), id: "newer-run", started_at: "2026-09-06T12:03:00Z" };
+  assert.deepEqual(activeProgressByAgent([emptyStream], indexProgress([], [newerRun], [], [{ ...progressAgent, status: "running" }]), "channel", "root"), [], "a newer run elsewhere cannot revive an old placeholder");
+});
+
+test("a queued successor remains queued after its prior run ends", () => {
+  const queued = work("next", "root", null, "queued");
+  const index = indexProgress([], [progressRun("failed")], [queued], [progressAgent]);
+  const progress = activeProgressByAgent([emptyStream], index, "channel", "root");
+  assert.equal(progress.length, 1);
+  assert.equal(progress[0].state, "queued");
+  assert.deepEqual(progress[0].queuedItems.map((item) => item.id), [queued.id]);
 });

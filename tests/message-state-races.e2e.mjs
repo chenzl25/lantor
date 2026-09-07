@@ -99,6 +99,25 @@ try {
   const context = await browser.newContext({ serviceWorkers: "block", viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 } });
   // randomUUID is unavailable on non-localhost HTTP mobile clients; getRandomValues remains available.
   await context.addInitScript(() => Object.defineProperty(crypto, "randomUUID", { value: undefined }));
+  // Hold the ephemeral flush like a suspended tab. Terminal lifecycle events
+  // must clear progress even while a prior running/usage patch is buffered.
+  await context.addInitScript(() => {
+    const raf = window.requestAnimationFrame.bind(window), timeout = window.setTimeout.bind(window);
+    const cancelRaf = window.cancelAnimationFrame.bind(window), cancelTimeout = window.clearTimeout.bind(window);
+    const pending = new Map(); let next = -1;
+    const hold = callback => { const id = next--; pending.set(id, callback); return id; };
+    window.__progressFlushGate = { held: false, resume() {
+      this.held = false;
+      const callbacks = [...pending.values()]; pending.clear();
+      for (const callback of callbacks) callback();
+    } };
+    window.requestAnimationFrame = callback => window.__progressFlushGate.held
+      ? hold(() => callback(performance.now())) : raf(callback);
+    window.setTimeout = (callback, delay, ...args) => window.__progressFlushGate.held && delay === 80
+      ? hold(() => callback(...args)) : timeout(callback, delay, ...args);
+    window.cancelAnimationFrame = id => { if (!pending.delete(id)) cancelRaf(id); };
+    window.clearTimeout = id => { if (!pending.delete(id)) cancelTimeout(id); };
+  });
   const page = await context.newPage(); page.setDefaultTimeout(5000);
   const errors = []; page.on("pageerror", error => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${api.address().port}`, { waitUntil: "domcontentloaded" });
@@ -191,6 +210,56 @@ try {
     await expectStatus("idle");
     assert.equal(count("bootstrap"), bootstrapBeforeStatus, "lifecycle synchronization never bootstraps");
     console.log("PASS: completion, stale in-flight profile read, queued successor, start/failure, usage-only batching");
+
+    for (const surface of [".conversation", ".thread"]) {
+      if (mobile && surface === ".conversation" && await page.locator(".thread textarea").isVisible()) {
+        await page.getByRole("button", { name: "Back to channel", exact: true }).click();
+      }
+      if (surface === ".thread" && !await page.locator(".thread textarea").isVisible()) {
+        const rootRow = page.locator(`.conversation [data-message-id="${root.id}"]`);
+        if (mobile) await rootRow.locator(".markdown-body").click();
+        else { await rootRow.hover(); await rootRow.getByRole("button", { name: "View thread replies", exact: true }).click(); }
+        await page.locator(".thread textarea").waitFor();
+      }
+      for (const terminal of ["exited", "unknown", "failed"]) {
+        const runId = id(++seq), threadRootId = surface === ".thread" ? root.id : null;
+        const liveRun = run("running", { id: runId });
+        const item = { id: id(++seq), agent_id: agentId, agent_handle: agent.handle, channel_id: channelId,
+          channel_name: "race-test", thread_root_id: threadRootId, source_message_id: root.id,
+          task_id: null, task_number: null, source_kind: "mention", title: "Progress fixture", context: "",
+          status: "running", run_id: runId, created_at: now, updated_at: now, completed_at: null };
+        const placeholder = message("", { sender_agent_id: agentId, sender_name: agent.display_name, sender_role: "agent",
+          delivery_state: "streaming", stream_key: `${runId}:pending`, thread_root_id: threadRootId });
+        agent.status = "running";
+        state.agent_runs.push(liveRun); state.agent_work_items.push(item); state.messages.push(placeholder);
+        publish({ type: "agent_run_upsert", reason: "run_running", run: liveRun });
+        publish({ type: "work_item_upsert", work_item: item });
+        publish({ type: "message_upsert", message: placeholder });
+        await page.locator(`${surface} .activity-progress-summary[data-state="working"]`).waitFor();
+        await page.waitForTimeout(150);
+        await page.evaluate(() => { window.__progressFlushGate.held = true; });
+        publish({ type: "agent_run_upsert", reason: "run_usage", run: { ...liveRun, input_tokens: 10 } });
+        agent.status = "idle";
+        Object.assign(liveRun, { status: terminal, stopped_at: new Date().toISOString() });
+        publish({ type: "agent_run_upsert", reason: "run_finished", run: liveRun });
+        // Neither a final activity nor a completed message/work-item event is
+        // sent: failures/restarts can leave all three missing in persisted data.
+        await page.waitForFunction(selector => !document.querySelector(selector), `${surface} .activity-progress-dock`, { polling: 20 });
+        await page.evaluate(() => window.__progressFlushGate.resume());
+        await page.waitForTimeout(150);
+        assert.equal(await page.locator(`${surface} .activity-progress-dock`).count(), 0, `${terminal} cannot be overwritten by buffered running state`);
+        item.status = "done"; item.updated_at = new Date().toISOString();
+        publish({ type: "work_item_upsert", work_item: item });
+      }
+    }
+    // An old run may fall outside the bootstrap's 30-row history. Idle profiles
+    // still suppress its empty stream after a reload, using the sender's ID.
+    state.agent_runs = []; state.agent_work_items = [];
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator(".conversation textarea").waitFor({ state: "attached" });
+    await page.waitForTimeout(200);
+    assert.equal(await page.locator(".activity-progress-dock").count(), 0, "compacted history does not revive orphan streams");
+    console.log("PASS: channel/thread terminal progress, suspended flush, no terminal activity/message, compacted history reload");
   }
   assert.deepEqual(errors, []);
 } finally {
