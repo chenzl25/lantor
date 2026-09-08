@@ -174,16 +174,26 @@ export function limitActivitiesPerAgent(activities: AgentActivity[]) {
     });
 }
 
+// Optimistic sends sort after every persisted message; an empty streaming
+// placeholder sorts after those too. The backend reserves the placeholder when
+// a run starts and only assigns its real seq with the first visible text, so
+// until then it must not hold a slot above messages posted in the meantime.
+const OPTIMISTIC_SORT_SEQ = Number.MAX_SAFE_INTEGER - 1;
+const PENDING_REPLY_SORT_SEQ = Number.MAX_SAFE_INTEGER;
+
+function messageSortSeq(message: Message) {
+  if (message.delivery_state === "streaming" && !message.body.trim()) {
+    return PENDING_REPLY_SORT_SEQ;
+  }
+  return Number.isSafeInteger(message.seq) && message.seq > 0
+    ? message.seq
+    : OPTIMISTIC_SORT_SEQ;
+}
+
 export function sortMessages(messages: Message[]) {
   return [...messages].sort((left, right) => {
-    const leftSeq =
-      Number.isSafeInteger(left.seq) && left.seq > 0
-        ? left.seq
-        : Number.MAX_SAFE_INTEGER;
-    const rightSeq =
-      Number.isSafeInteger(right.seq) && right.seq > 0
-        ? right.seq
-        : Number.MAX_SAFE_INTEGER;
+    const leftSeq = messageSortSeq(left);
+    const rightSeq = messageSortSeq(right);
     if (leftSeq !== rightSeq) return leftSeq - rightSeq;
     return (
       new Date(left.created_at).getTime() -

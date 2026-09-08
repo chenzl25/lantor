@@ -9,6 +9,7 @@ import {
   parseBackendEventPayload,
   reconcileHydratedMessageDelta,
   reconcileThreadHydration,
+  sortMessages,
   type SnapshotApplyOptions,
 } from "../src/state-sync";
 import type {
@@ -641,4 +642,30 @@ test("scoped state patches preserve history, project task status and remove dele
   assert.ok(scopesForRefresh("task_status_updated")?.includes("tasks"));
   assert.equal(scopesForRefresh("event_replay_gap"), null);
   assert.equal(scopesForRefresh("future_unknown_event"), null);
+});
+
+test("an empty streaming placeholder sorts after messages posted while the agent works", () => {
+  const room = channel("room");
+  const placeholder = message("placeholder", room.id, {
+    seq: 5,
+    sender_role: "agent",
+    sender_name: "Vegapunk",
+    body: "",
+    delivery_state: "streaming",
+    stream_key: "11111111-1111-1111-1111-111111111111:item-1",
+  });
+  const followup = message("followup", room.id, { seq: 6 });
+  const optimistic = message("optimistic", room.id, { seq: 0 });
+
+  assert.deepEqual(
+    sortMessages([placeholder, followup, optimistic]).map((item) => item.id),
+    ["followup", "optimistic", "placeholder"],
+  );
+
+  // The backend reassigns seq when the first visible text lands.
+  const replied = { ...placeholder, seq: 7, body: "Hel" };
+  assert.deepEqual(
+    sortMessages([replied, followup, optimistic]).map((item) => item.id),
+    ["followup", "placeholder", "optimistic"],
+  );
 });

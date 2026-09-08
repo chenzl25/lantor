@@ -1695,25 +1695,25 @@
       "n": 0
     },
     {
-      "selector": ".thread-back-to-bottom",
+      "selector": ".thread-back-to-bottom, .message-list-back-to-bottom",
       "prop": "background",
       "literal": "rgba(255, 255, 255, 0.94)",
       "n": 0
     },
     {
-      "selector": ".thread-back-to-bottom",
+      "selector": ".thread-back-to-bottom, .message-list-back-to-bottom",
       "prop": "border",
       "literal": "rgba(10, 132, 255, 0.18)",
       "n": 0
     },
     {
-      "selector": ".thread-back-to-bottom",
+      "selector": ".thread-back-to-bottom, .message-list-back-to-bottom",
       "prop": "box-shadow",
       "literal": "rgba(15, 23, 42, 0.13)",
       "n": 0
     },
     {
-      "selector": ".thread-back-to-bottom:hover",
+      "selector": ".thread-back-to-bottom:hover, .message-list-back-to-bottom:hover",
       "prop": "background",
       "literal": "#fff",
       "n": 0

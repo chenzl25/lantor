@@ -1,4 +1,5 @@
 import {
+  ArrowDown,
   ArrowLeft,
   ArrowRight,
   BookOpen,
@@ -183,6 +184,7 @@ export function Conversation({
   const bottomScrollFrameRef = useRef<number | null>(null);
   const messageListGeometryRef = useRef({ scrollHeight: 0, clientHeight: 0 });
   const shouldFollowMessagesRef = useRef(true);
+  const [showBackToBottom, setShowBackToBottom] = useState(false);
   const focusedMessageScrollKeyRef = useRef<string | null>(null);
   const userMessageScrollUntilRef = useRef(0);
   const messageListMetricsRef = useRef({ scrollHeight: 0, scrollTop: 0, clientHeight: 0 });
@@ -409,7 +411,16 @@ export function Conversation({
       // Includes keyboard, scrollbar and assistive scrolling, beyond wheel/touch.
       stopFollowingMessages(element);
     }
+    const shouldShowBackToBottom = Boolean(channel) && !atBottom && !shouldFollowMessagesRef.current;
+    setShowBackToBottom((current) => current === shouldShowBackToBottom ? current : shouldShowBackToBottom);
     rememberMessageListMetrics(element);
+  }
+
+  function returnMessagesToBottom() {
+    shouldFollowMessagesRef.current = true;
+    userMessageScrollUntilRef.current = 0;
+    setShowBackToBottom(false);
+    scrollMessagesToBottom();
   }
 
   function handleMessageListWheel(event: ReactWheelEvent<HTMLDivElement>) {
@@ -505,6 +516,7 @@ export function Conversation({
   useLayoutEffect(() => {
     messageListGeometryRef.current = { scrollHeight: 0, clientHeight: 0 };
     shouldFollowMessagesRef.current = true;
+    setShowBackToBottom(false);
     scrollMessagesToBottom();
   }, [channel?.id]);
 
@@ -813,6 +825,12 @@ export function Conversation({
             <div ref={messageListBottomAnchorRef} className="message-list-bottom-anchor" aria-hidden="true" />
           </div>
           </div>
+          {channel && showBackToBottom && (
+            <button type="button" className="message-list-back-to-bottom" onClick={returnMessagesToBottom}>
+              <ArrowDown size={15} />
+              Back to bottom
+            </button>
+          )}
           {messageMenu && (
             <MessageActionMenu
               x={messageMenu.x}

@@ -248,24 +248,57 @@ async fn append_visible_streaming_agent_message(
             "streaming"
         };
         let mut transaction = pool.begin().await.map_err(to_string)?;
-        sqlx::query("update messages set body = body || $2, delivery_state = $3 where id = $1")
+        // The placeholder row is reserved when the run starts, possibly minutes
+        // before any prose. Order the reply from its first visible text instead,
+        // so messages posted meanwhile stay ahead of it. The control gate
+        // strips leading whitespace-only output, so an empty body means no
+        // visible text has landed yet.
+        if body_len <= 0 && !append_delta.trim().is_empty() {
+            sqlx::query(
+                r#"
+                update messages
+                set body = body || $2,
+                    delivery_state = $3,
+                    seq = (select coalesce(max(seq), 0) + 1 from messages),
+                    created_at = strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')
+                where id = $1
+                "#,
+            )
             .bind(message_id)
             .bind(&append_delta)
             .bind(delivery_state)
             .execute(&mut *transaction)
             .await
             .map_err(to_string)?;
-        enqueue_ui_event_in_tx(
-            &mut transaction,
-            &UiEvent::MessageDelta {
-                reason: "stream_delta",
-                message_id,
-                append: &append_delta,
-                body_length: body_len.max(0) as usize + append_delta.chars().count(),
-                delivery_state,
-            },
-        )
-        .await?;
+            let message = load_message_patch_in_tx(&mut transaction, message_id).await?;
+            enqueue_ui_event_in_tx(
+                &mut transaction,
+                &UiEvent::MessageUpsert {
+                    reason: "stream_first_text",
+                    message: &message,
+                },
+            )
+            .await?;
+        } else {
+            sqlx::query("update messages set body = body || $2, delivery_state = $3 where id = $1")
+                .bind(message_id)
+                .bind(&append_delta)
+                .bind(delivery_state)
+                .execute(&mut *transaction)
+                .await
+                .map_err(to_string)?;
+            enqueue_ui_event_in_tx(
+                &mut transaction,
+                &UiEvent::MessageDelta {
+                    reason: "stream_delta",
+                    message_id,
+                    append: &append_delta,
+                    body_length: body_len.max(0) as usize + append_delta.chars().count(),
+                    delivery_state,
+                },
+            )
+            .await?;
+        }
         transaction.commit().await.map_err(to_string)?;
         if truncated && complete_on_truncation {
             queue_agent_message_mentions(pool, message_id).await?;
@@ -417,15 +450,40 @@ pub(crate) async fn reconcile_streaming_agent_message(
             .await?;
     let (visible, _) = capped_stream_delta(&visible, 0);
     let mut transaction = pool.begin().await.map_err(to_string)?;
-    let updated = sqlx::query(
-        "update messages set body=$2 where id=$1 and delivery_state='streaming' and body<>$2",
-    )
-    .bind(message_id)
-    .bind(&visible)
-    .execute(&mut *transaction)
-    .await
-    .map_err(to_string)?
-    .rows_affected();
+    let stored_len: i64 = sqlx::query_scalar("select length(body) from messages where id = $1")
+        .bind(message_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(to_string)?;
+    // Same rule as the live delta path: the reply takes its order from the
+    // first visible text, not from the placeholder reserved at run start.
+    let updated = if stored_len <= 0 && !visible.trim().is_empty() {
+        sqlx::query(
+            r#"
+            update messages
+            set body = $2,
+                seq = (select coalesce(max(seq), 0) + 1 from messages),
+                created_at = strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')
+            where id = $1 and delivery_state = 'streaming' and body <> $2
+            "#,
+        )
+        .bind(message_id)
+        .bind(&visible)
+        .execute(&mut *transaction)
+        .await
+        .map_err(to_string)?
+        .rows_affected()
+    } else {
+        sqlx::query(
+            "update messages set body=$2 where id=$1 and delivery_state='streaming' and body<>$2",
+        )
+        .bind(message_id)
+        .bind(&visible)
+        .execute(&mut *transaction)
+        .await
+        .map_err(to_string)?
+        .rows_affected()
+    };
     if updated > 0 {
         let message = load_message_patch_in_tx(&mut transaction, message_id).await?;
         enqueue_ui_event_in_tx(

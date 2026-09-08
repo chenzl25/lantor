@@ -5071,6 +5071,7 @@ mark {
 
 :root[data-theme="dark"] .mention-picker,
 :root[data-theme="dark"] .thread-back-to-bottom,
+:root[data-theme="dark"] .message-list-back-to-bottom,
 :root[data-theme="dark"] .agent-form-preview,
 :root[data-theme="dark"] .owner-profile-preview {
   border-color: var(--border-subtle);
@@ -5079,7 +5080,8 @@ mark {
   box-shadow: none;
 }
 
-:root[data-theme="dark"] .thread-back-to-bottom:hover {
+:root[data-theme="dark"] .thread-back-to-bottom:hover,
+:root[data-theme="dark"] .message-list-back-to-bottom:hover {
   background: var(--bg-control-hover);
 }
 
@@ -7586,7 +7588,8 @@ body.resizing-column * {
   height: 1px;
 }
 
-.thread-back-to-bottom {
+.thread-back-to-bottom,
+.message-list-back-to-bottom {
   position: absolute;
   left: 50%;
   bottom: 12px;
@@ -7608,7 +7611,8 @@ body.resizing-column * {
   transform: translateX(-50%);
 }
 
-.thread-back-to-bottom:hover {
+.thread-back-to-bottom:hover,
+.message-list-back-to-bottom:hover {
   background: #fff;
   transform: translateX(-50%) translateY(-1px);
 }

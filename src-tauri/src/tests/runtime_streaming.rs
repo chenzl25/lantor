@@ -3,7 +3,8 @@ use super::{
     append_streaming_agent_message_deferred_completion, consume_streaming_agent_control_lines,
     dispatch_streaming_agent_message_mentions, ensure_streaming_agent_message,
     finish_streaming_agent_message, finish_streaming_agent_message_deferred_mentions,
-    maybe_hide_silent_streaming_reply, streaming_message_body_is_empty,
+    maybe_hide_silent_streaming_reply, reconcile_streaming_agent_message,
+    streaming_message_body_is_empty,
 };
 use crate::domain::reminders::load_reminders;
 use crate::message_store::load_messages;
@@ -1358,5 +1359,140 @@ async fn text_block_boundary_keeps_next_control_out_of_prior_prose() {
             .await
             .unwrap();
     assert_eq!(accepted, 1);
+    drop_test_schema(pool, database).await;
+}
+
+async fn message_seq(pool: &sqlx::SqlitePool, message_id: Uuid) -> i64 {
+    sqlx::query_scalar("select seq from messages where id = $1")
+        .bind(message_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn insert_owner_message(pool: &sqlx::SqlitePool, channel_id: Uuid, body: &str) -> Uuid {
+    sqlx::query_scalar(
+        "insert into messages (channel_id, sender_name, sender_role, body) values ($1, 'Dylan', 'owner', $2) returning id",
+    )
+    .bind(channel_id)
+    .bind(body)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn latest_ui_event(pool: &sqlx::SqlitePool) -> Value {
+    let event_json: String =
+        sqlx::query_scalar("select event_json from ui_events order by id desc limit 1")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    serde_json::from_str(&event_json).unwrap()
+}
+
+#[tokio::test]
+async fn first_visible_text_orders_reply_after_messages_posted_meanwhile() {
+    let Some((pool, database)) = test_pool().await else {
+        return;
+    };
+    let agent_id = insert_test_agent(&pool, "late-replier").await.unwrap();
+    let channel_id = insert_test_channel(&pool, "reply-order").await.unwrap();
+    let stream_key = "run-order:item-1";
+
+    let placeholder_id =
+        ensure_streaming_agent_message(&pool, agent_id, channel_id, None, stream_key)
+            .await
+            .unwrap();
+    let owner_id = insert_owner_message(&pool, channel_id, "done yet?").await;
+    let owner_seq = message_seq(&pool, owner_id).await;
+    assert!(message_seq(&pool, placeholder_id).await < owner_seq);
+
+    let reply_id =
+        append_streaming_agent_message(&pool, agent_id, channel_id, None, stream_key, "Hel")
+            .await
+            .unwrap();
+    assert_eq!(reply_id, placeholder_id);
+    let reply_seq = message_seq(&pool, reply_id).await;
+    assert!(
+        reply_seq > owner_seq,
+        "reply should sort after the owner message posted meanwhile"
+    );
+    let event = latest_ui_event(&pool).await;
+    assert_eq!(event["type"], "message_upsert");
+    assert_eq!(event["reason"], "stream_first_text");
+    assert_eq!(event["message"]["body"], "Hel");
+    assert_eq!(event["message"]["seq"], reply_seq);
+
+    append_streaming_agent_message(&pool, agent_id, channel_id, None, stream_key, "lo")
+        .await
+        .unwrap();
+    assert_eq!(
+        message_seq(&pool, reply_id).await,
+        reply_seq,
+        "later deltas keep the order"
+    );
+    let event = latest_ui_event(&pool).await;
+    assert_eq!(event["type"], "message_delta");
+    assert_eq!(event["append"], "lo");
+
+    finish_streaming_agent_message(&pool, stream_key, "complete")
+        .await
+        .unwrap();
+    assert_eq!(message_seq(&pool, reply_id).await, reply_seq);
+    drop_test_schema(pool, database).await;
+}
+
+#[tokio::test]
+async fn reconciled_first_visible_text_orders_reply_after_messages_posted_meanwhile() {
+    let Some((pool, database)) = test_pool().await else {
+        return;
+    };
+    let agent_id = insert_test_agent(&pool, "reconciled-replier")
+        .await
+        .unwrap();
+    let channel_id = insert_test_channel(&pool, "reconciled-order")
+        .await
+        .unwrap();
+    let stream_key = "run-reconcile:item-1";
+
+    let placeholder_id =
+        ensure_streaming_agent_message(&pool, agent_id, channel_id, None, stream_key)
+            .await
+            .unwrap();
+    let owner_id = insert_owner_message(&pool, channel_id, "still there?").await;
+    let owner_seq = message_seq(&pool, owner_id).await;
+
+    reconcile_streaming_agent_message(
+        &pool,
+        agent_id,
+        channel_id,
+        None,
+        stream_key,
+        &["Hello".to_owned()],
+    )
+    .await
+    .unwrap();
+    let reply_seq = message_seq(&pool, placeholder_id).await;
+    assert!(reply_seq > owner_seq);
+    let event = latest_ui_event(&pool).await;
+    assert_eq!(event["type"], "message_upsert");
+    assert_eq!(event["reason"], "stream_reconciled");
+    assert_eq!(event["message"]["body"], "Hello");
+
+    reconcile_streaming_agent_message(
+        &pool,
+        agent_id,
+        channel_id,
+        None,
+        stream_key,
+        &["Hello again".to_owned()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        message_seq(&pool, placeholder_id).await,
+        reply_seq,
+        "rebuilding a non-empty body keeps the order"
+    );
     drop_test_schema(pool, database).await;
 }
