@@ -27,22 +27,26 @@ pub(crate) async fn update_owner_profile_in_pool(
     if display_name.is_empty() {
         return Err("display name is empty".to_owned());
     }
+    // Web forms echo the served `/api/avatars/...` URL back; keep the stored image.
+    let avatar = avatar.trim();
+    let avatar = (!crate::web_avatar::is_avatar_url(avatar)).then_some(avatar);
 
     let mut transaction = pool.begin().await.map_err(to_string)?;
     sqlx::query(
         r#"
         insert into owner_profile (id, display_name, avatar, description, updated_at)
-        values (1, $1, $2, $3, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
+        values (1, $1, coalesce($2, $4), $3, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
         on conflict (id) do update set
             display_name = excluded.display_name,
-            avatar = excluded.avatar,
+            avatar = coalesce($2, owner_profile.avatar),
             description = excluded.description,
             updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
         "#,
     )
     .bind(display_name)
-    .bind(avatar.trim())
+    .bind(avatar)
     .bind(description.trim())
+    .bind(DEFAULT_OWNER_AVATAR)
     .execute(&mut *transaction)
     .await
     .map_err(to_string)?;
@@ -297,6 +301,8 @@ pub(crate) async fn update_agent_in_pool(
                 .map(|c| c.to_uppercase().to_string())
                 .unwrap_or_else(|| "A".to_owned())
         });
+    // Web forms echo the served `/api/avatars/...` URL back; keep the stored image.
+    let avatar = (!crate::web_avatar::is_avatar_url(&avatar)).then_some(avatar);
     let daily_budget_micros = daily_budget_micros.unwrap_or_default().max(0);
     let working_directory = expand_home_path(&working_directory);
     ensure_agent_workspace(&working_directory, normalized_handle)?;
@@ -326,7 +332,7 @@ pub(crate) async fn update_agent_in_pool(
             role = $4,
             runtime = $5,
             model = $6,
-            avatar = $7,
+            avatar = coalesce($7, avatar),
             description = $8,
             launch_command = $9,
             environment_variables = $10,

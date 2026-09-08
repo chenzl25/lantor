@@ -41,6 +41,7 @@ mod ui_notifications;
 mod ui_state;
 mod usage;
 mod web;
+mod web_avatar;
 mod web_upload;
 
 use std::{env, fs, path::PathBuf};

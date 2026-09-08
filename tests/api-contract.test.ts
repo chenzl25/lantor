@@ -13,7 +13,7 @@ function source(path: string) {
 
 test("shared API command contract matches the Axum routes", () => {
   const webSource = source("src-tauri/src/web.rs");
-  const infrastructureRoutes = new Set(["health", "events", "attachments"]);
+  const infrastructureRoutes = new Set(["health", "events", "attachments", "avatars"]);
   const routeCommands = Array.from(
     webSource.matchAll(/\.route\(\s*"\/api\/([a-z_]+)/g),
     (match) => match[1],

@@ -207,6 +207,8 @@ fn web_router(state: Arc<WebState>, dist_dir: PathBuf) -> Router {
             post(api_load_ui_state).layer(CompressionLayer::new()),
         )
         .route("/api/attachments/{attachment_id}", get(api_attachment))
+        .route("/api/avatars/owner", get(api_owner_avatar))
+        .route("/api/avatars/agents/{agent_id}", get(api_agent_avatar))
         .route(
             "/api/send_message",
             post(api_send_message).layer(DefaultBodyLimit::max(WEB_SEND_MESSAGE_BODY_LIMIT)),
@@ -441,7 +443,10 @@ async fn api_bootstrap(
         },
     )
     .await
-    .map(Json)
+    .map(|mut bootstrap| {
+        crate::web_avatar::rewrite_bootstrap(&mut bootstrap);
+        Json(bootstrap)
+    })
     .map_err(api_error)
 }
 
@@ -1026,10 +1031,14 @@ async fn api_load_agent_detail(
     State(state): State<Arc<WebState>>,
     Json(request): Json<AgentIdRequest>,
 ) -> Result<impl IntoResponse, Response> {
-    crate::ui_state::load_agent_detail_in_pool(&state.pool, request.agent_id)
+    let detail = crate::ui_state::load_agent_detail_in_pool(&state.pool, request.agent_id)
         .await
-        .map(Json)
-        .map_err(api_error)
+        .map_err(api_error)?;
+    let mut detail = serde_json::to_value(detail)
+        .map_err(to_string)
+        .map_err(api_error)?;
+    crate::web_avatar::rewrite_avatars(&mut detail);
+    Ok(Json(detail))
 }
 
 #[derive(Deserialize)]
@@ -1054,7 +1063,10 @@ async fn api_load_ui_state(
 ) -> Result<impl IntoResponse, Response> {
     crate::ui_state::load_ui_state_in_pool(&state.pool, request.scopes)
         .await
-        .map(Json)
+        .map(|mut patch| {
+            crate::web_avatar::rewrite_avatars(&mut patch);
+            Json(patch)
+        })
         .map_err(api_error)
 }
 
@@ -1090,6 +1102,36 @@ async fn api_events(
         }
     };
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+async fn api_owner_avatar(
+    State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
+) -> Result<Response, Response> {
+    let profile = crate::agent_profile::load_owner_profile(&state.pool)
+        .await
+        .map_err(api_error)?;
+    Ok(crate::web_avatar::avatar_response(
+        &profile.avatar,
+        &headers,
+    ))
+}
+
+async fn api_agent_avatar(
+    State(state): State<Arc<WebState>>,
+    AxumPath(agent_id): AxumPath<Uuid>,
+    headers: HeaderMap,
+) -> Result<Response, Response> {
+    let avatar: Option<String> = sqlx::query_scalar("select avatar from agents where id = $1")
+        .bind(agent_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(to_string)
+        .map_err(api_error)?;
+    let avatar = avatar.ok_or_else(|| {
+        api_error_status(StatusCode::NOT_FOUND, "agent does not exist".to_owned())
+    })?;
+    Ok(crate::web_avatar::avatar_response(&avatar, &headers))
 }
 
 async fn api_attachment(

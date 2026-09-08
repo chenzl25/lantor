@@ -28,7 +28,7 @@ const PROFILE_POPOVER_VIEWPORT_MARGIN = 12;
 const PROFILE_POPOVER_MEDIA_QUERY = "(hover: hover) and (pointer: fine) and (min-width: 761px)";
 
 function isImageAvatar(value: string) {
-  return /^https?:\/\//i.test(value) || /^data:image\//i.test(value);
+  return /^https?:\/\//i.test(value) || /^data:image\//i.test(value) || value.startsWith("/api/avatars/");
 }
 
 function avatarGlyph(value: string) {

@@ -11,6 +11,8 @@ Web bootstrap and `currentChannelOnly` desktop bootstrap return summaries for th
 | Thread activity | Loaded roots and unread threads; includes total visible `reply_count` | Activity/search and thread expansion reload thread metadata |
 | Inbox markers | Keys for returned entities, channels and the saved-message marker | Activity/search load complete marker collections |
 
+Web responses (bootstrap, `load_ui_state`, `load_agent_detail`) replace inline `data:image/...;base64` avatars with immutable `/api/avatars/owner?v=<digest>` / `/api/avatars/agents/<id>?v=<digest>` URLs served with a content-digest ETag; base64 does not compress, so one uploaded avatar otherwise costs 100KB+ per payload. A web form that echoes such a URL back leaves the stored avatar unchanged. Desktop payloads keep the data URLs.
+
 Run logs and artifact bodies retain their existing on-demand APIs. Message bodies displayed in the first screen are not truncated, so 300 KB is a representative workload target, not a hard response limit for arbitrary message sizes. Reply counts come from the server even when only two replies are loaded. Opening a thread loads its complete history; pagination of an unusually large individual thread is a separate concern.
 
 Lazy hydration preserves rows edited or removed after the request began. Agent editing waits for configuration hydration. Thread requests are cancelled logically on close/navigation and repeated after snapshot cursor changes, so replay-gap recovery can restore replies outside the compact window. Normal mutations, SSE replay, and the versioned `load_ui_state` invalidation contract remain unchanged; collection reads still return full rows.
