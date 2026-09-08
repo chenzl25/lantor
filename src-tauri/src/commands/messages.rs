@@ -38,9 +38,19 @@ pub(crate) async fn send_message(
 #[tauri::command]
 pub(crate) async fn load_channel_messages(
     channel_id: Uuid,
+    limit: Option<i64>,
+    roots_only: Option<bool>,
     state: State<'_, AppState>,
 ) -> CommandResult<ChannelMessagePage> {
-    application::load_channel_messages(&state.pool, LoadChannelMessagesRequest { channel_id }).await
+    application::load_channel_messages(
+        &state.pool,
+        LoadChannelMessagesRequest {
+            channel_id,
+            limit,
+            roots_only: roots_only.unwrap_or(false),
+        },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -93,11 +103,13 @@ pub(crate) async fn load_older_channel_messages(
     channel_id: Uuid,
     before_seq: i64,
     limit: i64,
+    roots_only: Option<bool>,
     state: State<'_, AppState>,
 ) -> CommandResult<ChannelMessagePage> {
     application::load_older_channel_messages(
         &state.pool,
         LoadOlderChannelMessagesRequest {
+            roots_only: roots_only.unwrap_or(false),
             channel_id,
             before_seq,
             limit,

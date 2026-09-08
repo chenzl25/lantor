@@ -86,7 +86,7 @@ export function useMessageRows(
         deletedAgent: hideAgent || agent ? null : deletedAgentForMessageSender(message),
         ownerAvatar: message.sender_role === "owner" ? ownerAvatar : null,
         references,
-        reply: summary || progress.length ? { latestAt: summary?.latest?.created_at ?? null, participants, progress } : null,
+        reply: summary || progress.length ? { latestAt: summary?.latestAt ?? summary?.latest?.created_at ?? null, participants, progress } : null,
       }];
     }));
   }, [visibleMessages, messages, channels, index, agents, owner, hideAgent, summaries, progressByRoot]);

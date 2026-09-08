@@ -72,6 +72,7 @@ pub(crate) async fn load_channels(pool: &SqlitePool) -> CommandResult<Vec<Channe
             c.description,
             c.kind,
             c.dm_agent_id,
+            (select created_at from messages m where m.channel_id = c.id order by m.seq desc limit 1) as latest_message_at,
             cast((
                 select count(*) from messages m
                 where m.channel_id = c.id
@@ -134,6 +135,7 @@ pub(crate) async fn load_channels(pool: &SqlitePool) -> CommandResult<Vec<Channe
             unread_count: row.get("unread_count"),
             github_unread_count: row.get("github_unread_count"),
             github_review_synced_at: row.get("github_review_synced_at"),
+            latest_message_at: row.get("latest_message_at"),
         })
         .collect())
 }
@@ -141,9 +143,16 @@ pub(crate) async fn load_channels(pool: &SqlitePool) -> CommandResult<Vec<Channe
 pub(crate) async fn load_thread_activities(
     pool: &SqlitePool,
 ) -> CommandResult<Vec<ThreadActivity>> {
+    load_channel_thread_activities(pool, None).await
+}
+
+pub(crate) async fn load_channel_thread_activities(
+    pool: &SqlitePool,
+    channel_id: Option<Uuid>,
+) -> CommandResult<Vec<ThreadActivity>> {
     let rows = sqlx::query(
         r#"
-        with visible_thread_replies as (
+        with visible_thread_replies as not materialized (
             select
                 m.id,
                 m.seq,
@@ -153,6 +162,7 @@ pub(crate) async fn load_thread_activities(
                 m.created_at
             from messages m
             where m.thread_root_id is not null
+              and ($1 is null or m.channel_id = $1)
               and m.delivery_state <> 'streaming'
               and not (
                 m.sender_role <> 'system'
@@ -192,22 +202,7 @@ pub(crate) async fn load_thread_activities(
               )
             where root.thread_root_id is null
         ),
-        latest_visible_thread_replies as (
-            select
-                ranked.thread_root_id,
-                ranked.id as latest_message_id,
-                ranked.created_at as latest_activity_at
-            from (
-                select
-                    vr.*,
-                    row_number() over (
-                        partition by vr.thread_root_id
-                        order by julianday(vr.created_at) desc, vr.created_at desc, vr.id desc
-                    ) as row_num
-                from visible_thread_replies vr
-            ) ranked
-            where ranked.row_num = 1
-        )
+        totals as (
         select
             root.id as thread_root_id,
             root.channel_id,
@@ -220,21 +215,24 @@ pub(crate) async fn load_thread_activities(
                   ) then 1
                 else 0
             end) as integer) as unread_count,
-            latest.latest_message_id,
-            latest.latest_activity_at
+            root.id as latest_root_id
         from messages root
         join visible_thread_replies reply on reply.thread_root_id = root.id
-        join latest_visible_thread_replies latest on latest.thread_root_id = root.id
         left join thread_read_markers read_marker on read_marker.thread_root_id = root.id
         where root.thread_root_id is null
-        group by
-            root.id,
-            root.channel_id,
-            latest.latest_message_id,
-            latest.latest_activity_at
-        order by julianday(latest.latest_activity_at) desc, latest.latest_activity_at desc, root.id desc
+        group by root.id, root.channel_id
+        )
+        select totals.thread_root_id, totals.channel_id, totals.reply_count, totals.unread_count,
+               latest.id as latest_message_id, latest.created_at as latest_activity_at
+        from totals join messages latest on latest.id = (
+            select vr.id from visible_thread_replies vr
+            where vr.thread_root_id = totals.latest_root_id
+            order by julianday(vr.created_at) desc, vr.created_at desc, vr.id desc limit 1
+        )
+        order by julianday(latest.created_at) desc, latest.created_at desc, totals.thread_root_id desc
         "#,
     )
+    .bind(channel_id)
     .fetch_all(pool)
     .await
     .map_err(to_string)?;

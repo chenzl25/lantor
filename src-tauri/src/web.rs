@@ -1137,6 +1137,7 @@ async fn api_agent_avatar(
 async fn api_attachment(
     State(state): State<Arc<WebState>>,
     AxumPath(attachment_id): AxumPath<Uuid>,
+    Query(query): Query<AttachmentQuery>,
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, Response> {
@@ -1157,6 +1158,22 @@ async fn api_attachment(
     let original_name: String = row.get("original_name");
     let mime_type: String = row.get("mime_type");
     let storage_path: String = row.get("storage_path");
+    if let Some(width) = query.w {
+        if width != 480 {
+            return Err(api_error("supported thumbnail width is 480".to_owned()));
+        }
+        if let Some(response) = thumbnail_response::serve_thumbnail(
+            attachment_id,
+            &mime_type,
+            Path::new(&storage_path),
+            &method,
+            &headers,
+        )
+        .await
+        {
+            return Ok(response);
+        }
+    }
     attachment_response::serve_attachment(
         attachment_id,
         &original_name,
@@ -1170,6 +1187,14 @@ async fn api_attachment(
 
 #[path = "web_attachment.rs"]
 mod attachment_response;
+
+#[derive(Default, Deserialize)]
+struct AttachmentQuery {
+    w: Option<u32>,
+}
+
+#[path = "web_thumbnail.rs"]
+mod thumbnail_response;
 
 fn api_error(message: String) -> Response {
     api_error_status(StatusCode::BAD_REQUEST, message)

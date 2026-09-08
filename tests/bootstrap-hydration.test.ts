@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeHydratedRows } from "../src/bootstrap-hydration";
+import { mergeHydratedRows, mergeThreadActivities } from "../src/bootstrap-hydration";
 
 test("lazy history fills summaries without undoing live edits or deletes", () => {
   const summary = { id: "summary", body: "" };
@@ -15,4 +15,12 @@ test("lazy history fills summaries without undoing live edits or deletes", () =>
   assert.deepEqual(result, [full, live, arrived, history]);
   assert.equal(result[1], live);
   assert.equal(result[2], arrived);
+});
+
+test("page thread counts cannot overwrite a newer receipt or resurrect removed metadata", () => {
+  const old = { thread_root_id: "root", reply_count: 4, unread_count: 4 };
+  const removed = { thread_root_id: "removed", reply_count: 1, unread_count: 1 };
+  const read = { ...old, unread_count: 0 };
+  const page = { thread_root_id: "older", reply_count: 8, unread_count: 0 };
+  assert.deepEqual(mergeThreadActivities([read], [old, removed, page], new Map([old, removed].map(row => [row.thread_root_id, row]))), [read, page]);
 });

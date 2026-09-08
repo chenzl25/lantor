@@ -98,6 +98,7 @@ pub(crate) struct Channel {
     pub(crate) unread_count: i32,
     pub(crate) github_unread_count: i32,
     pub(crate) github_review_synced_at: Option<String>,
+    pub(crate) latest_message_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -153,6 +154,7 @@ pub(crate) struct ChannelMessagePage {
     pub(crate) messages: Vec<Message>,
     pub(crate) next_before_seq: Option<i64>,
     pub(crate) has_more: bool,
+    pub(crate) thread_activities: Vec<ThreadActivity>,
 }
 
 #[derive(Debug, Serialize)]

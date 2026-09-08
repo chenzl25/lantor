@@ -5,7 +5,7 @@ import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("./fixtures/channel-reading-position", import.meta.url));
 const server = await createServer({ configFile: false, root, publicDir: false, plugins: [react()],
-  server: { host: "127.0.0.1", port: process.argv.includes("--serve") ? 5194 : 0, strictPort: true,
+  server: { host: "127.0.0.1", port: 5194, strictPort: process.argv.includes("--serve"),
     fs: { allow: [fileURLToPath(new URL("..", import.meta.url))] } } });
 await server.listen();
 const url = `http://127.0.0.1:${server.httpServer.address().port}`;
@@ -22,7 +22,10 @@ if (process.argv.includes("--serve")) {
         const errors = []; page.on("pageerror", error => errors.push(error.message));
         const click = name => page.getByRole("button", { name, exact: true }).click();
         const state = async () => JSON.parse(await page.getByLabel("Reading diagnostics").textContent());
-        const settled = () => page.waitForFunction(() => JSON.parse(document.querySelector('[aria-label="Reading diagnostics"]').textContent).restoring === "false");
+        const settled = () => page.waitForFunction(() => {
+          const text = document.querySelector('[aria-label="Reading diagnostics"]')?.textContent;
+          return text?.trim().startsWith("{") && JSON.parse(text).restoring === "false";
+        });
         const bottom = async () => { await settled(); await page.waitForFunction(() => JSON.parse(document.querySelector('[aria-label="Reading diagnostics"]').textContent).distance <= 2); };
         await page.goto(`${url}/?reset`);
         await page.waitForTimeout(450);

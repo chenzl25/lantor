@@ -75,6 +75,7 @@ export type Channel = {
   unread_count: number;
   github_unread_count: number;
   github_review_synced_at: string | null;
+  latest_message_at?: string | null;
 };
 
 export type ThreadActivity = {
@@ -122,6 +123,7 @@ export type ChannelMessageHistory = {
 };
 
 export type ChannelMessagePage = {
+  thread_activities?: ThreadActivity[];
   messages: Message[];
   next_before_seq: number | null;
   has_more: boolean;
@@ -130,6 +132,7 @@ export type ChannelMessagePage = {
 export type ThreadReplySummary = {
   count: number;
   latest: Message | null;
+  latestAt?: string;
   participants: Message[];
 };
 

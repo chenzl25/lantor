@@ -15,6 +15,7 @@ chrono = { version = "0.4.40", features = ["serde"] }
 async-stream = "0.3.6"
 http-body-util = "0.1"
 mime_guess = "2.0.5"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 sha2 = "0.10.8"

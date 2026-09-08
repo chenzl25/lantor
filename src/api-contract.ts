@@ -96,11 +96,12 @@ export type ApiContract = {
       channelId: string;
       beforeSeq: number;
       limit: number;
+      rootsOnly?: boolean;
     };
     result: ChannelMessagePage;
   };
   load_channel_messages: {
-    args: { channelId: string };
+    args: { channelId: string; limit?: number; rootsOnly?: boolean };
     result: ChannelMessagePage;
   };
   load_channel_previews: {

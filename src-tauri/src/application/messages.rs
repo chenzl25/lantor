@@ -32,6 +32,9 @@ pub(crate) struct SendMessageRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LoadChannelMessagesRequest {
     pub(crate) channel_id: Uuid,
+    pub(crate) limit: Option<i64>,
+    #[serde(default)]
+    pub(crate) roots_only: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,6 +57,8 @@ pub(crate) struct LoadOlderChannelMessagesRequest {
     pub(crate) channel_id: Uuid,
     pub(crate) before_seq: i64,
     pub(crate) limit: i64,
+    #[serde(default)]
+    pub(crate) roots_only: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,10 +101,22 @@ pub(crate) async fn load_channel_messages(
     pool: &SqlitePool,
     request: LoadChannelMessagesRequest,
 ) -> CommandResult<ChannelMessagePage> {
+    if request.roots_only {
+        return crate::message_store::load_channel_root_page(
+            pool,
+            request.channel_id,
+            i64::MAX,
+            request.limit.unwrap_or(30),
+        )
+        .await;
+    }
     load_recent_channel_message_page_without_artifact_content(
         pool,
         request.channel_id,
-        WEB_BOOTSTRAP_ROOT_MESSAGES_PER_CHANNEL,
+        request
+            .limit
+            .unwrap_or(WEB_BOOTSTRAP_ROOT_MESSAGES_PER_CHANNEL)
+            .clamp(1, 100),
     )
     .await
 }
@@ -143,6 +160,15 @@ pub(crate) async fn load_older_channel_messages(
     pool: &SqlitePool,
     request: LoadOlderChannelMessagesRequest,
 ) -> CommandResult<ChannelMessagePage> {
+    if request.roots_only {
+        return crate::message_store::load_channel_root_page(
+            pool,
+            request.channel_id,
+            request.before_seq,
+            request.limit,
+        )
+        .await;
+    }
     load_older_channel_messages_without_artifact_content(
         pool,
         request.channel_id,

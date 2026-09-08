@@ -30,7 +30,7 @@ import {
 import type { ApiArgsTuple, ApiCommand, ApiResult } from "./api-contract";
 import { applyUiStatePatch, scopesForRefresh, type UiStateScope } from "./ui-state-sync";
 import { streamingMessages, type StreamingMessageSnapshot } from "./streaming-message-store";
-import { mergeHydratedRows } from "./bootstrap-hydration";
+import { mergeHydratedRows, mergeThreadActivities } from "./bootstrap-hydration";
 import type { EventSubscription } from "./web-event-stream";
 import { APP_DISPLAY_NAME } from "./branding";
 import {
@@ -211,6 +211,7 @@ const MIN_COMPACT_CONTENT_WIDTH = 320;
 const MIN_COMPACT_SIDEBAR_VISIBLE_WIDTH = 220;
 const MOBILE_BREAKPOINT = 760;
 const UI_REFRESH_DEBOUNCE_MS = 80;
+const UI_STATE_REFRESH_MIN_INTERVAL_MS = 500;
 const UI_RECONCILE_INTERVAL_MS = 60_000;
 const EPHEMERAL_FLUSH_FALLBACK_MS = 80;
 const CHANNEL_PREVIEW_HYDRATION_DELAY_MS = 200;
@@ -946,6 +947,7 @@ function App() {
   const uiStateVersionsRef = useRef(new Map<UiStateScope, number>());
   const uiStatePromiseRef = useRef<Promise<void> | null>(null);
   const uiStateTimerRef = useRef<number | null>(null);
+  const uiStateLastStartedRef = useRef(0);
   const refreshTimerRef = useRef<number | null>(null);
   const refreshInFlightRef = useRef(false);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
@@ -1307,8 +1309,10 @@ function App() {
 
   function flushUiState(): Promise<void> {
     if (uiStatePromiseRef.current) return uiStatePromiseRef.current;
+    let failed = false;
     const pending = (async () => {
-      while (uiStateScopesRef.current.size > 0) {
+      if (uiStateScopesRef.current.size > 0) {
+        uiStateLastStartedRef.current = performance.now();
         const scopes = Array.from(uiStateScopesRef.current);
         uiStateScopesRef.current.clear();
         const versions = new Map(uiStateVersionsRef.current);
@@ -1317,6 +1321,7 @@ function App() {
         try {
           patch = await apiInvoke("load_ui_state", { scopes });
         } catch (err) {
+          failed = true;
           // Retain failed invalidations for the next foreground/periodic retry.
           for (const scope of scopes) uiStateScopesRef.current.add(scope);
           throw err;
@@ -1346,26 +1351,41 @@ function App() {
           setActiveChannelId((current) => resolveActiveChannelId(selectable, current));
         }
       }
-    })().finally(() => { uiStatePromiseRef.current = null; });
+    })().finally(() => {
+      uiStatePromiseRef.current = null;
+      // Drain invalidations at a bounded cadence, not a tight fetch loop when
+      // messages arrive throughout the previous request.
+      if (!failed && uiStateScopesRef.current.size > 0) scheduleUiState();
+    });
     uiStatePromiseRef.current = pending;
     return pending;
   }
 
-  function reloadUiState(scopes: UiStateScope[]): Promise<void> {
+  async function reloadUiState(scopes: UiStateScope[]): Promise<void> {
     queueUiState(scopes);
-    return flushUiState();
+    await flushUiState();
+    if (uiStateScopesRef.current.size > 0) await flushUiState();
   }
 
   function requestUiState(scopes: UiStateScope[]) {
     queueUiState(scopes);
+    scheduleUiState();
+  }
+
+  function scheduleUiState() {
     if (uiStateTimerRef.current !== null) return;
     uiStateTimerRef.current = window.setTimeout(() => {
       uiStateTimerRef.current = null;
+      // An explicit refresh may have started since this timer was queued.
+      if (performance.now() - uiStateLastStartedRef.current < UI_STATE_REFRESH_MIN_INTERVAL_MS) {
+        scheduleUiState();
+        return;
+      }
       void flushUiState().catch((err) => {
         setAppError(errorMessage(err, "Failed to synchronize updates"));
         console.error(err);
       });
-    }, UI_REFRESH_DEBOUNCE_MS);
+    }, Math.max(UI_REFRESH_DEBOUNCE_MS, UI_STATE_REFRESH_MIN_INTERVAL_MS - (performance.now() - uiStateLastStartedRef.current)));
   }
 
   function hydrateAgentDetail(agentId: string) {
@@ -1462,6 +1482,7 @@ function App() {
   }
 
   async function loadChannelMessages(channelId: string) {
+    const baselineActivities = new Map(data?.thread_activities.map(row => [row.thread_root_id, row]));
     if (
       initializedOlderChannelIdsRef.current.has(channelId)
       || loadingOlderChannelIdsRef.current.has(channelId)
@@ -1473,7 +1494,10 @@ function App() {
     loadingOlderChannelIdsRef.current.add(channelId);
     setLoadingOlderChannelIds((current) => new Set(current).add(channelId));
     try {
-      const page = await apiInvoke("load_channel_messages", { channelId });
+      const mobile = !isTauriRuntime() && isMobileViewport();
+      const page = await apiInvoke("load_channel_messages", {
+        channelId, ...(mobile ? { limit: 30, rootsOnly: true } : {}),
+      });
       if (olderChannelRequestEpochRef.current.get(channelId) !== requestEpoch) return;
 
       initializedOlderChannelIdsRef.current.add(channelId);
@@ -1499,7 +1523,10 @@ function App() {
       if (page.messages.length > 0) {
         setData((current) => {
           if (!current || !current.channels.some((channel) => channel.id === channelId)) return current;
-          return { ...current, messages: mergeMessages(current.messages, page.messages) };
+          return {
+            ...current, messages: mergeMessages(current.messages, page.messages),
+            thread_activities: mergeThreadActivities(current.thread_activities, page.thread_activities ?? [], baselineActivities),
+          };
         });
       }
     } catch (err) {
@@ -1520,6 +1547,7 @@ function App() {
   }
 
   async function loadOlderRootMessages(channelId: string) {
+    const baselineActivities = new Map(data?.thread_activities.map(row => [row.thread_root_id, row]));
     const beforeSeq = olderChannelBeforeSeqRef.current.get(channelId);
     if (
       beforeSeq === undefined
@@ -1536,7 +1564,8 @@ function App() {
       const page = await apiInvoke("load_older_channel_messages", {
         channelId,
         beforeSeq,
-        limit: OLDER_CHANNEL_MESSAGES_PAGE_SIZE,
+        limit: !isTauriRuntime() && isMobileViewport() ? 30 : OLDER_CHANNEL_MESSAGES_PAGE_SIZE,
+        rootsOnly: !isTauriRuntime() && isMobileViewport(),
       });
       if (olderChannelRequestEpochRef.current.get(channelId) !== requestEpoch) return false;
       if (page.has_more && (page.next_before_seq === null || page.next_before_seq >= beforeSeq)) {
@@ -1559,7 +1588,10 @@ function App() {
       if (page.messages.length > 0) {
         setData((current) => {
           if (!current || !current.channels.some((channel) => channel.id === channelId)) return current;
-          return { ...current, messages: mergeMessages(current.messages, page.messages) };
+          return {
+            ...current, messages: mergeMessages(current.messages, page.messages),
+            thread_activities: mergeThreadActivities(current.thread_activities, page.thread_activities ?? [], baselineActivities),
+          };
         });
       }
       return page.messages.length > 0 || !page.has_more;
@@ -2081,6 +2113,9 @@ function App() {
 
   useEffect(() => {
     if (!bootReady || !data || channelPreviewHydrationStartedRef.current) return;
+    // Mobile Home renders channel metadata, not full message/thread previews.
+    // Channel and thread detail are hydrated only after navigation.
+    if (!isTauriRuntime() && isMobileViewport()) return;
     const bootstrapData = data;
     channelPreviewHydrationStartedRef.current = true;
     let disposed = false;
@@ -2707,6 +2742,7 @@ function App() {
     }
 
     function resetSwipe() {
+      window.removeEventListener("touchmove", onTouchMove, { capture: true });
       startX = null;
       startY = null;
       lastX = 0;
@@ -2732,6 +2768,7 @@ function App() {
       lastX = touch.clientX;
       lastTime = event.timeStamp;
       tracking = true;
+      window.addEventListener("touchmove", onTouchMove, { passive: false, capture: true });
       setMobileDragSurface(isSidebarSwipe ? "sidebar" : "panel");
       setMobileSidebarDragPx(MOBILE_SIDEBAR_PEEK_PX);
     }
@@ -2747,7 +2784,7 @@ function App() {
         return;
       }
       if (Math.abs(deltaX) > 10) {
-        event.preventDefault();
+        if (event.cancelable) event.preventDefault();
       }
 
       const width = mobileSidebarWidth();
@@ -2779,8 +2816,7 @@ function App() {
       resetSwipe();
     }
 
-    window.addEventListener("touchstart", onTouchStart, { passive: false, capture: true });
-    window.addEventListener("touchmove", onTouchMove, { passive: false, capture: true });
+    window.addEventListener("touchstart", onTouchStart, { passive: true, capture: true });
     window.addEventListener("touchend", onTouchEnd, { passive: true, capture: true });
     window.addEventListener("touchcancel", resetSwipe, { passive: true, capture: true });
     return () => {
@@ -2933,6 +2969,8 @@ function App() {
       if (activity.reply_count === undefined) continue;
       const summary = summaries[activity.thread_root_id] ?? { count: 0, latest: null, participants: [] };
       summary.count = Math.max(summary.count, activity.reply_count);
+      summary.latestAt = summary.latest && Date.parse(summary.latest.created_at) > Date.parse(activity.latest_activity_at)
+        ? summary.latest.created_at : activity.latest_activity_at;
       summaries[activity.thread_root_id] = summary;
     }
     return summaries;

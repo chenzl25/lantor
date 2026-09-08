@@ -338,9 +338,9 @@ export async function subscribeBackendEvents(
   return subscribeWebEvents(handler, options, (cursor) => apiInvoke("replay_ui_events", { cursor }));
 }
 
-export function attachmentAssetUrl(storagePath: string, attachmentId: string) {
+export function attachmentAssetUrl(storagePath: string, attachmentId: string, thumbnail = false) {
   if (isTauriRuntime()) {
     return convertFileSrc(storagePath);
   }
-  return `/api/attachments/${attachmentId}`;
+  return `/api/attachments/${attachmentId}${thumbnail ? "?w=480" : ""}`;
 }

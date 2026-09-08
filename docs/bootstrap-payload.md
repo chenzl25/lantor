@@ -21,9 +21,18 @@ Channel read markers store the maximum committed `messages.seq` in that channel.
 
 Migration converts a legacy timestamp marker only when its read set can be represented exactly by one sequence watermark. Nonmonotonic imported histories retain timestamp comparison until the next mark-read operation. `last_read_at` remains for thread read compatibility. Migration equality is checked against a frozen copy of the old SQL, including timezone-equivalent timestamps and visibility exceptions.
 
+## Mobile channel hydration
+
+Mobile web skips `load_channel_previews`: Home consumes channel metadata, including indexed `latest_message_at` for recent sorting, not full messages from every channel. Selecting a channel requests `load_channel_messages` with `rootsOnly: true, limit: 30`; older pages use the same opt-in. Each page contains only timeline roots plus `thread_activities` for those roots, so the reply count/time and thread entry work without downloading replies. Opening the thread still loads full detail. Desktop/legacy callers keep their existing defaults. Root pagination is clamped to 1–100, uses a strictly decreasing sequence cursor, and preserves the channel reading anchor through hydration.
+
+Scoped event invalidations are coalesced at a maximum passive cadence of 2 requests/second, with a trailing refresh and per-scope version fences. Explicit user mutations can refresh immediately. Message bodies continue to arrive immediately through SSE. Failed invalidations are retained for foreground/periodic recovery, not retried in a tight loop.
+
+Activity owner enumeration seeks distinct owner keys through a covering expression index instead of scanning every historical fact; deleted/anonymous owners retain their own summaries. Thread aggregation and indexed latest-reply lookup retain timestamp-instant ordering, empty-stream filtering and monotonic read-watermark semantics. Automatic channel read receipts carry the visible snapshot's `throughSeq`; explicit mark-all still reads the current maximum.
+
 Verification:
 
 - `npm test` and `npm run build`.
+- `npm run test:mobile-performance` and `npm run test:channel-reading`: isolated Chromium/WebKit fixtures for lazy mobile navigation, roots/counts, passive gestures, refresh bursts, and reading-position races.
 - `npm run test:web-sync`: lazy workspace/edit configuration, complete thread expansion, normal mutations, stale responses, foreground recovery and real SSE disconnect/reconnect.
 - Existing Markdown, message-row and avatar E2Es.
 - `cargo test --manifest-path src-tauri/Cargo.toml` includes migration and real Axum bootstrap/detail contracts.

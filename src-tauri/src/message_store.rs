@@ -398,6 +398,7 @@ pub(crate) async fn load_recent_channel_message_page_without_artifact_content(
         messages,
         next_before_seq: history.as_ref().and_then(|history| history.before_seq),
         has_more: history.is_some_and(|history| history.has_more),
+        thread_activities: Vec::new(),
     })
 }
 
@@ -407,7 +408,19 @@ pub(crate) async fn load_older_channel_messages_without_artifact_content(
     before_seq: i64,
     limit: i64,
 ) -> CommandResult<ChannelMessagePage> {
-    load_older_channel_messages_with_options(pool, channel_id, before_seq, limit, false).await
+    load_older_channel_messages_with_options(pool, channel_id, before_seq, limit, false, false)
+        .await
+}
+
+// Main timelines need roots, not every reply/task/saved row in the channel.
+// Thread detail remains authoritative and is hydrated when the panel opens.
+pub(crate) async fn load_channel_root_page(
+    pool: &SqlitePool,
+    channel_id: Uuid,
+    before_seq: i64,
+    limit: i64,
+) -> CommandResult<ChannelMessagePage> {
+    load_older_channel_messages_with_options(pool, channel_id, before_seq, limit, false, true).await
 }
 
 async fn load_older_channel_messages_with_options(
@@ -416,6 +429,7 @@ async fn load_older_channel_messages_with_options(
     before_seq: i64,
     limit: i64,
     include_artifact_content: bool,
+    roots_only: bool,
 ) -> CommandResult<ChannelMessagePage> {
     let limit = limit.clamp(1, MAX_OLDER_CHANNEL_ROOT_MESSAGES_PER_PAGE);
     let root_rows = sqlx::query(
@@ -447,6 +461,7 @@ async fn load_older_channel_messages_with_options(
             messages: Vec::new(),
             next_before_seq: None,
             has_more: false,
+            thread_activities: Vec::new(),
         });
     }
 
@@ -459,6 +474,11 @@ async fn load_older_channel_messages_with_options(
         .collect::<Vec<_>>()
         .join(", ");
     let channel_placeholder = format!("${}", root_ids.len() + 1);
+    let reply_selection = if roots_only {
+        String::new()
+    } else {
+        format!("or m.thread_root_id in ({placeholders})")
+    };
     let sql = format!(
         r#"
         select
@@ -483,7 +503,7 @@ async fn load_older_channel_messages_with_options(
         where m.channel_id = {channel_placeholder}
           and (
               m.id in ({placeholders})
-              or m.thread_root_id in ({placeholders})
+              {reply_selection}
           )
         order by m.seq asc
         "#,
@@ -495,11 +515,21 @@ async fn load_older_channel_messages_with_options(
     query = query.bind(channel_id);
     let rows = query.fetch_all(pool).await.map_err(to_string)?;
     let messages = messages_from_rows(pool, rows, include_artifact_content).await?;
+    let thread_activities = if roots_only {
+        crate::channels::load_channel_thread_activities(pool, Some(channel_id))
+            .await?
+            .into_iter()
+            .filter(|activity| root_ids.contains(&activity.thread_root_id))
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     Ok(ChannelMessagePage {
         messages,
         next_before_seq,
         has_more,
+        thread_activities,
     })
 }
 
@@ -1658,6 +1688,52 @@ mod tests {
         search_messages_without_artifact_content,
     };
     use crate::attachments::write_attachment_file;
+
+    #[tokio::test]
+    async fn mobile_root_pages_bound_payload_and_keep_thread_counts_and_history() {
+        let (pool, schema) = test_pool().await.expect("isolated database");
+        let channel = insert_test_channel(&pool, "mobile-roots").await.unwrap();
+        let mut root_ids = Vec::new();
+        for index in 0..35 {
+            let id: uuid::Uuid = sqlx::query_scalar("insert into messages(channel_id,sender_name,sender_role,body) values($1,'owner','owner',$2) returning id")
+                .bind(channel).bind(format!("root {index}")).fetch_one(&pool).await.unwrap();
+            root_ids.push(id);
+        }
+        for _ in 0..120 {
+            sqlx::query("insert into messages(channel_id,thread_root_id,sender_name,sender_role,body) values($1,$2,'agent','agent',$3)")
+                .bind(channel).bind(root_ids[34]).bind("large reply ".repeat(1000)).execute(&pool).await.unwrap();
+        }
+        let page = super::load_channel_root_page(&pool, channel, i64::MAX, 30)
+            .await
+            .unwrap();
+        assert_eq!(page.messages.len(), 30);
+        assert!(page.messages.iter().all(|m| m.thread_root_id.is_none()));
+        assert!(page.has_more);
+        assert_eq!(page.messages[0].id, root_ids[5]);
+        assert_eq!(page.thread_activities.len(), 1);
+        assert_eq!(page.thread_activities[0].reply_count, 120);
+        assert_eq!(page.thread_activities[0].unread_count, 120);
+        let before = page.next_before_seq.unwrap();
+        let older = super::load_channel_root_page(&pool, channel, before, 30)
+            .await
+            .unwrap();
+        assert_eq!(older.messages.len(), 5);
+        assert!(!older.has_more);
+        assert!(older.messages.iter().all(|m| m.seq < before));
+        let thread = super::load_thread_messages_in_pool(&pool, root_ids[34])
+            .await
+            .unwrap();
+        assert_eq!(
+            thread.len(),
+            121,
+            "full history remains available on expansion"
+        );
+        let clamped = super::load_channel_root_page(&pool, channel, i64::MAX, 0)
+            .await
+            .unwrap();
+        assert_eq!(clamped.messages.len(), 1);
+        drop_test_schema(pool, schema).await;
+    }
 
     #[tokio::test]
     async fn deleting_a_thread_removes_its_attachment_files() {

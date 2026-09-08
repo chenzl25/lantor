@@ -168,7 +168,7 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
                   }}
                 >
                   {showImageThumbnails ? (
-                    <img src={src} alt="" loading="lazy" />
+                    <img src={attachment.local_url ?? attachmentAssetUrl(attachment.storage_path, attachment.id, true)} alt="" loading="lazy" decoding="async" />
                   ) : (
                     <>
                       <span className="attachment-icon"><Image size={18} /></span>

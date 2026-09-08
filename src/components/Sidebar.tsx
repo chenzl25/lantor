@@ -87,6 +87,9 @@ export function Sidebar({
   const mobileOwnerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const normalChannels = useMemo(() => {
     const latestActivityByChannel = new Map<string, number>();
+    for (const item of data.channels) {
+      latestActivityByChannel.set(item.id, timestampValue(item.latest_message_at));
+    }
     for (const message of data.messages) {
       const current = latestActivityByChannel.get(message.channel_id) ?? 0;
       latestActivityByChannel.set(message.channel_id, Math.max(current, timestampValue(message.created_at)));
@@ -175,7 +178,7 @@ export function Sidebar({
       />
       <section className="workspace">
         <div className="workspace-switch" aria-label={APP_DISPLAY_NAME}>
-          <img className="workspace-switch-logo" src="/lantor-icon.png" alt="" aria-hidden="true" />
+          <img className="workspace-switch-logo" src="/lantor-icon-192.png" alt="" aria-hidden="true" />
           <strong>{APP_DISPLAY_NAME}</strong>
         </div>
         <div

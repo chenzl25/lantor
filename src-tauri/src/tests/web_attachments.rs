@@ -9,6 +9,73 @@ use std::{path::PathBuf, sync::Arc};
 use uuid::Uuid;
 
 #[tokio::test]
+async fn thumbnail_route_keeps_original_and_checks_ownership_before_cache() {
+    use tower::ServiceExt;
+    let (pool, database) = test_pool().await.expect("isolated database");
+    let channel = insert_test_channel(&pool, "thumbnail-route").await.unwrap();
+    let message: Uuid = sqlx::query_scalar("insert into messages(channel_id,sender_name,sender_role,body) values($1,'owner','owner','image') returning id")
+        .bind(channel).fetch_one(&pool).await.unwrap();
+    let id = Uuid::new_v4();
+    let path = std::env::temp_dir().join(format!("lantor-thumbnail-route-{id}.png"));
+    image::RgbaImage::new(800, 600).save(&path).unwrap();
+    sqlx::query("insert into message_attachments(id,message_id,original_name,mime_type,size_bytes,storage_path) values($1,$2,'fixture.png','image/png',$3,$4)")
+        .bind(id).bind(message).bind(path.metadata().unwrap().len() as i64).bind(path.to_str().unwrap())
+        .execute(&pool).await.unwrap();
+    let app = super::web_router(
+        Arc::new(super::WebState {
+            pool: pool.clone(),
+            db_url: format!("sqlite://{database}"),
+        }),
+        PathBuf::from("/nonexistent"),
+    );
+    let original = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/attachments/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(original.status(), StatusCode::OK);
+    assert_eq!(original.headers()[header::CONTENT_TYPE], "image/png");
+    let thumbnail = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/attachments/{id}?w=480"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(thumbnail.status(), StatusCode::OK);
+    assert_eq!(thumbnail.headers()[header::CONTENT_TYPE], "image/webp");
+    assert_ne!(
+        thumbnail.headers()[header::ETAG],
+        original.headers()[header::ETAG]
+    );
+    sqlx::query("delete from message_attachments where id=$1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let deleted = app
+        .oneshot(
+            Request::get(format!("/api/attachments/{id}?w=480"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !deleted.status().is_success(),
+        "cached derivative cannot bypass attachment ownership"
+    );
+    std::fs::remove_file(path).unwrap();
+    drop_test_schema(pool, database).await;
+}
+
+#[tokio::test]
 async fn oversized_content_length_is_rejected_without_polling_body() {
     let state = Arc::new(super::WebState {
         pool: sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap(),

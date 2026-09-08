@@ -177,8 +177,30 @@ async fn load_agent_activities_with_limit(
     limit_per_agent: i64,
     agent_id: Option<Uuid>,
 ) -> CommandResult<Vec<AgentActivity>> {
+    // A loose index scan visits one owner key at a time (including orphaned
+    // handles), instead of DISTINCT scanning every historical activity. Each
+    // recursive step strictly increases owner_key and stops at the null tail.
     let rows = sqlx::query(
         r#"
+        with recursive owners(owner_key) as (
+            select case when $2 is not null then lower(hex($2)) else (
+                select coalesce(case when agent_id is null then null else lower(hex(agent_id)) end,
+                    nullif(agent_handle, ''), 'unknown')
+                from agent_activities
+                order by coalesce(case when agent_id is null then null else lower(hex(agent_id)) end,
+                    nullif(agent_handle, ''), 'unknown') limit 1
+            ) end
+            union all
+            select (
+                select coalesce(case when agent_id is null then null else lower(hex(agent_id)) end,
+                    nullif(agent_handle, ''), 'unknown')
+                from agent_activities
+                where coalesce(case when agent_id is null then null else lower(hex(agent_id)) end,
+                    nullif(agent_handle, ''), 'unknown') > owners.owner_key
+                order by coalesce(case when agent_id is null then null else lower(hex(agent_id)) end,
+                    nullif(agent_handle, ''), 'unknown') limit 1
+            ) from owners where $2 is null and owner_key is not null
+        )
         select
             id,
             agent_id,
@@ -192,16 +214,7 @@ async fn load_agent_activities_with_limit(
             detail,
             metadata as metadata,
             created_at
-        from (
-            select distinct
-                coalesce(
-                    case when agent_id is null then null else lower(hex(agent_id)) end,
-                    nullif(agent_handle, ''),
-                    'unknown'
-                ) as owner_key
-            from agent_activities
-            where ($2 is null or agent_id = $2)
-        ) owners
+        from owners
         join agent_activities activity on activity.id in (
             select recent.id
             from agent_activities recent
@@ -362,6 +375,41 @@ mod tests {
         .fetch_one(pool)
         .await
         .map_err(|err| err.to_string())
+    }
+
+    #[tokio::test]
+    async fn activity_owner_seeks_keep_deleted_anonymous_and_requested_owners() {
+        let (pool, schema) = test_pool().await.expect("isolated database");
+        assert!(super::load_agent_activities_with_limit(&pool, 1, None)
+            .await
+            .unwrap()
+            .is_empty());
+        let agent = insert_test_agent(&pool, "owner-seek").await.unwrap();
+        for (agent_id, handle) in [(Some(agent), "owner-seek"), (None, "deleted"), (None, "")] {
+            for index in 0..3 {
+                sqlx::query("insert into agent_activities(agent_id,agent_handle,kind,title,created_at) values($1,$2,'thinking',$3,$4)")
+                    .bind(agent_id).bind(handle).bind(format!("{handle}:{index}"))
+                    .bind(format!("2026-09-08T00:00:0{index}+00:00")).execute(&pool).await.unwrap();
+            }
+        }
+        let all = super::load_agent_activities_with_limit(&pool, 1, None)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 3);
+        assert!(all.iter().all(|row| row.title.ends_with(":2")));
+        let only = super::load_agent_activities_with_limit(&pool, 1, Some(agent))
+            .await
+            .unwrap();
+        assert_eq!(only.len(), 1);
+        assert_eq!(only[0].agent_id, Some(agent));
+        assert!(
+            super::load_agent_activities_with_limit(&pool, 1, Some(Uuid::new_v4()))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        pool.close().await;
+        drop_sqlite_test_files(&schema);
     }
 
     #[tokio::test]
