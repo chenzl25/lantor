@@ -60,7 +60,7 @@ import { ThreadPanel } from "./components/ThreadPanel";
 import { WebAppStatus } from "./components/WebAppStatus";
 import { useWebOnline } from "./hooks/useWebOnline";
 import { UnreadBadge } from "./components/UnreadBadge";
-import { isProgressOnlyMessage } from "./message-grouping";
+import { isProgressOnlyMessage, messageHasVisibleContent } from "./message-grouping";
 import { messageReferenceLocation, type MessageReferenceKind } from "./message-references";
 import { shouldDismissOnEscape } from "./escape-dismiss";
 import {
@@ -2845,8 +2845,12 @@ function App() {
     return (data?.messages ?? []).filter((message) => !isProgressOnlyMessage(message));
   }, [data?.messages]);
 
+  // A streaming reply only gets a row once visible text has landed; the empty
+  // placeholder reserved at run start stays out of the list (the progress dock
+  // already shows that the agent is working).
   const conversationMessages = useMemo(() => (data?.messages ?? []).filter((message) =>
-    message.delivery_state === "streaming" || !isProgressOnlyMessage(message)), [data?.messages]);
+    (message.delivery_state === "streaming" && messageHasVisibleContent(message))
+    || !isProgressOnlyMessage(message)), [data?.messages]);
   const rootMessages = useMemo(() => {
     if (!channel) return [];
     return conversationMessages.filter((m) => m.channel_id === channel.id && !m.thread_root_id);
