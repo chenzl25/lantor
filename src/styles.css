@@ -7588,7 +7588,6 @@ body.resizing-column * {
   height: 1px;
 }
 
-.thread-back-to-bottom,
 .message-list[data-restoring] .message-list-content { visibility: hidden; }
 .message-list-restoring {
   position: absolute;
@@ -7597,6 +7596,7 @@ body.resizing-column * {
   color: var(--muted);
   pointer-events: none;
 }
+.thread-back-to-bottom,
 .message-list-back-to-bottom {
   position: absolute;
   left: 50%;
