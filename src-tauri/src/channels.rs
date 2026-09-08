@@ -146,6 +146,7 @@ pub(crate) async fn load_thread_activities(
         with visible_thread_replies as (
             select
                 m.id,
+                m.seq,
                 m.channel_id,
                 m.thread_root_id,
                 m.sender_role,
@@ -170,7 +171,9 @@ pub(crate) async fn load_thread_activities(
         thread_read_markers as (
             select
                 root.id as thread_root_id,
+                read_state.last_read_seq as channel_read_seq,
                 case
+                    when read_state.last_read_seq is not null then thread_read_state.read_until
                     when thread_read_state.read_until is null then read_state.last_read_at
                     when read_state.last_read_at is null then thread_read_state.read_until
                     when julianday(thread_read_state.read_until) >= julianday(read_state.last_read_at)
@@ -211,6 +214,7 @@ pub(crate) async fn load_thread_activities(
             count(*) as reply_count,
             cast(sum(case
                 when reply.sender_role <> 'owner'
+                  and (read_marker.channel_read_seq is null or reply.seq > read_marker.channel_read_seq)
                   and julianday(reply.created_at) > julianday(
                     coalesce(read_marker.read_until, '0001-01-01T00:00:00+00:00')
                   ) then 1

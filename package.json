@@ -16,6 +16,7 @@
     "test:message-state-races": "node tests/message-state-races.e2e.mjs",
     "test:web-math": "node tests/web-math.e2e.mjs",
     "test:message-rows": "node tests/message-rows.e2e.mjs",
+    "test:channel-reading": "node tests/channel-reading-position.e2e.mjs",
     "test:avatar-cache": "node tests/avatar-cache.e2e.mjs",
     "dev": "vite --host 127.0.0.1",
     "web:backend": "cargo run --manifest-path src-tauri/Cargo.toml -- --web-only",

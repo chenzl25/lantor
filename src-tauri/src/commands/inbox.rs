@@ -12,9 +12,17 @@ use crate::{
 #[tauri::command]
 pub(crate) async fn mark_channel_read(
     channel_id: Uuid,
+    through_seq: Option<i64>,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
-    application::mark_channel_read(&state.pool, MarkChannelReadRequest { channel_id }).await
+    application::mark_channel_read(
+        &state.pool,
+        MarkChannelReadRequest {
+            channel_id,
+            through_seq,
+        },
+    )
+    .await
 }
 
 #[tauri::command]

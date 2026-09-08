@@ -59,6 +59,8 @@ import { Sidebar } from "./components/Sidebar";
 import { ThreadPanel } from "./components/ThreadPanel";
 import { WebAppStatus } from "./components/WebAppStatus";
 import { useWebOnline } from "./hooks/useWebOnline";
+import { useVisibleChannelRead } from "./hooks/useVisibleChannelRead";
+import type { ChannelReadLocation } from "./hooks/useChannelMessageScroll";
 import { UnreadBadge } from "./components/UnreadBadge";
 import { isProgressOnlyMessage, messageHasVisibleContent } from "./message-grouping";
 import { messageReferenceLocation, type MessageReferenceKind } from "./message-references";
@@ -1524,7 +1526,7 @@ function App() {
       || loadingOlderChannelIdsRef.current.has(channelId)
       || exhaustedOlderChannelIds.has(channelId)
     ) {
-      return;
+      return false;
     }
     const requestEpoch = (olderChannelRequestEpochRef.current.get(channelId) ?? 0) + 1;
     olderChannelRequestEpochRef.current.set(channelId, requestEpoch);
@@ -1536,7 +1538,10 @@ function App() {
         beforeSeq,
         limit: OLDER_CHANNEL_MESSAGES_PAGE_SIZE,
       });
-      if (olderChannelRequestEpochRef.current.get(channelId) !== requestEpoch) return;
+      if (olderChannelRequestEpochRef.current.get(channelId) !== requestEpoch) return false;
+      if (page.has_more && (page.next_before_seq === null || page.next_before_seq >= beforeSeq)) {
+        throw new Error("History pagination did not advance");
+      }
       if (page.has_more && page.next_before_seq !== null) {
         olderChannelBeforeSeqRef.current.set(channelId, page.next_before_seq);
       } else {
@@ -1557,11 +1562,13 @@ function App() {
           return { ...current, messages: mergeMessages(current.messages, page.messages) };
         });
       }
+      return page.messages.length > 0 || !page.has_more;
     } catch (err) {
       if (olderChannelRequestEpochRef.current.get(channelId) === requestEpoch) {
         setAppError(errorMessage(err, "Failed to load earlier messages"));
         console.error(err);
       }
+      return false;
     } finally {
       if (olderChannelRequestEpochRef.current.get(channelId) === requestEpoch) {
         loadingOlderChannelIdsRef.current.delete(channelId);
@@ -3207,10 +3214,15 @@ function App() {
     return data.tasks.find((task) => task.message_id === activeRoot.id) ?? null;
   }, [data, activeRoot]);
 
-  const activeChannelMessageCount = useMemo(() => {
-    if (!activeChannelId) return 0;
-    return visibleMessages.filter((message) => message.channel_id === activeChannelId).length;
-  }, [visibleMessages, activeChannelId]);
+  const activeChannelReadThroughSeq = useMemo(() => visibleMessages.reduce((seq, message) =>
+    message.channel_id === activeChannelId ? Math.max(seq, message.seq) : seq, 0), [visibleMessages, activeChannelId]);
+  const [channelReadLocation, setChannelReadLocation] = useState<ChannelReadLocation | null>(null);
+  const isChannelReady = Boolean(channel && initializedOlderChannelIdsRef.current.has(channel.id));
+  useVisibleChannelRead({
+    channelId: activeChannelId, latestRootId: rootMessages[rootMessages.length - 1]?.id ?? null,
+    throughSeq: activeChannelReadThroughSeq, unreadCount: channel?.unread_count ?? 0,
+    ready: isChannelReady, active: activeTab === "chat", location: channelReadLocation,
+  });
 
   // Primitive derivations so effects can depend on stable values instead of the
   // `data.channels` array reference, which is recreated by every bootstrap
@@ -3219,10 +3231,6 @@ function App() {
   const activeChannelExists = useMemo(() => {
     if (!activeChannelId) return false;
     return Boolean(data?.channels.some((item) => item.id === activeChannelId));
-  }, [data?.channels, activeChannelId]);
-  const activeChannelUnreadCount = useMemo(() => {
-    if (!activeChannelId) return 0;
-    return data?.channels.find((item) => item.id === activeChannelId)?.unread_count ?? 0;
   }, [data?.channels, activeChannelId]);
   const activeGithubUnreadCount = useMemo(() => {
     if (!activeChannelId) return 0;
@@ -3505,29 +3513,6 @@ function App() {
     }
     void loadChannelMessages(activeChannelId);
   }, [activeChannelId, activeChannelExists]);
-
-  // Coalesce bursts, skip channels already read, and never mark a hidden tab read.
-  useEffect(() => {
-    if (!activeChannelId || !activeChannelExists || activeChannelUnreadCount <= 0) return;
-    let timer: number | null = null;
-    function scheduleRead() {
-      if (timer !== null) window.clearTimeout(timer);
-      timer = null;
-      if (document.visibilityState !== "visible") return;
-      timer = window.setTimeout(() => {
-        timer = null;
-        if (document.visibilityState !== "visible") return;
-        void apiInvoke("mark_channel_read", { channelId: activeChannelId })
-          .catch((err) => console.error(err));
-      }, 300);
-    }
-    scheduleRead();
-    document.addEventListener("visibilitychange", scheduleRead);
-    return () => {
-      if (timer !== null) window.clearTimeout(timer);
-      document.removeEventListener("visibilitychange", scheduleRead);
-    };
-  }, [activeChannelId, activeChannelExists, activeChannelMessageCount, activeChannelUnreadCount]);
 
   useEffect(() => {
     if (
@@ -5259,7 +5244,10 @@ function App() {
         savedMessageIds={savedMessageIds}
         focusedMessageId={focusedMessageId}
         showImageThumbnails={showImageThumbnails}
+        isChannelReady={isChannelReady}
+        onReadLocation={setChannelReadLocation}
         hasMoreRootMessages={hasMoreRootMessages}
+        historyBeforeSeq={channel ? olderChannelBeforeSeqRef.current.get(channel.id) : undefined}
         isLoadingOlderRootMessages={isLoadingOlderRootMessages}
         onLoadOlderRootMessages={() => channel ? loadOlderRootMessages(channel.id) : Promise.resolve()}
         onToggleMessageSaved={setMessageSaved}

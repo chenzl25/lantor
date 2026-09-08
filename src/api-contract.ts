@@ -279,7 +279,7 @@ export type ApiContract = {
     result: MutationResult;
   };
   mark_channel_read: {
-    args: { channelId: string };
+    args: { channelId: string; throughSeq?: number };
     result: MutationResult;
   };
   complete_reminder: {

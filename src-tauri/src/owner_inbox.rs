@@ -171,10 +171,22 @@ pub(crate) async fn mark_all_owner_inbox_read_in_pool(pool: &SqlitePool) -> Comm
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) async fn mark_channel_read_in_pool(
     pool: &SqlitePool,
     channel_id: Uuid,
 ) -> CommandResult<()> {
+    mark_channel_read_through_in_pool(pool, channel_id, None).await
+}
+
+pub(crate) async fn mark_channel_read_through_in_pool(
+    pool: &SqlitePool,
+    channel_id: Uuid,
+    through_seq: Option<i64>,
+) -> CommandResult<()> {
+    if through_seq.is_some_and(|seq| seq < 0) {
+        return Err("throughSeq must be non-negative".to_owned());
+    }
     // Store one monotonic watermark. The indexed max is independent of
     // message visibility and body size; only eligible messages above it count.
     let mut transaction = pool.begin().await.map_err(to_string)?;
@@ -182,7 +194,7 @@ pub(crate) async fn mark_channel_read_in_pool(
         r#"
         insert into channel_read_state (channel_id, last_read_at, last_read_seq)
         values ($1, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-            (select coalesce(max(seq), 0) from messages where channel_id = $1))
+            (select coalesce(max(seq), 0) from messages where channel_id = $1 and seq <= $2))
         on conflict (channel_id) do update set
             last_read_at = excluded.last_read_at,
             last_read_seq = excluded.last_read_seq
@@ -191,6 +203,7 @@ pub(crate) async fn mark_channel_read_in_pool(
         "#,
     )
     .bind(channel_id)
+    .bind(through_seq.unwrap_or(i64::MAX))
     .execute(&mut *transaction)
     .await
     .map_err(to_string)?;
@@ -429,6 +442,86 @@ mod tests {
         .await;
         drop_test_schema(pool, schema).await;
         result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn bounded_channel_read_preserves_later_roots_and_thread_replies() {
+        let (pool, schema) = test_pool().await.expect("SQLite test database");
+        let channel = insert_test_channel(&pool, "bounded-read").await.unwrap();
+        let root: Uuid = sqlx::query_scalar("insert into messages (channel_id,sender_name,sender_role,body,is_task,created_at) values ($1,'Owner','owner','root',false,'2000-01-01T00:00:00Z') returning id")
+            .bind(channel).fetch_one(&pool).await.unwrap();
+        let visible_id: Uuid = sqlx::query_scalar("insert into messages (channel_id,thread_root_id,sender_name,sender_role,body,is_task,created_at) values ($1,$2,'Agent','agent','visible reply',false,'2000-01-01T00:00:01Z') returning id")
+            .bind(channel).bind(root).fetch_one(&pool).await.unwrap();
+        let visible: i64 = sqlx::query_scalar("select seq from messages where id=$1")
+            .bind(visible_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        // These arrive after the rendered snapshot, but before its receipt.
+        // Backdated timestamps must not bypass the sequence fence in threads.
+        sqlx::query("insert into messages (channel_id,thread_root_id,sender_name,sender_role,body,is_task,created_at) values ($1,$2,'Agent','agent','later reply',false,'1999-01-01T00:00:00Z')")
+            .bind(channel).bind(root).execute(&pool).await.unwrap();
+        sqlx::query("insert into messages (channel_id,sender_name,sender_role,body,is_task,created_at) values ($1,'Agent','agent','later root',false,'2000-01-01T00:00:02Z')")
+            .bind(channel).execute(&pool).await.unwrap();
+        super::mark_channel_read_through_in_pool(&pool, channel, Some(visible))
+            .await
+            .unwrap();
+        let channels = crate::channels::load_channels(&pool).await.unwrap();
+        assert_eq!(
+            channels
+                .iter()
+                .find(|c| c.id == channel)
+                .unwrap()
+                .unread_count,
+            2
+        );
+        let threads = crate::channels::load_thread_activities(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            threads
+                .iter()
+                .find(|t| t.thread_root_id == root)
+                .unwrap()
+                .unread_count,
+            1
+        );
+        let events = count_channel_read_events(&pool).await.unwrap();
+        super::mark_channel_read_through_in_pool(&pool, channel, Some(visible - 1))
+            .await
+            .unwrap();
+        assert_eq!(
+            count_channel_read_events(&pool).await.unwrap(),
+            events,
+            "stale receipt cannot rewind watermark"
+        );
+        assert!(
+            super::mark_channel_read_through_in_pool(&pool, channel, Some(-1))
+                .await
+                .is_err()
+        );
+        mark_channel_read_in_pool(&pool, channel).await.unwrap();
+        assert_eq!(
+            crate::channels::load_channels(&pool)
+                .await
+                .unwrap()
+                .iter()
+                .find(|c| c.id == channel)
+                .unwrap()
+                .unread_count,
+            0
+        );
+        assert_eq!(
+            crate::channels::load_thread_activities(&pool)
+                .await
+                .unwrap()
+                .iter()
+                .find(|t| t.thread_root_id == root)
+                .unwrap()
+                .unread_count,
+            0
+        );
+        drop_test_schema(pool, schema).await;
     }
 
     #[tokio::test]

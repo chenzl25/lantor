@@ -14,7 +14,7 @@ import {
   Trash2,
   UserPlus,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FocusEvent, type MouseEvent as ReactMouseEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type TextareaHTMLAttributes, type WheelEvent as ReactWheelEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FocusEvent, type MouseEvent as ReactMouseEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type TextareaHTMLAttributes } from "react";
 import { useEventCallback } from "../hooks/useEventCallback";
 import { useMessageRows } from "../hooks/useMessageRows";
 import { useRetainedValue } from "../hooks/useRetainedValue";
@@ -26,7 +26,7 @@ import { isImeComposing, isInputComposing } from "../input-utils";
 import { mentionableAgentsForChannel } from "../mentions";
 import { copyText } from "../clipboard";
 import { APP_DISPLAY_NAME } from "../branding";
-import { observeScrollGeometry } from "../scroll-geometry";
+import { useChannelMessageScroll, type ChannelReadLocation } from "../hooks/useChannelMessageScroll";
 import { isCompactFollowupMessage } from "../message-grouping";
 import { messageShareLink, messageToMarkdown } from "../message-share";
 import { appendMessageReferenceToken, messageReferenceToken, parseMessageReferences, removeMessageReferenceToken, withoutMessageReferenceTokens, type MessageReferenceKind, type ResolvedMessageReference } from "../message-references";
@@ -100,8 +100,11 @@ type ConversationProps = {
   focusedMessageId: string | null;
   showImageThumbnails: boolean;
   hasMoreRootMessages: boolean;
+  historyBeforeSeq?: number;
   isLoadingOlderRootMessages: boolean;
-  onLoadOlderRootMessages: () => Promise<void>;
+  onLoadOlderRootMessages: () => Promise<boolean | void>;
+  isChannelReady?: boolean;
+  onReadLocation?: (location: ChannelReadLocation) => void;
   onToggleMessageSaved: (message: Message, saved: boolean) => void;
 };
 
@@ -111,7 +114,6 @@ type MessageMenuState = {
   message: Message;
 } | null;
 
-const LOAD_OLDER_SCROLL_TOP_PX = 96;
 
 function compactReferencePreview(body: string) {
   const text = withoutMessageReferenceTokens(body).replace(/\s+/g, " ").trim();
@@ -171,26 +173,16 @@ export function Conversation({
   focusedMessageId,
   showImageThumbnails,
   hasMoreRootMessages,
+  historyBeforeSeq,
   isLoadingOlderRootMessages,
   onLoadOlderRootMessages,
+  isChannelReady = true,
+  onReadLocation,
   onToggleMessageSaved,
 }: ConversationProps) {
   const [showChannelActions, setShowChannelActions] = useState(false);
   const [messageMenu, setMessageMenu] = useState<MessageMenuState>(null);
   const [expandedChannelMessageIds, setExpandedChannelMessageIds] = useState<Set<string>>(() => new Set());
-  const messageListRef = useRef<HTMLDivElement | null>(null);
-  const messageListContentRef = useRef<HTMLDivElement | null>(null);
-  const messageListBottomAnchorRef = useRef<HTMLDivElement | null>(null);
-  const bottomScrollFrameRef = useRef<number | null>(null);
-  const messageListGeometryRef = useRef({ scrollHeight: 0, clientHeight: 0 });
-  const shouldFollowMessagesRef = useRef(true);
-  const [showBackToBottom, setShowBackToBottom] = useState(false);
-  const focusedMessageScrollKeyRef = useRef<string | null>(null);
-  const userMessageScrollUntilRef = useRef(0);
-  const messageListMetricsRef = useRef({ scrollHeight: 0, scrollTop: 0, clientHeight: 0 });
-  const olderMessagesAnchorRef = useRef<{ element: HTMLElement; top: number } | null>(null);
-  const olderMessagesLoadInFlightRef = useRef(false);
-  const messageListContextEpochRef = useRef(0);
   const channelActionsRef = useRef<HTMLDivElement | null>(null);
   const isDm = channel?.kind === "dm";
   const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
@@ -200,6 +192,11 @@ export function Conversation({
     if (agent) openAgentDetail(agent);
   });
   const channelId = channel?.id ?? null;
+  const messageScroll = useChannelMessageScroll({
+    channelId, active: activeTab === "chat", ready: isChannelReady,
+    roots: rootMessages, focusedMessageId, hasMore: hasMoreRootMessages,
+    loading: isLoadingOlderRootMessages, historyBeforeSeq, loadOlder: onLoadOlderRootMessages, onReadLocation,
+  });
   const progressIndex = useMemo(() => indexProgress(agentActivities, agentRuns, agentWorkItems, agents),
     [agentActivities, agentRuns, agentWorkItems, agents]);
   const progressState = useRetainedValue(useMemo(() => {
@@ -215,7 +212,6 @@ export function Conversation({
     return { byRoot, dock: activeProgressByAgent(rootMessages, progressIndex, channelId, null) };
   }, [progressIndex, rootMessages, channelId]));
   const { rows, referenceStore } = useMessageRows(rootMessages, messages, channels, agents, ownerProfile, isDm, threadReplySummaries, progressState.byRoot);
-  const lastRootMessage = rootMessages[rootMessages.length - 1] ?? null;
   const taskAssigneeOptions = channelAgents.length > 0 ? channelAgents : agents;
   const mentionAgents = useMemo(
     () => mentionableAgentsForChannel(channel, agents, channelAgents),
@@ -273,7 +269,7 @@ export function Conversation({
       return;
     }
     onReferenceMessageJump(sourceMessageId, reference.id);
-    targetRootMessageIntoView(reference.id);
+    messageScroll.focusMessage(reference.id);
   });
 
   const onRowAction = useEventCallback((message: Message, action: MessageRowAction) => {
@@ -302,156 +298,6 @@ export function Conversation({
     const referenceId = kind === "thread" ? (message.thread_root_id ?? message.id) : message.id;
     await copyText(messageReferenceToken(kind, referenceId));
     setMessageMenu(null);
-  }
-
-  function isMessageListAtBottom(element: HTMLDivElement) {
-    return messageListDistanceFromBottom(element) < 32;
-  }
-
-  function messageListDistanceFromBottom(element: HTMLDivElement) {
-    return element.scrollHeight - element.scrollTop - element.clientHeight;
-  }
-
-  function rememberMessageListMetrics(element: HTMLDivElement) {
-    messageListMetricsRef.current = {
-      scrollHeight: element.scrollHeight,
-      scrollTop: element.scrollTop,
-      clientHeight: element.clientHeight,
-    };
-  }
-
-  function cancelPendingMessageBottomScroll() {
-    if (bottomScrollFrameRef.current !== null) {
-      window.cancelAnimationFrame(bottomScrollFrameRef.current);
-      bottomScrollFrameRef.current = null;
-    }
-  }
-
-  function isUserScrollingMessages() {
-    return Date.now() < userMessageScrollUntilRef.current;
-  }
-
-  function stopFollowingMessages(element = messageListRef.current) {
-    userMessageScrollUntilRef.current = Date.now() + 650;
-    shouldFollowMessagesRef.current = false;
-    cancelPendingMessageBottomScroll();
-    if (element) rememberMessageListMetrics(element);
-  }
-
-  function isPointerOnMessageListScrollbar(event: ReactPointerEvent<HTMLDivElement>) {
-    const element = event.currentTarget;
-    const scrollbarWidth = element.offsetWidth - element.clientWidth;
-    if (scrollbarWidth <= 0) return false;
-    return event.clientX >= element.getBoundingClientRect().right - scrollbarWidth - 2;
-  }
-
-  function scrollMessagesToBottom() {
-    if (bottomScrollFrameRef.current !== null) return;
-    bottomScrollFrameRef.current = window.requestAnimationFrame(() => {
-      bottomScrollFrameRef.current = null;
-      const element = messageListRef.current;
-      if (!element || !shouldFollowMessagesRef.current) return;
-      element.scrollTop = messageListGeometryRef.current.scrollHeight || element.scrollHeight;
-    });
-  }
-
-  function handleMessageListScroll() {
-    const element = messageListRef.current;
-    if (!element) return;
-    const pendingAnchor = olderMessagesAnchorRef.current;
-    if (pendingAnchor && element.querySelector("article[data-message-id]") === pendingAnchor.element) {
-      // Follow user movement while the fetch is pending, up until rows prepend.
-      pendingAnchor.top = pendingAnchor.element.getBoundingClientRect().top;
-    }
-    if (
-      activeTab === "chat" &&
-      channel &&
-      rootMessages.length > 0 &&
-      hasMoreRootMessages &&
-      !isLoadingOlderRootMessages &&
-      !olderMessagesLoadInFlightRef.current &&
-      element.scrollTop <= LOAD_OLDER_SCROLL_TOP_PX
-    ) {
-      const contextEpoch = messageListContextEpochRef.current;
-      const messageList = element;
-      const firstMessage = element.querySelector<HTMLElement>("article[data-message-id]");
-      const anchor = firstMessage ? { element: firstMessage, top: firstMessage.getBoundingClientRect().top } : null;
-      olderMessagesAnchorRef.current = anchor;
-      stopFollowingMessages(element);
-      olderMessagesLoadInFlightRef.current = true;
-      void onLoadOlderRootMessages()
-        .finally(() => {
-          if (messageListContextEpochRef.current !== contextEpoch) return;
-          window.requestAnimationFrame(() => {
-            if (
-              messageListContextEpochRef.current !== contextEpoch
-              || messageListRef.current !== messageList
-            ) return;
-            const list = messageListRef.current;
-            if (!list) return;
-            // At scrollTop=0 native anchoring may be suppressed. Correct the
-            // actual old row once, then let native anchoring handle later estimates.
-            if (anchor?.element.isConnected) {
-              list.scrollTop += anchor.element.getBoundingClientRect().top - anchor.top;
-            }
-            olderMessagesAnchorRef.current = null;
-            olderMessagesLoadInFlightRef.current = false;
-            rememberMessageListMetrics(list);
-          });
-        });
-    }
-    const atBottom = isMessageListAtBottom(element);
-    const previous = messageListMetricsRef.current;
-    const layoutChanged = previous.scrollHeight !== element.scrollHeight || previous.clientHeight !== element.clientHeight;
-    const reachedEnd = Math.abs(messageListDistanceFromBottom(element)) <= 1;
-    if (atBottom && (!isUserScrollingMessages() || reachedEnd)) {
-      shouldFollowMessagesRef.current = true;
-      userMessageScrollUntilRef.current = 0;
-    } else if (!layoutChanged && element.scrollTop < previous.scrollTop) {
-      // Includes keyboard, scrollbar and assistive scrolling, beyond wheel/touch.
-      stopFollowingMessages(element);
-    }
-    const shouldShowBackToBottom = Boolean(channel) && !atBottom && !shouldFollowMessagesRef.current;
-    setShowBackToBottom((current) => current === shouldShowBackToBottom ? current : shouldShowBackToBottom);
-    rememberMessageListMetrics(element);
-  }
-
-  function returnMessagesToBottom() {
-    shouldFollowMessagesRef.current = true;
-    userMessageScrollUntilRef.current = 0;
-    setShowBackToBottom(false);
-    scrollMessagesToBottom();
-  }
-
-  function handleMessageListWheel(event: ReactWheelEvent<HTMLDivElement>) {
-    if (event.deltaY >= 0) return;
-    stopFollowingMessages();
-  }
-
-  function handleMessageListPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!isPointerOnMessageListScrollbar(event)) return;
-    stopFollowingMessages(event.currentTarget);
-  }
-
-  function handleMessageListTouchMove() {
-    stopFollowingMessages();
-  }
-
-  function targetRootMessageIntoView(messageId: string) {
-    const list = messageListRef.current;
-    const element = list?.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
-    if (!list || !element) return;
-    stopFollowingMessages(list);
-    element.scrollIntoView({ block: "center" });
-    window.requestAnimationFrame(() => {
-      const currentList = messageListRef.current;
-      if (currentList) rememberMessageListMetrics(currentList);
-    });
-  }
-
-  function handleMessageListContentLoad() {
-    if (!shouldFollowMessagesRef.current) return;
-    scrollMessagesToBottom();
   }
 
   useEffect(() => {
@@ -513,98 +359,9 @@ export function Conversation({
     });
   }
 
-  useLayoutEffect(() => {
-    messageListGeometryRef.current = { scrollHeight: 0, clientHeight: 0 };
-    shouldFollowMessagesRef.current = true;
-    setShowBackToBottom(false);
-    scrollMessagesToBottom();
-  }, [channel?.id]);
-
-  useLayoutEffect(() => {
-    messageListContextEpochRef.current += 1;
-    olderMessagesLoadInFlightRef.current = false;
-    olderMessagesAnchorRef.current = null;
-  }, [activeTab, channel?.id]);
-
-  useEffect(() => () => {
-    if (bottomScrollFrameRef.current !== null) window.cancelAnimationFrame(bottomScrollFrameRef.current);
-  }, []);
-
-  useEffect(() => {
-    if (activeTab !== "chat") return;
-    const root = messageListRef.current;
-    const content = messageListContentRef.current;
-    if (!root || !content) return;
-    return observeScrollGeometry(root, content, (geometry, viewportOnly) => {
-      messageListGeometryRef.current = geometry;
-      // Composer resizing must keep the reading position. Follow the next
-      // content growth using the user's existing stick-to-bottom choice.
-      if (!viewportOnly && shouldFollowMessagesRef.current) scrollMessagesToBottom();
-    });
-  }, [activeTab, channel?.id]);
-
   useEffect(() => {
     setExpandedChannelMessageIds(new Set());
   }, [channel?.id]);
-
-  useLayoutEffect(() => {
-    // Don't auto-follow to bottom while the user has jumped to a referenced
-    // message (clicked a reference chip). Otherwise every agent-activity refresh
-    // bumps progressState and yanks them back down to the bottom.
-    if (focusedMessageId) return;
-    if (!shouldFollowMessagesRef.current) return;
-    scrollMessagesToBottom();
-  }, [
-    activeTab,
-    channel?.id,
-    focusedMessageId,
-    progressState,
-    rootMessages.length,
-    lastRootMessage?.id,
-    lastRootMessage?.updated_at,
-    lastRootMessage?.delivery_state,
-  ]);
-
-  useLayoutEffect(() => {
-    if (!focusedMessageId) {
-      focusedMessageScrollKeyRef.current = null;
-      return;
-    }
-    const focusedMessageScrollKey = `${channel?.id ?? "none"}:${focusedMessageId}`;
-    if (focusedMessageScrollKeyRef.current === focusedMessageScrollKey) return;
-    let frameId = 0;
-    let settleFrameId = 0;
-    let attemptsRemaining = 6;
-    function scrollFocusedMessage() {
-      const list = messageListRef.current;
-      const element = list?.querySelector<HTMLElement>(`[data-message-id="${focusedMessageId}"]`);
-      if (element) {
-        focusedMessageScrollKeyRef.current = focusedMessageScrollKey;
-        stopFollowingMessages(list);
-        element.scrollIntoView({ block: "center" });
-        settleFrameId = window.requestAnimationFrame(() => {
-          const currentList = messageListRef.current;
-          if (currentList) rememberMessageListMetrics(currentList);
-        });
-        return;
-      }
-      if (attemptsRemaining <= 0) return;
-      attemptsRemaining -= 1;
-      frameId = window.requestAnimationFrame(scrollFocusedMessage);
-    }
-    scrollFocusedMessage();
-    return () => {
-      if (frameId) window.cancelAnimationFrame(frameId);
-      if (settleFrameId) window.cancelAnimationFrame(settleFrameId);
-    };
-  }, [
-    channel?.id,
-    focusedMessageId,
-    rootMessages.length,
-    lastRootMessage?.id,
-    lastRootMessage?.updated_at,
-    lastRootMessage?.delivery_state,
-  ]);
 
   return (
     <section className={`conversation ${isDm ? "dm-conversation" : ""}`}>
@@ -764,15 +521,21 @@ export function Conversation({
             <ActivityProgressDock progress={progressState.dock} onOpenWorkItem={openWorkItem} />
           </div>
           <div
-            ref={messageListRef}
+            key={channelId}
+            ref={messageScroll.viewportRef}
             className="message-list"
-            onScroll={handleMessageListScroll}
-            onWheelCapture={handleMessageListWheel}
-            onPointerDownCapture={handleMessageListPointerDown}
-            onTouchMoveCapture={handleMessageListTouchMove}
-            onLoadCapture={handleMessageListContentLoad}
+            tabIndex={0}
+            aria-label="Channel messages"
+            aria-busy={messageScroll.restoring}
+            data-restoring={messageScroll.restoring || undefined}
+            onScroll={messageScroll.onScroll}
+            onWheelCapture={messageScroll.onWheel}
+            onPointerDownCapture={messageScroll.onPointerDown}
+            onTouchMoveCapture={messageScroll.onTouchMove}
+            onKeyDownCapture={messageScroll.onKeyDown}
+            onLoadCapture={messageScroll.onContentLoad}
           >
-            <div ref={messageListContentRef} className="message-list-content">
+            <div ref={messageScroll.contentRef} className="message-list-content">
               {channel ? (
                 rootMessages.length > 0 ? (
                   <div className="beginning" aria-live="polite">
@@ -822,11 +585,12 @@ export function Conversation({
                 taskNumber={task?.number} taskStatus={task?.status}
               />;
             })}
-            <div ref={messageListBottomAnchorRef} className="message-list-bottom-anchor" aria-hidden="true" />
+            <div className="message-list-bottom-anchor" aria-hidden="true" />
           </div>
           </div>
-          {channel && showBackToBottom && (
-            <button type="button" className="message-list-back-to-bottom" onClick={returnMessagesToBottom}>
+          {channel && messageScroll.restoring && <div className="message-list-restoring" role="status">Restoring reading position…</div>}
+          {channel && messageScroll.showBackToBottom && (
+            <button type="button" className="message-list-back-to-bottom" onClick={messageScroll.toBottom}>
               <ArrowDown size={15} />
               Back to bottom
             </button>

@@ -6,8 +6,9 @@ use uuid::Uuid;
 use crate::{
     app::CommandResult,
     owner_inbox::{
-        dismiss_inbox_items_in_pool, mark_all_owner_inbox_read_in_pool, mark_channel_read_in_pool,
-        mark_inbox_items_read_in_pool, update_thread_followed_in_pool,
+        dismiss_inbox_items_in_pool, mark_all_owner_inbox_read_in_pool,
+        mark_channel_read_through_in_pool, mark_inbox_items_read_in_pool,
+        update_thread_followed_in_pool,
     },
 };
 
@@ -28,6 +29,7 @@ pub(crate) struct InboxItemsRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MarkChannelReadRequest {
     pub(crate) channel_id: Uuid,
+    pub(crate) through_seq: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,7 +43,7 @@ pub(crate) async fn mark_channel_read(
     pool: &SqlitePool,
     request: MarkChannelReadRequest,
 ) -> CommandResult<()> {
-    mark_channel_read_in_pool(pool, request.channel_id).await
+    mark_channel_read_through_in_pool(pool, request.channel_id, request.through_seq).await
 }
 
 pub(crate) async fn dismiss_inbox_items(

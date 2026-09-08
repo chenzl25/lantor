@@ -261,7 +261,9 @@ pub(crate) async fn load_activity_messages_without_artifact_content(
         thread_read_markers as (
             select
                 root.id as thread_root_id,
+                read_state.last_read_seq as channel_read_seq,
                 case
+                    when read_state.last_read_seq is not null then thread_read_state.read_until
                     when thread_read_state.read_until is null then read_state.last_read_at
                     when read_state.last_read_at is null then thread_read_state.read_until
                     when julianday(thread_read_state.read_until) >= julianday(read_state.last_read_at)
@@ -316,6 +318,7 @@ pub(crate) async fn load_activity_messages_without_artifact_content(
                     from visible_messages unread_reply
                     where unread_reply.thread_root_id = root.id
                       and unread_reply.sender_role <> 'owner'
+                      and (read_marker.channel_read_seq is null or unread_reply.seq > read_marker.channel_read_seq)
                       and julianday(unread_reply.created_at) > julianday(
                         coalesce(read_marker.read_until, '0001-01-01T00:00:00+00:00')
                       )
