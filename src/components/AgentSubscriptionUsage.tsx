@@ -66,6 +66,10 @@ export function AgentSubscriptionUsage({ agent, compact = false }: {
   compact?: boolean;
 }) {
   const subscription = agent.subscription_status;
+  // Filter at display time so persisted snapshots and live updates behave alike.
+  const windows = subscription?.windows.filter((window) =>
+    subscription.provider !== "codex" || !window.id.startsWith("codex_bengalfox:")
+  ) ?? [];
   return (
     <section className={compact ? "detail-section agent-avatar-subscription" : "detail-section subscription-section"}>
       <div className="detail-section-head">
@@ -87,9 +91,9 @@ export function AgentSubscriptionUsage({ agent, compact = false }: {
               {subscriptionStatusIsStale(subscription.observed_at) ? " · stale" : ""}
             </small>
           </div>
-          {subscription.windows.length > 0 ? (
+          {windows.length > 0 ? (
             <div className="subscription-grid">
-              {subscription.windows.map((window) => {
+              {windows.map((window) => {
                 const remaining = Math.max(0, Math.min(100, 100 - window.used_percent));
                 const tone = subscriptionTone(window);
                 return (

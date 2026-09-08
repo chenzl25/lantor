@@ -622,10 +622,6 @@ export const RUNTIME_PRESETS: Record<string, { label: string; defaultModel: stri
       "gpt-5.6-terra",
       "gpt-5.6-luna",
       "gpt-5.5",
-      "gpt-5.4",
-      "gpt-5.4-mini",
-      "gpt-5.3-codex",
-      "gpt-5.3-codex-spark",
     ],
   },
   claude: {
@@ -714,6 +710,10 @@ export function modelOptionsForRuntime(runtime: string, currentModel = "") {
   const models = RUNTIME_PRESETS[runtime]?.models ?? [];
   if (!currentModel || models.includes(currentModel)) return models;
   return [currentModel, ...models];
+}
+
+export function isRetiredCodexModel(model: string) {
+  return /^gpt-5\.[34](?:-|$)/i.test(model.trim());
 }
 
 export function modelLabel(model: string) {

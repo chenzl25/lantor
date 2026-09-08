@@ -7,6 +7,7 @@ import {
   CODEX_SERVICE_TIERS,
   RuntimeCheck,
   codexReasoningEffortsForModel,
+  isRetiredCodexModel,
   modelLabel,
   modelOptionsForRuntime,
   normalizeCodexReasoningEffortForModel,
@@ -113,9 +114,14 @@ export function AgentFormModal({
             });
           }}
         >
-          {modelOptionsForRuntime(form.runtime, form.model).map((model) => (
-            <option key={model} value={model}>{modelLabel(model)}</option>
-          ))}
+          {modelOptionsForRuntime(form.runtime, form.model).map((model) => {
+            const retired = isCodex && isRetiredCodexModel(model);
+            return (
+              <option key={model} value={model} disabled={retired}>
+                {modelLabel(model)}{retired ? " (retired)" : ""}
+              </option>
+            );
+          })}
         </select>
         <ChevronDown size={16} aria-hidden="true" />
       </div>
