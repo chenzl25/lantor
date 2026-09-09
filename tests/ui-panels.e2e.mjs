@@ -49,6 +49,8 @@ const api = createServer(async (req, res) => {
   switch (url.pathname) {
     case "/api/bootstrap": result = { ...state, ui_event_cursor: cursor }; break;
     case "/api/load_channel_previews": case "/api/load_activity_messages": case "/api/search_messages": result = []; break;
+    case "/api/load_activity_feed": result = { items: [], nextCursor: null, previousCursor: null }; break;
+    case "/api/load_activity_counts": result = { total: 0, unread: 0 }; break;
     case "/api/load_channel_messages": result = { messages: state.messages.filter(m => m.channel_id === args.channelId), next_before_seq: null, has_more: false }; break;
     case "/api/load_thread_messages": result = state.messages.filter(m => m.id === args.threadRootId || m.thread_root_id === args.threadRootId); break;
     case "/api/load_ui_state": result = Object.fromEntries(args.scopes.map(scope => [scope, state[scope]])); break;

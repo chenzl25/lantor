@@ -76,8 +76,8 @@ use commands::{
         rereview_github_pull_request,
     },
     inbox::{
-        dismiss_inbox_items, mark_all_inbox_read, mark_channel_read, mark_inbox_items_read,
-        update_thread_followed,
+        dismiss_inbox_items, load_activity_counts, load_activity_feed, mark_all_inbox_read,
+        mark_channel_read, mark_inbox_items_read, update_thread_followed,
     },
     messages::{
         delete_message, load_activity_messages, load_channel_messages, load_channel_previews,
@@ -316,6 +316,8 @@ pub fn run() {
             install_supervisor_service,
             dismiss_inbox_items,
             mark_inbox_items_read,
+            load_activity_feed,
+            load_activity_counts,
             mark_all_inbox_read,
             mark_channel_read,
             mark_github_review_attention_read,

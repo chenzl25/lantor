@@ -1,4 +1,7 @@
 import type {
+  ActivityFeedRequest,
+  ActivityFeedPage,
+  ActivityFeedCounts,
   Agent,
   AgentActivity,
   AgentWorkItem,
@@ -53,6 +56,14 @@ type AgentDraftRequest = {
 };
 
 export type ApiContract = {
+  load_activity_feed: {
+    args: { request: ActivityFeedRequest };
+    result: ActivityFeedPage;
+  };
+  load_activity_counts: {
+    args: { mentionHandles: string[] };
+    result: ActivityFeedCounts;
+  };
   load_agent_detail: {
     args: { agentId: string };
     result: { agent: Agent; agent_activities: AgentActivity[]; agent_work_items: AgentWorkItem[] };
@@ -376,6 +387,8 @@ const API_COMMAND_NAMES = {
   load_channel_messages: true,
   load_channel_previews: true,
   load_activity_messages: true,
+  load_activity_feed: true,
+  load_activity_counts: true,
   search_messages: true,
   load_message: true,
   create_channel: true,

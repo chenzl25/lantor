@@ -1,6 +1,24 @@
 use tauri::State;
 use uuid::Uuid;
 
+use crate::owner_inbox::feed::{self, FeedCounts, FeedPage, FeedRequest};
+
+#[tauri::command]
+pub(crate) async fn load_activity_feed(
+    request: FeedRequest,
+    state: State<'_, AppState>,
+) -> CommandResult<FeedPage> {
+    feed::page(&state.pool, request).await
+}
+
+#[tauri::command]
+pub(crate) async fn load_activity_counts(
+    mention_handles: Vec<String>,
+    state: State<'_, AppState>,
+) -> CommandResult<FeedCounts> {
+    feed::counts(&state.pool, &mention_handles).await
+}
+
 use crate::{
     app::{AppState, CommandResult},
     application::inbox::{

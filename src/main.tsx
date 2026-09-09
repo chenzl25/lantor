@@ -51,6 +51,7 @@ import { ConfirmModal } from "./components/ConfirmModal";
 import { Conversation } from "./components/Conversation";
 import { CreateChannelModal } from "./components/CreateChannelModal";
 import { ActivityFeedModal } from "./components/ActivityFeedModal";
+import { useActivityFeedCounts } from "./hooks/useActivityFeedCounts";
 import { ArtifactViewerModal } from "./components/ArtifactViewerModal";
 import { OwnerProfileModal, ownerProfileToForm, type OwnerProfileForm } from "./components/OwnerProfileModal";
 import { SavedMessagesModal } from "./components/SavedMessagesModal";
@@ -318,16 +319,6 @@ type AppErrorBoundaryState = {
 
 function phaseForActivity(kind: string) {
   return ACTIVITY_PHASE_LABELS[kind] ?? "Active";
-}
-
-function timestampSortValue(value: string) {
-  const parsed = new Date(value).getTime();
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function compareActivityFeedItems(left: ActivityFeedItem, right: ActivityFeedItem) {
-  if (left.unread !== right.unread) return left.unread ? -1 : 1;
-  return timestampSortValue(right.timestamp) - timestampSortValue(left.timestamp);
 }
 
 function isTextInput(target: EventTarget | null) {
@@ -788,7 +779,6 @@ function App() {
   const [messageSearchResults, setMessageSearchResults] = useState<Message[]>([]);
   const [messageSearchLoading, setMessageSearchLoading] = useState(false);
   const [wikiSearchResults, setWikiSearchResults] = useState<ChannelWikiSearchHit[]>([]);
-  const [activityFeedSnapshotVersion, setActivityFeedSnapshotVersion] = useState(0);
   const [newChannel, setNewChannel] = useState("");
   const [newChannelNameSubmitError, setNewChannelNameSubmitError] = useState<string | null>(null);
   const [newChannelAgentIds, setNewChannelAgentIds] = useState<Set<string>>(() => new Set());
@@ -931,14 +921,12 @@ function App() {
   const messageHydrationAttemptsRef = useRef<Map<string, number>>(new Map());
   const messageHydrationEpochRef = useRef<Map<string, number>>(new Map());
   const loadedHistoricalMessageIdsRef = useRef<Set<string>>(new Set());
-  const activityFeedMessageIdsRef = useRef<Set<string>>(new Set());
   const paginatedChannelIdsRef = useRef<Set<string>>(new Set());
   const initializedOlderChannelIdsRef = useRef<Set<string>>(new Set());
   const olderChannelBeforeSeqRef = useRef<Map<string, number>>(new Map());
   const loadingOlderChannelIdsRef = useRef<Set<string>>(new Set());
   const olderChannelRequestEpochRef = useRef<Map<string, number>>(new Map());
   const pendingChannelRestoreRef = useRef<Set<string>>(new Set());
-  const activityFeedRequestRef = useRef(0);
   const messageSearchRequestRef = useRef(0);
   const wikiSearchRequestRef = useRef(0);
   const loadingThreadIdsRef = useRef(new Set<string>());
@@ -1190,7 +1178,6 @@ function App() {
       snapshotInvalidated: refreshInvalidation !== refreshInvalidationRef.current,
       loadedHistoricalMessageIds: new Set([
         ...loadedHistoricalMessageIdsRef.current,
-        ...activityFeedMessageIdsRef.current,
       ]),
       paginatedChannelIds: paginatedChannelIdsRef.current,
       initializedChannelIds: initializedOlderChannelIdsRef.current,
@@ -1451,38 +1438,6 @@ function App() {
     };
   }, [activeThreadId, showThread, data?.ui_event_cursor]);
 
-  async function hydrateActivityFeedMessages() {
-    const requestId = activityFeedRequestRef.current + 1;
-    activityFeedRequestRef.current = requestId;
-    try {
-      const messages = await apiInvoke("load_activity_messages", {
-        mentionHandles: OWNER_MENTION_HANDLES,
-      });
-      if (activityFeedRequestRef.current !== requestId) return;
-
-      const known = knownMessageIdsRef.current ?? new Set(
-        data?.messages
-          .filter((message) => !isProgressOnlyMessage(message))
-          .map((message) => message.id) ?? [],
-      );
-      activityFeedMessageIdsRef.current = new Set(messages.map((message) => message.id));
-      for (const message of messages) {
-        hydratedMessageIdsRef.current.add(message.id);
-        hydratedMessageBodiesRef.current.set(message.id, message.body);
-        if (!isProgressOnlyMessage(message)) known.add(message.id);
-      }
-      knownMessageIdsRef.current = known;
-      setData((current) => current
-        ? { ...current, messages: mergeMessages(current.messages, messages) }
-        : current);
-      setActivityFeedSnapshotVersion((current) => current + 1);
-    } catch (err) {
-      if (activityFeedRequestRef.current !== requestId) return;
-      setAppError(errorMessage(err, "Failed to load Activity"));
-      console.error(err);
-    }
-  }
-
   async function loadChannelMessages(channelId: string) {
     const baselineActivities = new Map(data?.thread_activities.map(row => [row.thread_root_id, row]));
     if (
@@ -1674,7 +1629,6 @@ function App() {
       const result = applyBackendEvent(current, event);
       for (const messageId of result.deletedMessageIds) {
         loadedHistoricalMessageIdsRef.current.delete(messageId);
-        activityFeedMessageIdsRef.current.delete(messageId);
         knownMessageIdsRef.current?.delete(messageId);
       }
       if (result.needsRefresh) {
@@ -2992,227 +2946,12 @@ function App() {
     return new Map((data?.thread_activities ?? []).map((activity) => [activity.thread_root_id, activity]));
   }, [data?.thread_activities]);
 
-  const allThreadRootMessages = useMemo(() => {
-    const latestByRoot = new Map<string, number>();
-    for (const message of visibleMessages) {
-      if (!message.thread_root_id) continue;
-      const timestamp = new Date(message.created_at).getTime();
-      latestByRoot.set(message.thread_root_id, Math.max(latestByRoot.get(message.thread_root_id) ?? 0, timestamp));
-    }
-    for (const activity of data?.thread_activities ?? []) {
-      const timestamp = new Date(activity.latest_activity_at).getTime();
-      if (Number.isFinite(timestamp)) {
-        latestByRoot.set(activity.thread_root_id, Math.max(latestByRoot.get(activity.thread_root_id) ?? 0, timestamp));
-      }
-    }
-    return visibleMessages
-      .filter((message) =>
-        !message.thread_root_id &&
-        latestByRoot.has(message.id) &&
-        (message.thread_followed || (threadUnreadCounts[message.id] ?? 0) > 0) &&
-        !locallyUnfollowedThreadIds.has(message.id))
-      .sort((left, right) => (latestByRoot.get(right.id) ?? 0) - (latestByRoot.get(left.id) ?? 0));
-  }, [data?.thread_activities, visibleMessages, locallyUnfollowedThreadIds, threadUnreadCounts]);
-
-  const allActivityFeedItems = useMemo(() => {
-    if (!data) return [];
-    const channelsById = new Map(data.channels.map((item) => [item.id, item]));
-    const agentsById = new Map(data.agents.map((item) => [item.id, item]));
-    const latestByChannel = new Map<string, Message>();
-    const repliesByRoot = new Map<string, Message[]>();
-
-    for (const message of visibleMessages) {
-      const currentChannelLatest = latestByChannel.get(message.channel_id);
-      if (!currentChannelLatest || new Date(message.created_at) > new Date(currentChannelLatest.created_at)) {
-        latestByChannel.set(message.channel_id, message);
-      }
-      if (message.thread_root_id) {
-        const currentReplies = repliesByRoot.get(message.thread_root_id) ?? [];
-        currentReplies.push(message);
-        repliesByRoot.set(message.thread_root_id, currentReplies);
-      }
-    }
-    for (const replies of repliesByRoot.values()) {
-      replies.sort((left, right) => new Date(left.created_at).getTime() - new Date(right.created_at).getTime());
-    }
-
-    const channelLabel = (channelId: string | null) => {
-      if (!channelId) return APP_DISPLAY_NAME;
-      const target = channelsById.get(channelId);
-      if (!target) return "Unknown";
-      if (target.kind === "dm") {
-        const agent = target.dm_agent_id ? agentsById.get(target.dm_agent_id) : null;
-        return agent ? `@${agent.handle}` : "Direct message";
-      }
-      return `#${target.name}`;
-    };
-    const timestamp = (value: string | null | undefined) => value || new Date(0).toISOString();
-    const items: ActivityFeedItem[] = [];
-    const threadRootIdsForActivityFeed = new Set(allThreadRootMessages.map((message) => message.id));
-
-    for (const channel of data.channels) {
-      const unread = channel.unread_count > 0 || channelAlertIds.has(channel.id);
-      if (!unread) continue;
-      const latest = latestByChannel.get(channel.id);
-      if (latest?.thread_root_id && threadRootIdsForActivityFeed.has(latest.thread_root_id)) continue;
-      const dmAgent = channel.kind === "dm" && channel.dm_agent_id ? agentsById.get(channel.dm_agent_id) : null;
-      items.push({
-        id: `${channel.kind}:${channel.id}`,
-        dismissId: `${channel.kind}:${channel.id}`,
-        kind: channel.kind === "dm" ? "dm" : "channel",
-        title: channel.kind === "dm" ? `DM with @${dmAgent?.handle ?? "agent"}` : `New activity in #${channel.name}`,
-        excerpt: latest?.body ?? visibleChannelDescription(channel.description),
-        surface: channel.kind === "dm" ? "Direct message" : `#${channel.name}`,
-        actor: latest?.sender_name ?? "",
-        timestamp: timestamp(latest?.created_at),
-        unread: true,
-        actorAgentId: latest?.sender_agent_id ?? dmAgent?.id ?? null,
-        actorRole: latest?.sender_role ?? (channel.kind === "dm" ? "agent" : null),
-        channelId: channel.id,
-        threadId: latest?.thread_root_id ?? null,
-        messageId: latest?.id ?? null,
-        taskId: null,
-        reminderId: null,
-        replyCount: latest?.thread_root_id ? (threadReplyCounts[latest.thread_root_id] ?? 0) : 0,
-        newCount: channel.unread_count,
-      });
-    }
-
-    for (const root of allThreadRootMessages) {
-      const replies = repliesByRoot.get(root.id) ?? [];
-      const threadActivity = threadActivitiesByRoot.get(root.id);
-      const unreadCount = threadUnreadCounts[root.id] ?? threadActivity?.unread_count ?? 0;
-      const latestActivity = threadActivity
-        ? messagesById.get(threadActivity.latest_message_id) ?? replies[replies.length - 1] ?? root
-        : replies[replies.length - 1] ?? root;
-      const unread = unreadCount > 0;
-      // Jump to the first unread reply rather than the latest message —
-      // landing on the newest message is indistinguishable from just opening
-      // the thread at the bottom.
-      const firstUnread = unread && replies.length > 0
-        ? replies[Math.max(0, replies.length - unreadCount)] ?? replies[0]
-        : null;
-      items.push({
-        id: `thread:${root.id}`,
-        dismissId: `thread:${root.id}`,
-        kind: "thread",
-        title: firstLines(latestActivity.body, 1),
-        excerpt: latestActivity.body,
-        surface: channelLabel(root.channel_id),
-        actor: latestActivity.sender_name,
-        timestamp: timestamp(latestActivity.created_at),
-        unread,
-        actorAgentId: latestActivity.sender_agent_id,
-        actorRole: latestActivity.sender_role,
-        channelId: root.channel_id,
-        threadId: root.id,
-        messageId: firstUnread?.id ?? latestActivity.id,
-        taskId: null,
-        reminderId: null,
-        replyCount: threadReplyCounts[root.id] ?? 0,
-        newCount: unreadCount,
-      });
-    }
-
-    visibleMessages
-      .filter((message) => message.sender_role !== "owner" && messageMentionsOwner(message))
-      .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())
-      .forEach((message) => {
-        const rootId = message.thread_root_id ?? message.id;
-        items.push({
-          id: `mention:${message.id}`,
-          dismissId: `mention:${message.id}`,
-          kind: "mention",
-          title: firstLines(message.body, 1),
-          excerpt: message.body,
-          surface: channelLabel(message.channel_id),
-          actor: message.sender_name,
-          timestamp: message.created_at,
-          unread: channelAlertIds.has(message.channel_id) || (message.thread_root_id ? (threadUnreadCounts[message.thread_root_id] ?? 0) > 0 : false),
-          actorAgentId: message.sender_agent_id,
-          actorRole: message.sender_role,
-          channelId: message.channel_id,
-          threadId: rootId,
-          messageId: message.id,
-          taskId: null,
-          reminderId: null,
-          replyCount: threadReplyCounts[rootId] ?? 0,
-          newCount: message.thread_root_id ? (threadUnreadCounts[message.thread_root_id] ?? 0) : 0,
-        });
-      });
-
-    data.tasks
-      .filter((task) => task.status !== "done")
-      .forEach((task) => {
-        items.push({
-          id: `task:${task.id}`,
-          dismissId: `task:${task.id}`,
-          kind: "task",
-          title: `Task #${task.number}: ${task.title}`,
-          excerpt: task.assignee_name ? `Assigned to ${task.assignee_name}` : "Unassigned",
-          surface: `#${task.channel_name}`,
-          actor: task.status.replace("_", " "),
-          timestamp: task.updated_at,
-          unread: task.status === "in_review",
-          actorAgentId: task.assignee_id,
-          actorRole: task.assignee_id ? "agent" : null,
-          channelId: task.channel_id,
-          threadId: task.message_id,
-          messageId: task.message_id,
-          taskId: task.id,
-          reminderId: null,
-          replyCount: threadReplyCounts[task.message_id] ?? 0,
-          newCount: 0,
-        });
-      });
-
-    data.reminders
-      .filter((reminder) => reminder.status === "fired")
-      .forEach((reminder) => {
-        items.push({
-          id: `reminder:${reminder.id}`,
-          dismissId: `reminder:${reminder.id}`,
-          kind: "reminder",
-          title: reminder.title,
-          excerpt: reminder.note,
-          surface: reminder.channel_id ? channelLabel(reminder.channel_id) : "Reminder",
-          actor: "Reminder due",
-          timestamp: reminder.fired_at ?? reminder.due_at,
-          unread: true,
-          channelId: reminder.channel_id,
-          threadId: reminder.thread_root_id,
-          messageId: reminder.message_id,
-          taskId: null,
-          reminderId: reminder.id,
-          replyCount: reminder.thread_root_id ? (threadReplyCounts[reminder.thread_root_id] ?? 0) : 0,
-          newCount: 1,
-        });
-      });
-
-    return items;
-  }, [allThreadRootMessages, channelAlertIds, data, messagesById, threadActivitiesByRoot, threadReplyCounts, threadUnreadCounts, visibleMessages]);
-
-  const activityFeedItems = useMemo(() => {
-    return allActivityFeedItems
-      .filter((item) => {
-        const dismissedAt = dismissedActivityFeedItems[item.dismissId];
-        if (!dismissedAt) return true;
-        return new Date(item.timestamp).getTime() > new Date(dismissedAt).getTime();
-      })
-      .map((item) => {
-        const readAt = readActivityFeedItems[item.id];
-        if (!readAt || new Date(item.timestamp).getTime() > new Date(readAt).getTime()) {
-          return item;
-        }
-        return { ...item, unread: false };
-      })
-      .sort(compareActivityFeedItems)
-      .slice(0, 120);
-  }, [allActivityFeedItems, dismissedActivityFeedItems, readActivityFeedItems]);
-
-  const activityFeedUnreadCount = useMemo(() => {
-    return activityFeedItems.filter((item) => item.unread).length;
-  }, [activityFeedItems]);
+  const activityFeedRevision = useMemo(() => ({}), [
+    data?.messages, data?.channels, data?.tasks, data?.reminders,
+    data?.thread_activities, data?.read_inbox_items, data?.dismissed_inbox_items, showActivityFeedModal,
+  ]);
+  const activityFeedCounts = useActivityFeedCounts(activityFeedRevision, OWNER_MENTION_HANDLES);
+  const activityFeedUnreadCount = activityFeedCounts?.unread ?? 0;
 
   const savedMessageIds = useMemo(() => {
     return new Set(data?.saved_messages.map((item) => item.message_id) ?? []);
@@ -3706,7 +3445,6 @@ function App() {
           for (const message of current.messages) {
             if (message.channel_id !== channelToDelete.id) continue;
             loadedHistoricalMessageIdsRef.current.delete(message.id);
-            activityFeedMessageIdsRef.current.delete(message.id);
             knownMessageIdsRef.current?.delete(message.id);
           }
           return applyOptimisticMutation(current, {
@@ -4094,7 +3832,6 @@ function App() {
     setShowSavedModal(false);
     setShowActivityFeedModal(true);
     void Promise.all([
-      hydrateActivityFeedMessages(),
       reloadUiState(["thread_activities", "read_inbox_items", "dismissed_inbox_items"]),
     ]).catch((err) => setAppError(errorMessage(err, "Failed to load Activity context")));
   }
@@ -4776,14 +4513,13 @@ function App() {
   }
 
   function activityFeedItemCutoff(item: ActivityFeedItem) {
-    const itemTime = new Date(item.timestamp).getTime();
-    const cutoffTime = Math.max(Date.now(), Number.isFinite(itemTime) ? itemTime : 0);
-    return new Date(cutoffTime).toISOString();
+    return item.timestamp;
   }
 
   async function openActivityFeedItem(item: ActivityFeedItem) {
     if (item.unread) {
-      void markActivityFeedItemRead(item);
+      void markActivityFeedItemRead(item)
+        .catch(err => setAppError(errorMessage(err, "Failed to mark Activity read")));
     }
     const targetThreadId = item.threadId ?? item.messageId;
     if (item.messageId || targetThreadId) {
@@ -4805,37 +4541,11 @@ function App() {
   }
 
   async function markActivityFeedItemRead(item: ActivityFeedItem) {
-    if (!item.unread) return;
-    const dismissedUntil = activityFeedItemCutoff(item);
-    setReadActivityFeedItems((current) => ({ ...current, [item.id]: dismissedUntil }));
-    const operations: Promise<unknown>[] = [persistReadActivityFeedItems([item], dismissedUntil)];
-    if (item.threadId) {
-      setThreadUnreadCounts((current) => {
-        if (!current[item.threadId!]) return current;
-        const next = { ...current };
-        delete next[item.threadId!];
-        return next;
-      });
-      operations.push(persistThreadReadMarkers([{ threadId: item.threadId, dismissedUntil }]));
-    }
-    if (item.channelId) {
-      setChannelAlertIds((current) => {
-        if (!current.has(item.channelId!)) return current;
-        const next = new Set(current);
-        next.delete(item.channelId!);
-        return next;
-      });
-      operations.push(apiInvoke("mark_channel_read", { channelId: item.channelId }));
-    }
-    await Promise.all(operations);
-    await reloadUiState(["read_inbox_items", "dismissed_inbox_items", "channels"]);
+    await markAllActivityFeedRead([item]);
   }
 
   async function dismissActivityFeedItem(item: ActivityFeedItem) {
-    const dismissedUntil = activityFeedItemCutoff(item);
-    setDismissedActivityFeedItems((current) => ({ ...current, [item.dismissId]: dismissedUntil }));
-    await persistDismissedActivityFeedItems([item], dismissedUntil);
-    await reloadUiState(["read_inbox_items", "dismissed_inbox_items", "channels"]);
+    await dismissActivityFeedItems([item]);
   }
 
   async function dismissActivityFeedItems(items: ActivityFeedItem[]) {
@@ -4848,62 +4558,15 @@ function App() {
         cutoffByDismissId.set(item.dismissId, cutoff);
       }
     }
-    setDismissedActivityFeedItems((current) => {
-      const next = { ...current };
-      for (const [dismissId, dismissedUntil] of cutoffByDismissId) {
-        next[dismissId] = dismissedUntil;
-      }
-      return next;
-    });
     await persistDismissedActivityFeedItems(items, (item) => cutoffByDismissId.get(item.dismissId) ?? item.timestamp);
     await reloadUiState(["read_inbox_items", "dismissed_inbox_items", "channels"]);
   }
 
   async function markAllActivityFeedRead(items: ActivityFeedItem[]) {
-    const markReadItems = items.filter((item) => item.unread);
-    if (markReadItems.length === 0) return;
-    const cutoffByItemId = new Map(markReadItems.map((item) => [item.id, activityFeedItemCutoff(item)]));
-    setReadActivityFeedItems((current) => {
-      const next = { ...current };
-      for (const item of markReadItems) {
-        next[item.id] = cutoffByItemId.get(item.id) ?? item.timestamp;
-      }
-      return next;
-    });
-    setChannelAlertIds((current) => {
-      const channelIds = new Set(markReadItems.map((item) => item.channelId).filter((id): id is string => Boolean(id)));
-      if (channelIds.size === 0) return current;
-      const next = new Set(current);
-      for (const channelId of channelIds) {
-        next.delete(channelId);
-      }
-      return next;
-    });
-    setThreadUnreadCounts((current) => {
-      const threadIds = new Set(markReadItems.map((item) => item.threadId).filter((id): id is string => Boolean(id)));
-      if (threadIds.size === 0) return current;
-      const next = { ...current };
-      for (const threadId of threadIds) {
-        delete next[threadId];
-      }
-      return next;
-    });
-    await Promise.all([
-      persistReadActivityFeedItems(markReadItems, (item) => cutoffByItemId.get(item.id) ?? item.timestamp),
-      persistThreadReadMarkers(
-        markReadItems
-          .filter((item): item is ActivityFeedItem & { threadId: string } => Boolean(item.threadId))
-          .map((item) => ({
-            threadId: item.threadId,
-            dismissedUntil: cutoffByItemId.get(item.id) ?? item.timestamp,
-          })),
-      ),
-      ...Array.from(
-        new Set(markReadItems.map((item) => item.channelId).filter((id): id is string => Boolean(id))),
-        (channelId) => apiInvoke("mark_channel_read", { channelId }),
-      ),
-    ]);
-    await reloadUiState(["read_inbox_items", "dismissed_inbox_items", "channels"]);
+    const unread = items.filter(item => item.unread);
+    if (unread.length === 0) return;
+    await persistReadActivityFeedItems(unread, item => item.timestamp);
+    await reloadUiState(["read_inbox_items", "dismissed_inbox_items", "thread_activities", "channels"]);
   }
 
   function startSidebarResize(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -5177,8 +4840,9 @@ function App() {
 
       <ActivityFeedModal
         open={showActivityFeedModal}
-        items={activityFeedItems}
-        snapshotVersion={activityFeedSnapshotVersion}
+        counts={activityFeedCounts}
+        revision={activityFeedRevision}
+        mentionHandles={OWNER_MENTION_HANDLES}
         agents={data.agents}
         ownerProfile={data.owner_profile}
         onOpenItem={openActivityFeedItem}
