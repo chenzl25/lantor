@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+pub(crate) mod feed;
+
 use chrono::{DateTime, Utc};
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;

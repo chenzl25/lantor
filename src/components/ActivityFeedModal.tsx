@@ -1,24 +1,25 @@
 import { DialogSurface } from "./DialogSurface";
-import { ArrowUp, Bell, Check, Hash, Inbox, MessageSquare, UserRound, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUp, ArrowLeft, ArrowRight, RefreshCw, Bell, Check, Hash, Inbox, MessageSquare, UserRound, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent } from "react";
-import type { Agent, ActivityFeedItem, ActivityFeedKind, OwnerProfile } from "../types";
+import type { Agent, ActivityFeedItem, ActivityFeedKind, ActivityFeedFilter, ActivityFeedCounts, ActivityFeedPage, ActivityFeedCursor, OwnerProfile } from "../types";
 import { firstLines, formatTime, ownerAsAvatarAgent } from "../ui-utils";
 import { AgentAvatar } from "./AgentAvatar";
 
-type ActivityFeedFilter = "all" | "unread" | ActivityFeedKind;
+import { apiInvoke } from "../apiClient";
 
 type ActivityFeedModalProps = {
   open: boolean;
-  items: ActivityFeedItem[];
-  snapshotVersion: number;
+  counts: ActivityFeedCounts | null;
+  revision: object;
+  mentionHandles: string[];
   agents: Agent[];
   ownerProfile: OwnerProfile;
   onOpenItem: (item: ActivityFeedItem) => void;
-  onMarkItemRead: (item: ActivityFeedItem) => void;
-  onDismissItem: (item: ActivityFeedItem) => void;
-  onDismissItems: (items: ActivityFeedItem[]) => void;
-  onMarkAllRead: (items: ActivityFeedItem[]) => void;
+  onMarkItemRead: (item: ActivityFeedItem) => Promise<void>;
+  onDismissItem: (item: ActivityFeedItem) => Promise<void>;
+  onDismissItems: (items: ActivityFeedItem[]) => Promise<void>;
+  onMarkAllRead: (items: ActivityFeedItem[]) => Promise<void>;
   onClose: () => void;
 };
 
@@ -34,8 +35,6 @@ const FILTERS: { value: ActivityFeedFilter; label: string }[] = [
 
 const SWIPE_DISMISS_THRESHOLD_PX = 86;
 const SWIPE_REVEAL_MAX_PX = 96;
-const ACTIVITY_FEED_INITIAL_VISIBLE = 30;
-const ACTIVITY_FEED_LOAD_MORE_STEP = 30;
 
 function iconFor(kind: ActivityFeedKind) {
   if (kind === "reminder") return Bell;
@@ -54,22 +53,11 @@ function actorAvatarAgent(item: ActivityFeedItem, agents: Agent[], ownerProfile:
   return null;
 }
 
-function activityTimestampValue(item: ActivityFeedItem) {
-  const value = new Date(item.timestamp).getTime();
-  return Number.isFinite(value) ? value : 0;
-}
-
-function sortActivityFeedItems(items: ActivityFeedItem[]) {
-  return [...items].sort((left, right) => {
-    if (left.unread !== right.unread) return left.unread ? -1 : 1;
-    return activityTimestampValue(right) - activityTimestampValue(left);
-  });
-}
-
 export function ActivityFeedModal({
   open,
-  items,
-  snapshotVersion,
+  counts,
+  revision,
+  mentionHandles,
   agents,
   ownerProfile,
   onOpenItem,
@@ -80,82 +68,91 @@ export function ActivityFeedModal({
   onClose,
 }: ActivityFeedModalProps) {
   const [filter, setFilter] = useState<ActivityFeedFilter>("all");
-  const [visibleCount, setVisibleCount] = useState(ACTIVITY_FEED_INITIAL_VISIBLE);
-  const [displayItems, setDisplayItems] = useState<ActivityFeedItem[]>(() => sortActivityFeedItems(items));
+  const [cursor, setCursor] = useState<{ after?: ActivityFeedCursor; before?: ActivityFeedCursor }>({});
+  const [refresh, setRefresh] = useState(0);
+  const [page, setPage] = useState<ActivityFeedPage | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [acting, setActing] = useState(false);
+  const [hasUpdates, setHasUpdates] = useState(false);
+  const generation = useRef(0);
+  const running = useRef(false);
+  const pending = useRef<null | { id: number; request: { filter: ActivityFeedFilter; mentionHandles: string[]; after?: ActivityFeedCursor; before?: ActivityFeedCursor } }>(null);
+  const revisionRef = useRef(revision);
   const [swipeState, setSwipeState] = useState<{
-    itemId: string;
-    startX: number;
-    startY: number;
-    offsetX: number;
-    tracking: boolean;
+    itemId: string; startX: number; startY: number; offsetX: number; tracking: boolean;
   } | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const suppressNextClickRef = useRef(false);
-  const unreadCount = displayItems.filter((item) => item.unread).length;
-  const pendingItems = useMemo(() => {
-    const displayedById = new Map(displayItems.map((item) => [item.id, item]));
-    return items.filter((item) => {
-      const displayed = displayedById.get(item.id);
-      if (!displayed) return true;
-      return activityTimestampValue(item) > activityTimestampValue(displayed);
-    });
-  }, [displayItems, items]);
-  const filteredItems = useMemo(() => {
-    if (filter === "all") return displayItems;
-    if (filter === "unread") return displayItems.filter((item) => item.unread);
-    return displayItems.filter((item) => item.kind === filter);
-  }, [displayItems, filter]);
-  const filteredUnreadCount = filteredItems.filter((item) => item.unread).length;
-  const visibleItems = useMemo(
-    () => filteredItems.slice(0, visibleCount),
-    [filteredItems, visibleCount],
-  );
-  const hiddenCount = Math.max(0, filteredItems.length - visibleItems.length);
+  const visibleItems = page?.items ?? [];
+  const filteredUnreadCount = visibleItems.filter(item => item.unread).length;
 
   useEffect(() => {
-    setVisibleCount(ACTIVITY_FEED_INITIAL_VISIBLE);
-  }, [displayItems.length, filter]);
+    if (revisionRef.current !== revision) {
+      revisionRef.current = revision;
+      if (open) setHasUpdates(true);
+    }
+  }, [revision, open]);
 
   useEffect(() => {
-    if (!open) return;
-    setVisibleCount(ACTIVITY_FEED_INITIAL_VISIBLE);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open || snapshotVersion === 0) return;
-    setDisplayItems(sortActivityFeedItems(items));
-    setVisibleCount(ACTIVITY_FEED_INITIAL_VISIBLE);
-  }, [open, snapshotVersion]);
-
-  useEffect(() => {
-    if (open) return;
-    setDisplayItems(sortActivityFeedItems(items));
-  }, [items, open]);
-
-  useEffect(() => {
-    if (!open) return;
-    setDisplayItems((current) => {
-      const latestById = new Map(items.map((item) => [item.id, item]));
-      let changed = false;
-      const next: ActivityFeedItem[] = [];
-
-      for (const displayed of current) {
-        const latest = latestById.get(displayed.id);
-        if (!latest) {
-          changed = true;
-          continue;
+    const id = ++generation.current;
+    pending.current = null;
+    setPage(null);
+    setSwipeState(null);
+    if (!open) {
+      setLoading(false);
+      setCursor(current => current.after || current.before ? {} : current);
+      return;
+    }
+    setLoading(true);
+    setError("");
+    setHasUpdates(false);
+    pending.current = { id, request: { filter, mentionHandles, ...cursor } };
+    // Serialize requests and retain only the latest queued selection.
+    async function drain() {
+      if (running.current) return;
+      running.current = true;
+      try {
+        while (pending.current) {
+          const job = pending.current;
+          pending.current = null;
+          try {
+            const result = await apiInvoke("load_activity_feed", { request: job.request });
+            if (generation.current !== job.id) continue;
+            setPage(result);
+            bodyRef.current?.scrollTo({ top: 0 });
+          } catch (err) {
+            if (generation.current === job.id) setError(String(err));
+          } finally {
+            if (generation.current === job.id) setLoading(false);
+          }
         }
-        if (activityTimestampValue(latest) <= activityTimestampValue(displayed)) {
-          if (latest !== displayed) changed = true;
-          next.push(latest);
-        } else {
-          next.push(displayed);
-        }
-      }
+      } finally { running.current = false; }
+    }
+    void drain();
+    return () => { generation.current++; pending.current = null; };
+  }, [open, filter, cursor, refresh, mentionHandles]);
 
-      return changed ? sortActivityFeedItems(next) : current;
-    });
-  }, [items, open]);
+  async function act(operation: () => Promise<void>) {
+    setActing(true);
+    setError("");
+    try { await operation(); setRefresh(value => value + 1); }
+    catch (err) { setError(String(err)); }
+    finally { setActing(false); }
+  }
+
+  function selectFilter(value: ActivityFeedFilter) {
+    setPage(null);
+    setLoading(true);
+    setFilter(value);
+    setCursor({});
+  }
+
+  function navigate(value: { before?: ActivityFeedCursor; after?: ActivityFeedCursor }) {
+    setPage(null);
+    setLoading(true);
+    setCursor(value);
+  }
 
   if (!open) return null;
 
@@ -197,7 +194,7 @@ export function ActivityFeedModal({
       }, 0);
     }
     if (current.offsetX <= -SWIPE_DISMISS_THRESHOLD_PX) {
-      onDismissItem(item);
+      if (!acting) void act(() => onDismissItem(item));
     }
   }
 
@@ -210,11 +207,8 @@ export function ActivityFeedModal({
   }
 
   function showPendingItems() {
-    setDisplayItems(items);
-    setVisibleCount(ACTIVITY_FEED_INITIAL_VISIBLE);
-    window.requestAnimationFrame(() => {
-      bodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-    });
+    navigate({});
+    setRefresh(value => value + 1);
   }
 
   return (
@@ -222,22 +216,22 @@ export function ActivityFeedModal({
         <header className="activity-feed-head">
           <div>
             <h2>Activity</h2>
-            <p>{displayItems.length} active · {unreadCount} unread</p>
+            <p>{counts ? `${counts.total} active · ${counts.unread} unread` : "Activity"}</p>
           </div>
           <div className="activity-feed-head-actions">
             <button
               className="activity-feed-mark-all"
-              disabled={filteredUnreadCount === 0}
-              onClick={() => onMarkAllRead(filteredItems)}
+              disabled={acting || loading || filteredUnreadCount === 0}
+              onClick={() => void act(() => onMarkAllRead(visibleItems))}
             >
-              Mark all read
+              Mark page read
             </button>
             <button
               className="activity-feed-dismiss-all"
-              disabled={filteredItems.length === 0}
-              onClick={() => onDismissItems(filteredItems)}
+              disabled={acting || loading || visibleItems.length === 0}
+              onClick={() => void act(() => onDismissItems(visibleItems))}
             >
-              Dismiss all
+              Dismiss page
             </button>
           </div>
           <button className="activity-feed-back" onClick={onClose} aria-label="Close activity">
@@ -250,26 +244,29 @@ export function ActivityFeedModal({
             <button
               key={item.value}
               className={filter === item.value ? "active" : ""}
-              onClick={() => setFilter(item.value)}
+              disabled={acting}
+              onClick={() => selectFilter(item.value)}
             >
               {item.label}
             </button>
           ))}
         </div>
 
-        <div className="activity-feed-body" ref={bodyRef}>
-          {pendingItems.length > 0 && (
+        <div className="activity-feed-body" ref={bodyRef} aria-busy={loading}>
+          {loading && <p role="status">Loading activity...</p>}
+          {error && <div role="alert">{error}<button type="button" title="Retry loading activity" onClick={() => setRefresh(value => value + 1)}><RefreshCw size={16} /></button></div>}
+          {hasUpdates && !loading && (
             <div className="activity-feed-new-activity">
               <button type="button" onClick={showPendingItems}>
                 <ArrowUp size={16} />
                 <span>
-                  {pendingItems.length === 1 ? "1 new activity" : `${pendingItems.length} new activities`}
+                  Updates available
                 </span>
               </button>
             </div>
           )}
 
-          {filteredItems.length === 0 && (
+          {!loading && !error && visibleItems.length === 0 && (
             <div className="search-empty">
               <Inbox size={34} />
               <h3>No activity</h3>
@@ -337,9 +334,10 @@ export function ActivityFeedModal({
                       <button
                         className="activity-feed-check"
                         title="Mark read"
+                        disabled={acting || loading}
                         onClick={(event) => {
                           event.stopPropagation();
-                          onMarkItemRead(item);
+                          void act(() => onMarkItemRead(item));
                         }}
                       >
                         <Check size={19} />
@@ -348,9 +346,10 @@ export function ActivityFeedModal({
                     <button
                       className="activity-feed-dismiss"
                       title="Dismiss"
+                      disabled={acting || loading}
                       onClick={(event) => {
                         event.stopPropagation();
-                        onDismissItem(item);
+                        void act(() => onDismissItem(item));
                       }}
                     >
                       <X size={18} />
@@ -361,22 +360,14 @@ export function ActivityFeedModal({
             );
           })}
 
-          {hiddenCount > 0 && (
-            <div className="activity-feed-load-more">
-              <button
-                type="button"
-                onClick={() =>
-                  setVisibleCount((current) =>
-                    Math.min(filteredItems.length, current + ACTIVITY_FEED_LOAD_MORE_STEP),
-                  )
-                }
-              >
-                Show {Math.min(hiddenCount, ACTIVITY_FEED_LOAD_MORE_STEP)} more
-                <span>{hiddenCount} hidden</span>
-              </button>
-            </div>
-          )}
+
         </div>
+        <footer className="activity-feed-pagination">
+          <button type="button" title="Latest activity" disabled={loading || acting} onClick={showPendingItems}><RefreshCw size={18} /></button>
+          <button type="button" title="Previous page" disabled={loading || acting || !page?.previousCursor} onClick={() => navigate({ before: page!.previousCursor! })}><ArrowLeft size={18} /></button>
+          <span>{visibleItems.length} items</span>
+          <button type="button" title="Next page" disabled={loading || acting || !page?.nextCursor} onClick={() => navigate({ after: page!.nextCursor! })}><ArrowRight size={18} /></button>
+        </footer>
     </DialogSurface>
   );
 }

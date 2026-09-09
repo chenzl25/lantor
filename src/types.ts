@@ -554,6 +554,21 @@ export type SearchResult = {
 
 export type ActivityFeedKind = "mention" | "dm" | "thread" | "task" | "reminder" | "channel";
 
+export type ActivityFeedFilter = "all" | "unread" | ActivityFeedKind;
+export type ActivityFeedCursor = { timestamp: string; id: string };
+export type ActivityFeedPage = {
+  items: ActivityFeedItem[];
+  nextCursor: ActivityFeedCursor | null;
+  previousCursor: ActivityFeedCursor | null;
+};
+export type ActivityFeedRequest = {
+  filter: ActivityFeedFilter;
+  mentionHandles: string[];
+  after?: ActivityFeedCursor | null;
+  before?: ActivityFeedCursor | null;
+};
+export type ActivityFeedCounts = { total: number; unread: number };
+
 export type ActivityFeedItem = {
   id: string;
   dismissId: string;

@@ -185,6 +185,8 @@ pub(crate) fn spawn_web_server_if_configured(pool: SqlitePool, db_url: String) {
 fn web_router(state: Arc<WebState>, dist_dir: PathBuf) -> Router {
     let index = dist_dir.join("index.html");
     let app = Router::new()
+        .route("/api/load_activity_feed", post(api_load_activity_feed))
+        .route("/api/load_activity_counts", post(api_load_activity_counts))
         .route("/api/health", get(api_health))
         .route(
             "/api/bootstrap",
@@ -561,6 +563,26 @@ async fn api_load_activity_messages(
     Json(request): Json<LoadActivityMessagesRequest>,
 ) -> Result<impl IntoResponse, Response> {
     message_commands::load_activity_messages(&state.pool, request)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_load_activity_feed(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<crate::owner_inbox::feed::FeedPageRequest>,
+) -> Result<impl IntoResponse, Response> {
+    crate::owner_inbox::feed::page(&state.pool, request.request)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_load_activity_counts(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<crate::owner_inbox::feed::FeedCountsRequest>,
+) -> Result<impl IntoResponse, Response> {
+    crate::owner_inbox::feed::counts(&state.pool, &request.mention_handles)
         .await
         .map(Json)
         .map_err(api_error)
