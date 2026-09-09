@@ -4,12 +4,108 @@ use std::{
     process::{Command as StdCommand, Stdio},
 };
 
+use serde::Deserialize;
+use serde_json::json;
+use sqlx::SqlitePool;
+use tauri::{Manager, State};
+
 use crate::{
-    app::{to_string, CommandResult},
+    app::{to_string, AppState, CommandResult},
     db::expand_home_path,
+    events::activity::record_agent_activity,
     models::RuntimeCheck,
 };
-use tauri::Manager;
+
+/// Crash details posted by the frontend error boundary (or an uncaught window
+/// error) so a phone or remote browser crash leaves a server-side trace.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClientCrashReport {
+    pub(crate) message: String,
+    #[serde(default)]
+    pub(crate) stack: Option<String>,
+    #[serde(default)]
+    pub(crate) component_stack: Option<String>,
+    #[serde(default)]
+    pub(crate) source: Option<String>,
+    #[serde(default)]
+    pub(crate) runtime: Option<String>,
+    #[serde(default)]
+    pub(crate) url: Option<String>,
+    #[serde(default)]
+    pub(crate) user_agent: Option<String>,
+    #[serde(default)]
+    pub(crate) shell_version: Option<String>,
+    #[serde(default)]
+    pub(crate) viewport: Option<String>,
+}
+
+const CLIENT_CRASH_FIELD_LIMIT: usize = 8_000;
+
+fn clip_crash_field(value: Option<String>) -> Option<String> {
+    let value = value?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.len() <= CLIENT_CRASH_FIELD_LIMIT {
+        return Some(trimmed.to_owned());
+    }
+    let mut cut = CLIENT_CRASH_FIELD_LIMIT;
+    while !trimmed.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    Some(format!("{}…", &trimmed[..cut]))
+}
+
+#[tauri::command]
+pub(crate) async fn report_client_crash(
+    report: ClientCrashReport,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    report_client_crash_in_pool(&state.pool, report).await
+}
+
+pub(crate) async fn report_client_crash_in_pool(
+    pool: &SqlitePool,
+    report: ClientCrashReport,
+) -> CommandResult<()> {
+    let message =
+        clip_crash_field(Some(report.message)).unwrap_or_else(|| "unknown error".to_owned());
+    let runtime = match report.runtime.as_deref() {
+        Some("desktop") => "desktop",
+        _ => "web",
+    };
+    let source = match report.source.as_deref() {
+        Some("window") => "window",
+        _ => "render",
+    };
+    let detail = json!({
+        "message": message,
+        "stack": clip_crash_field(report.stack),
+        "component_stack": clip_crash_field(report.component_stack),
+        "source": source,
+        "runtime": runtime,
+        "url": clip_crash_field(report.url),
+        "user_agent": clip_crash_field(report.user_agent),
+        "shell_version": clip_crash_field(report.shell_version),
+        "viewport": clip_crash_field(report.viewport),
+    });
+    eprintln!("Lantor {runtime} UI crashed ({source}): {message}");
+    record_agent_activity(
+        pool,
+        None,
+        None,
+        "error",
+        if runtime == "desktop" {
+            "Desktop UI crashed"
+        } else {
+            "Web UI crashed"
+        },
+        detail.to_string(),
+    )
+    .await
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum OpenLinkTarget {
@@ -527,5 +623,55 @@ mod tests {
             super::editor_file_uri("cursor", "/tmp/100%/main.rs", 7),
             "cursor://file/tmp/100%25/main.rs:7:1"
         );
+    }
+}
+
+#[cfg(test)]
+mod crash_report_tests {
+    use super::*;
+    use crate::test_support::{drop_test_schema, test_pool};
+    use sqlx::Row;
+
+    #[tokio::test]
+    async fn client_crash_report_lands_in_activity_log() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            report_client_crash_in_pool(
+                &pool,
+                ClientCrashReport {
+                    message: "Cannot read properties of undefined (reading 'seq')".to_owned(),
+                    stack: Some("TypeError: Cannot read properties of undefined\n    at useMessageRows (index-abc.js:1:2)".to_owned()),
+                    component_stack: Some("\n    at Conversation\n    at App".to_owned()),
+                    source: Some("render".to_owned()),
+                    runtime: Some("web".to_owned()),
+                    url: Some("http://100.64.0.1:8787/".to_owned()),
+                    user_agent: Some("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)".to_owned()),
+                    shell_version: Some("848d77b193021e83d6c2".to_owned()),
+                    viewport: Some("390x664".to_owned()),
+                },
+            )
+            .await?;
+            let row = sqlx::query(
+                "select kind, phase, status, title, detail, agent_id from agent_activities order by created_at desc limit 1",
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            assert_eq!(row.get::<String, _>("kind"), "error");
+            assert_eq!(row.get::<String, _>("phase"), "error");
+            assert_eq!(row.get::<String, _>("status"), "error");
+            assert_eq!(row.get::<String, _>("title"), "Web UI crashed");
+            assert!(row.get::<Option<uuid::Uuid>, _>("agent_id").is_none());
+            let detail: String = row.get("detail");
+            assert!(detail.contains("useMessageRows"), "{detail}");
+            assert!(detail.contains("iPhone"), "{detail}");
+            assert!(detail.contains("848d77b193021e83d6c2"), "{detail}");
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        assert!(result.is_ok(), "{:?}", result.err());
     }
 }

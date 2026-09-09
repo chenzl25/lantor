@@ -1,6 +1,7 @@
 import { activeDialog } from "./dialog-layers";
 import { AppToast } from "./components/AppToast";
 import { UI_ERROR_EVENT } from "./ui-notice";
+import { reportClientCrash, watchWindowErrors } from "./crash-report";
 import {
   Component,
   Profiler,
@@ -444,6 +445,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, AppErrorBounda
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error(`${APP_DISPLAY_NAME} UI crashed`, error, info);
+    reportClientCrash(error, info.componentStack, "render");
     this.setState({ info });
   }
 
@@ -461,7 +463,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, AppErrorBounda
           <h1>Frontend render failed</h1>
           <p>
             The backend is still running. Reload the app to recover; the details below are kept
-            visible so this does not become a blank window.
+            visible so this does not become a blank window, and were also recorded in the activity log.
           </p>
           <div className="fatal-actions">
             <button type="button" onClick={() => window.location.reload()}>Reload {APP_DISPLAY_NAME}</button>
@@ -5523,6 +5525,7 @@ const app = (
   </>
 );
 
+watchWindowErrors();
 createRoot(document.getElementById("root")!).render(
   shouldEnablePerfTelemetry() || shouldEnableBenchProfiler()
     ? <Profiler id="LantorApp" onRender={recordAppCommit}>{app}</Profiler>

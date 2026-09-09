@@ -80,6 +80,20 @@ export type ApiContract = {
     args: { runtime: string };
     result: RuntimeCheck;
   };
+  report_client_crash: {
+    args: {
+      message: string;
+      stack?: string | null;
+      componentStack?: string | null;
+      source: "render" | "window";
+      runtime: "web" | "desktop";
+      url: string;
+      userAgent: string;
+      shellVersion?: string | null;
+      viewport: string;
+    };
+    result: MutationResult;
+  };
   send_message: {
     args: {
       messageId?: string | null;
@@ -356,6 +370,7 @@ const API_COMMAND_NAMES = {
   load_thread_messages: true,
   replay_ui_events: true,
   check_runtime: true,
+  report_client_crash: true,
   send_message: true,
   load_older_channel_messages: true,
   load_channel_messages: true,

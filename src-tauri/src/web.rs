@@ -60,7 +60,9 @@ use crate::application::{
 use crate::domain::reminders::complete_reminder_in_pool;
 use crate::launch_agent;
 use crate::lifecycle_commands::start_agent_in_pool;
-use crate::system_commands::check_runtime_in_env;
+use crate::system_commands::{
+    check_runtime_in_env, report_client_crash_in_pool, ClientCrashReport,
+};
 use crate::ui_notifications::{enqueue_ui_event, enqueue_ui_event_in_tx, UiEvent};
 use crate::web_upload::parse_multipart_send_message;
 use crate::{
@@ -189,6 +191,7 @@ fn web_router(state: Arc<WebState>, dist_dir: PathBuf) -> Router {
             get(api_bootstrap).layer(CompressionLayer::new()),
         )
         .route("/api/check_runtime", post(api_check_runtime))
+        .route("/api/report_client_crash", post(api_report_client_crash))
         .route("/api/events", get(api_events))
         .route(
             "/api/load_agent_detail",
@@ -456,6 +459,16 @@ async fn api_check_runtime(
     check_runtime_in_env(request.runtime)
         .await
         .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_report_client_crash(
+    State(state): State<Arc<WebState>>,
+    Json(report): Json<ClientCrashReport>,
+) -> Result<impl IntoResponse, Response> {
+    report_client_crash_in_pool(&state.pool, report)
+        .await
+        .map(|_| Json(json!({ "ok": true })))
         .map_err(api_error)
 }
 

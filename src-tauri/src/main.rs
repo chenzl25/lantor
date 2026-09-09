@@ -100,6 +100,7 @@ use lifecycle_commands::{
 use runtime::supervisor::run_supervisor;
 use system_commands::{
     check_runtime, complete_startup_splash, download_attachment, open_external_url,
+    report_client_crash,
 };
 use ui_notifications::{replay_ui_events, spawn_ui_events_pruner, spawn_ui_refresh_listener};
 use ui_state::{load_agent_detail, load_thread_messages, load_ui_state};
@@ -299,6 +300,7 @@ pub fn run() {
             cancel_agent_work,
             cancel_reminder,
             check_runtime,
+            report_client_crash,
             complete_reminder,
             create_agent,
             create_agent_schedule,
