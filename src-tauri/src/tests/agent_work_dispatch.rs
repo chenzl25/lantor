@@ -537,7 +537,7 @@ async fn busy_warm_codex_start_requeues_work_item_without_leaving_running_state(
             run_id,
             Some(work_item_id),
             "codex warm runtime became busy before turn start",
-            true,
+            crate::runtime::process::WarmStartFailure::RuntimeBusy,
         )
         .await?;
 
@@ -959,6 +959,206 @@ async fn conversational_work_item_finish_does_not_insert_system_message() {
         .await
         .map_err(|err| err.to_string())?;
         assert_eq!(system_messages, 0);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    assert!(result.is_ok(), "{:?}", result.err());
+}
+
+#[tokio::test]
+async fn transient_warm_codex_start_retries_then_fails_without_flagging_agent() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "transient-start-agent").await?;
+        let channel_id = insert_test_channel(&pool, "transient-start").await?;
+        let work_item_id: Uuid = sqlx::query_scalar(
+            r#"
+            insert into agent_work_items (
+                agent_id, channel_id, source_kind, title, context, status
+            )
+            values ($1, $2, 'thread_followup', 'transient start', 'context', 'queued')
+            returning id
+            "#,
+        )
+        .bind(agent_id)
+        .bind(channel_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+
+        let max_attempts = crate::runtime::process::MAX_WARM_START_ATTEMPTS;
+        for attempt in 1..=max_attempts {
+            let run_id: Uuid = sqlx::query_scalar(
+                r#"
+                insert into agent_runs (agent_id, work_item_id, command, working_directory, status, pid, log)
+                values ($1, $2, 'codex app-server --listen stdio://', '', 'running', 51932, '')
+                returning id
+                "#,
+            )
+            .bind(agent_id)
+            .bind(work_item_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            sqlx::query(
+                "update agent_work_items set status = 'running', run_id = $2 where id = $1",
+            )
+            .bind(work_item_id)
+            .bind(run_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            sqlx::query("update agents set status = 'running' where id = $1")
+                .bind(agent_id)
+                .execute(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+
+            crate::runtime::codex::cleanup_failed_warm_codex_start(
+                &pool,
+                agent_id,
+                run_id,
+                Some(work_item_id),
+                "error returned from database: (code: 5) database is locked",
+                crate::runtime::process::WarmStartFailure::Transient,
+            )
+            .await?;
+
+            let run_status: String =
+                sqlx::query_scalar("select status from agent_runs where id = $1")
+                    .bind(run_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            assert_eq!(run_status, "failed", "attempt {attempt}");
+            let work_row =
+                sqlx::query("select status, run_id from agent_work_items where id = $1")
+                    .bind(work_item_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            let work_status: String = work_row.get("status");
+            let work_run_id: Option<Uuid> = work_row.get("run_id");
+            let agent_status: String =
+                sqlx::query_scalar("select status from agents where id = $1")
+                    .bind(agent_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            let activity_title: String = sqlx::query_scalar(
+                "select title from agent_activities where run_id = $1 order by created_at desc limit 1",
+            )
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            // A healthy runtime never flags the agent as broken.
+            assert_eq!(agent_status, "idle", "attempt {attempt}");
+            if attempt < max_attempts {
+                assert_eq!(work_status, "queued", "attempt {attempt}");
+                assert!(work_run_id.is_none(), "attempt {attempt}");
+                assert_eq!(activity_title, "Request start retry scheduled");
+            } else {
+                assert_eq!(work_status, "failed");
+                assert_eq!(activity_title, "Run failed to start");
+            }
+        }
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    assert!(result.is_ok(), "{:?}", result.err());
+}
+
+#[tokio::test]
+async fn error_agent_launch_waits_for_cooldown_then_relaunches() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "cooldown-agent").await?;
+        let channel_id = insert_test_channel(&pool, "cooldown").await?;
+        sqlx::query("update agents set status = 'error' where id = $1")
+            .bind(agent_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        crate::events::activity::record_agent_activity(
+            &pool,
+            Some(agent_id),
+            None,
+            "run_error",
+            "Codex warm app-server failed to start",
+            "spawn failed",
+        )
+        .await?;
+        let work_item_id: Uuid = sqlx::query_scalar(
+            r#"
+            insert into agent_work_items (
+                agent_id, channel_id, source_kind, title, context, status
+            )
+            values ($1, $2, 'thread_followup', 'cooldown start', 'context', 'queued')
+            returning id
+            "#,
+        )
+        .bind(agent_id)
+        .bind(channel_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+
+        let pending_starts = |pool: &sqlx::SqlitePool| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>(
+                    r#"
+                    select count(*)
+                    from supervisor_commands
+                    where command_type = 'start_agent'
+                      and work_item_id = $1
+                      and status in ('pending', 'running')
+                    "#,
+                )
+                .bind(work_item_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())
+            }
+        };
+
+        // A launch failure seconds ago keeps the request queued for now.
+        let scheduled =
+            crate::agent_inbox_wake::enqueue_agent_work_if_available(&pool, agent_id, work_item_id)
+                .await?;
+        assert!(!scheduled);
+        assert_eq!(pending_starts(&pool).await?, 0);
+
+        // Once the failure ages past the cooldown the next scheduler pass relaunches.
+        sqlx::query(
+            r#"
+            update agent_activities
+            set created_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now','-10 minutes')
+            where agent_id = $1
+            "#,
+        )
+        .bind(agent_id)
+        .execute(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        let scheduled =
+            crate::agent_inbox_wake::enqueue_agent_work_if_available(&pool, agent_id, work_item_id)
+                .await?;
+        assert!(scheduled);
+        assert_eq!(pending_starts(&pool).await?, 1);
+        let agent_status: String = sqlx::query_scalar("select status from agents where id = $1")
+            .bind(agent_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        assert_eq!(agent_status, "queued");
         Ok(())
     }
     .await;

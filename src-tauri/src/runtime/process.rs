@@ -876,6 +876,23 @@ pub(crate) async fn terminate_process_group(pid: i32) -> CommandResult<()> {
     Ok(())
 }
 
+/// How a warm runtime start failed before its turn was actually sent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WarmStartFailure {
+    /// Another turn already occupies the runtime: requeue the request and keep
+    /// the agent running so it is picked up once that turn finishes.
+    RuntimeBusy,
+    /// The runtime is healthy but the start hit a transient problem (database
+    /// contention, runtime exited moments earlier): requeue and retry a bounded
+    /// number of times, then fail the request without flagging the agent.
+    Transient,
+    /// The turn cannot run at all: fail the request and flag the agent.
+    Fatal,
+}
+
+/// Maximum number of runs a single request may burn on transient start failures.
+pub(crate) const MAX_WARM_START_ATTEMPTS: i64 = 3;
+
 /// Shared cleanup for warm streaming runtimes (codex/claude) when a turn fails
 /// after its run/work item rows were created but before the turn actually
 /// started. Without this the run stays `running` and the agent looks busy
@@ -887,7 +904,7 @@ pub(crate) async fn cleanup_failed_warm_start(
     run_id: Uuid,
     work_item_id: Option<Uuid>,
     error: &str,
-    requeue_work_item: bool,
+    failure: WarmStartFailure,
 ) -> CommandResult<()> {
     let error_log = format!("{runtime_label} warm turn failed before start: {error}\n");
     let mut transaction = pool.begin().await.map_err(to_string)?;
@@ -907,16 +924,62 @@ pub(crate) async fn cleanup_failed_warm_start(
     .await
     .map_err(to_string)?;
 
-    sqlx::query("update agents set status = $2 where id = $1")
-        .bind(agent_id)
-        .bind(if requeue_work_item {
-            "running"
-        } else {
-            "error"
-        })
-        .execute(&mut *transaction)
+    // Every failed start of a request leaves a failed run behind, so the run
+    // history doubles as the attempt counter (the current run included).
+    let attempts = match (failure, work_item_id) {
+        (WarmStartFailure::Transient, Some(work_item_id)) => sqlx::query_scalar::<_, i64>(
+            "select count(*) from agent_runs where work_item_id = $1 and status = 'failed'",
+        )
+        .bind(work_item_id)
+        .fetch_one(&mut *transaction)
         .await
-        .map_err(to_string)?;
+        .map_err(to_string)?,
+        _ => 0,
+    };
+    let requeue_work_item = match failure {
+        WarmStartFailure::RuntimeBusy => true,
+        WarmStartFailure::Transient => work_item_id.is_some() && attempts < MAX_WARM_START_ATTEMPTS,
+        WarmStartFailure::Fatal => false,
+    };
+
+    match failure {
+        WarmStartFailure::RuntimeBusy => {
+            sqlx::query("update agents set status = 'running' where id = $1")
+                .bind(agent_id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(to_string)?;
+        }
+        WarmStartFailure::Transient => {
+            // The runtime is fine, so the agent goes back to idle unless another
+            // run of it is still live (codex can start turns concurrently).
+            sqlx::query(
+                r#"
+                update agents
+                set status = 'idle'
+                where id = $1
+                  and not exists (
+                      select 1
+                      from agent_runs
+                      where agent_id = $1
+                        and stopped_at is null
+                        and status in ('starting', 'running', 'stopping')
+                  )
+                "#,
+            )
+            .bind(agent_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(to_string)?;
+        }
+        WarmStartFailure::Fatal => {
+            sqlx::query("update agents set status = 'error' where id = $1")
+                .bind(agent_id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(to_string)?;
+        }
+    }
     enqueue_ui_agent_run_changed_in_tx(&mut transaction, run_id, "run_failed").await?;
 
     if let Some(work_item_id) = work_item_id {
@@ -969,25 +1032,26 @@ pub(crate) async fn cleanup_failed_warm_start(
         .await?;
     }
     if requeue_work_item {
+        // The scheduler sweep relaunches the queued request on its next pass.
         let _ = notify_supervisor_wake(pool).await;
     }
 
-    record_agent_activity(
-        pool,
-        Some(agent_id),
-        Some(run_id),
-        if requeue_work_item {
-            "dispatch"
-        } else {
-            "run_error"
-        },
-        if requeue_work_item {
-            "Request requeued"
-        } else {
-            "Run failed to start"
-        },
-        error.to_owned(),
-    )
-    .await?;
+    let (kind, title, detail) = match failure {
+        WarmStartFailure::RuntimeBusy => ("dispatch", "Request requeued", error.to_owned()),
+        WarmStartFailure::Transient if requeue_work_item => (
+            "dispatch",
+            "Request start retry scheduled",
+            format!("attempt {attempts}/{MAX_WARM_START_ATTEMPTS} failed: {error}"),
+        ),
+        WarmStartFailure::Transient if work_item_id.is_some() => (
+            "run_error",
+            "Run failed to start",
+            format!("gave up after {attempts} attempts: {error}"),
+        ),
+        WarmStartFailure::Transient | WarmStartFailure::Fatal => {
+            ("run_error", "Run failed to start", error.to_owned())
+        }
+    };
+    record_agent_activity(pool, Some(agent_id), Some(run_id), kind, title, detail).await?;
     Ok(())
 }

@@ -20,7 +20,7 @@ use crate::runtime::{
     process::{
         classify_agent_output_activity, cleanup_failed_warm_start,
         configure_agent_context_tool_env, configure_agent_identity_env, terminate_process_group,
-        upsert_runtime_thread_id,
+        upsert_runtime_thread_id, WarmStartFailure,
     },
     runtime_environment_changed,
     streaming::{
@@ -580,8 +580,16 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
             ensure_streaming_agent_message(pool, agent_id, channel_id, thread_root_id, &stream_key)
                 .await
         {
-            cleanup_failed_warm_start(pool, "claude", agent_id, run_id, work_item_id, &err, false)
-                .await?;
+            cleanup_failed_warm_start(
+                pool,
+                "claude",
+                agent_id,
+                run_id,
+                work_item_id,
+                &err,
+                WarmStartFailure::Transient,
+            )
+            .await?;
             return Err(err);
         }
     }
@@ -616,7 +624,11 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
             run_id,
             work_item_id,
             &err,
-            err == CLAUDE_BUSY_BEFORE_TURN_START,
+            if err == CLAUDE_BUSY_BEFORE_TURN_START {
+                WarmStartFailure::RuntimeBusy
+            } else {
+                WarmStartFailure::Transient
+            },
         )
         .await?;
         return Err(err);

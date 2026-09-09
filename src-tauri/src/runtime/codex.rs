@@ -26,7 +26,7 @@ use crate::runtime::{
     process::{
         classify_agent_output_activity, cleanup_failed_warm_start,
         configure_agent_context_tool_env, configure_agent_identity_env, load_runtime_thread_id,
-        terminate_process_group, upsert_runtime_thread_id,
+        terminate_process_group, upsert_runtime_thread_id, WarmStartFailure,
     },
     runtime_environment_changed,
     streaming::{
@@ -255,7 +255,7 @@ pub(crate) async fn cleanup_failed_warm_codex_start(
     run_id: Uuid,
     work_item_id: Option<Uuid>,
     error: &str,
-    requeue_work_item: bool,
+    failure: WarmStartFailure,
 ) -> CommandResult<()> {
     cleanup_failed_warm_start(
         pool,
@@ -264,7 +264,7 @@ pub(crate) async fn cleanup_failed_warm_codex_start(
         run_id,
         work_item_id,
         error,
-        requeue_work_item,
+        failure,
     )
     .await
 }
@@ -1080,8 +1080,15 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
         )
         .await
         {
-            cleanup_failed_warm_codex_start(pool, agent_id, run_id, work_item_id, &err, false)
-                .await?;
+            cleanup_failed_warm_codex_start(
+                pool,
+                agent_id,
+                run_id,
+                work_item_id,
+                &err,
+                WarmStartFailure::Transient,
+            )
+            .await?;
             return Err(err);
         }
     }
@@ -1089,8 +1096,15 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
     let cwd = match effective_codex_cwd(&working_directory) {
         Ok(cwd) => cwd,
         Err(err) => {
-            cleanup_failed_warm_codex_start(pool, agent_id, run_id, work_item_id, &err, false)
-                .await?;
+            cleanup_failed_warm_codex_start(
+                pool,
+                agent_id,
+                run_id,
+                work_item_id,
+                &err,
+                WarmStartFailure::Fatal,
+            )
+            .await?;
             return Err(err);
         }
     };
@@ -1139,7 +1153,11 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
                 run_id,
                 work_item_id,
                 &err,
-                err == "codex warm runtime became busy before turn start",
+                if err == "codex warm runtime became busy before turn start" {
+                    WarmStartFailure::RuntimeBusy
+                } else {
+                    WarmStartFailure::Transient
+                },
             )
             .await?;
             return Err(err);

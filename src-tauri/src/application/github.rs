@@ -3,7 +3,6 @@ use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::{
-    agent_inbox_wake::agent_accepts_new_work,
     agent_work_dispatch::{dispatch_task_assignment_to_agent, dispatch_task_followup_to_agent},
     app::{to_string, CommandResult},
     github::{
@@ -145,19 +144,13 @@ pub(crate) async fn create_github_review_task(
         return Ok(existing);
     }
 
-    let agent_handle: Option<String> =
-        sqlx::query_scalar("select handle from agents where id = $1")
-            .bind(request.agent_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(to_string)?;
-    let Some(agent_handle) = agent_handle else {
+    let agent_exists: Option<i64> = sqlx::query_scalar("select 1 from agents where id = $1")
+        .bind(request.agent_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(to_string)?;
+    if agent_exists.is_none() {
         return Err("agent does not exist".to_owned());
-    };
-    if !agent_accepts_new_work(pool, request.agent_id).await? {
-        return Err(format!(
-            "agent @{agent_handle} is in error state and cannot accept new work"
-        ));
     }
 
     // Re-check the authenticated account before fetching PR metadata so auth
@@ -203,19 +196,13 @@ pub(crate) async fn rereview_github_pull_request(
     let agent_id = context
         .assignee_id
         .ok_or_else(|| "linked review task does not have an assignee".to_owned())?;
-    let agent_handle: Option<String> =
-        sqlx::query_scalar("select handle from agents where id = $1")
-            .bind(agent_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(to_string)?;
-    let Some(agent_handle) = agent_handle else {
+    let agent_exists: Option<i64> = sqlx::query_scalar("select 1 from agents where id = $1")
+        .bind(agent_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(to_string)?;
+    if agent_exists.is_none() {
         return Err("linked review task assignee does not exist".to_owned());
-    };
-    if !agent_accepts_new_work(pool, agent_id).await? {
-        return Err(format!(
-            "agent @{agent_handle} is in error state and cannot accept new work"
-        ));
     }
 
     let _ = github_account().await?;
@@ -271,19 +258,13 @@ pub(crate) async fn create_github_issue_task(
         return Ok(existing);
     }
 
-    let agent_handle: Option<String> =
-        sqlx::query_scalar("select handle from agents where id = $1")
-            .bind(request.agent_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(to_string)?;
-    let Some(agent_handle) = agent_handle else {
+    let agent_exists: Option<i64> = sqlx::query_scalar("select 1 from agents where id = $1")
+        .bind(request.agent_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(to_string)?;
+    if agent_exists.is_none() {
         return Err("agent does not exist".to_owned());
-    };
-    if !agent_accepts_new_work(pool, request.agent_id).await? {
-        return Err(format!(
-            "agent @{agent_handle} is in error state and cannot accept new work"
-        ));
     }
 
     let _ = github_account().await?;

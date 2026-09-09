@@ -822,9 +822,6 @@ pub(crate) async fn ensure_agent_inbox_wake_work_item(
     pool: &SqlitePool,
     agent_id: Uuid,
 ) -> CommandResult<Option<(Uuid, bool)>> {
-    if !agent_accepts_new_work(pool, agent_id).await? {
-        return Ok(None);
-    }
     let Some(primary) = next_unread_inbox_wake_item(pool, agent_id).await? else {
         return Ok(None);
     };
@@ -941,18 +938,49 @@ pub(crate) async fn agent_runtime(
         .map_err(to_string)
 }
 
-pub(crate) async fn agent_accepts_new_work(
+/// Seconds an agent whose last launch failed waits before Lantor launches it
+/// again on its own. New work is still accepted and queued during the cooldown;
+/// only the launch is deferred (the scheduler sweep retries it), so a broken
+/// runtime is not relaunched by every incoming message while a transient
+/// failure still recovers on the next pass. A manual start bypasses it.
+const FAILED_START_COOLDOWN_SECS: i64 = 60;
+
+/// True while an agent flagged `error` had a launch failure within the cooldown.
+pub(crate) async fn agent_start_cooldown_active(
     pool: &SqlitePool,
     agent_id: Uuid,
 ) -> CommandResult<bool> {
-    let status: Option<String> = sqlx::query_scalar("select status from agents where id = $1")
+    let Some(row) = sqlx::query("select handle, status from agents where id = $1")
         .bind(agent_id)
         .fetch_optional(pool)
         .await
-        .map_err(to_string)?;
-    Ok(status
-        .as_deref()
-        .is_some_and(|status| !status.eq_ignore_ascii_case("error")))
+        .map_err(to_string)?
+    else {
+        return Ok(false);
+    };
+    let status: String = row.get("status");
+    if !status.eq_ignore_ascii_case("error") {
+        return Ok(false);
+    }
+    let handle: String = row.get("handle");
+    let recent_failure: Option<i64> = sqlx::query_scalar(
+        r#"
+        select 1
+        from agent_activities
+        where agent_id = $1
+          and agent_handle = $2
+          and created_at > strftime('%Y-%m-%dT%H:%M:%f+00:00','now', $3)
+          and kind = 'run_error'
+        limit 1
+        "#,
+    )
+    .bind(agent_id)
+    .bind(handle)
+    .bind(format!("-{FAILED_START_COOLDOWN_SECS} seconds"))
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)?;
+    Ok(recent_failure.is_some())
 }
 
 async fn agent_has_active_run(pool: &SqlitePool, agent_id: Uuid) -> CommandResult<bool> {
@@ -1015,7 +1043,7 @@ pub(crate) async fn enqueue_agent_work_if_available(
     if status.as_deref() != Some("queued") {
         return Ok(false);
     }
-    if !agent_accepts_new_work(pool, agent_id).await? {
+    if agent_start_cooldown_active(pool, agent_id).await? {
         return Ok(false);
     }
     let runtime = agent_runtime(pool, agent_id).await?;

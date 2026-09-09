@@ -204,7 +204,7 @@ async fn owner_channel_root_message_without_mentions_delivers_to_member_agent_in
 }
 
 #[tokio::test]
-async fn owner_channel_root_message_does_not_dispatch_error_agent() {
+async fn owner_channel_root_message_still_dispatches_error_agent() {
     let Some((pool, schema)) = test_pool().await else {
         return;
     };
@@ -233,7 +233,7 @@ async fn owner_channel_root_message_does_not_dispatch_error_agent() {
             None,
             channel_id,
             None,
-            "This should not wake a quota-limited agent",
+            "This should still wake an agent flagged error",
             false,
             vec![],
         )
@@ -251,8 +251,8 @@ async fn owner_channel_root_message_does_not_dispatch_error_agent() {
                 .fetch_one(&pool)
                 .await
                 .map_err(|err| err.to_string())?;
-        assert_eq!(inbox_count, 0);
-        assert_eq!(work_count, 0);
+        assert_eq!(inbox_count, 1);
+        assert_eq!(work_count, 1);
         Ok(())
     }
     .await;
@@ -261,7 +261,7 @@ async fn owner_channel_root_message_does_not_dispatch_error_agent() {
 }
 
 #[tokio::test]
-async fn owner_mention_does_not_dispatch_error_agent() {
+async fn owner_mention_still_dispatches_error_agent() {
     let Some((pool, schema)) = test_pool().await else {
         return;
     };
@@ -297,8 +297,8 @@ async fn owner_mention_does_not_dispatch_error_agent() {
                 .fetch_one(&pool)
                 .await
                 .map_err(|err| err.to_string())?;
-        assert_eq!(inbox_count, 0);
-        assert_eq!(work_count, 0);
+        assert_eq!(inbox_count, 1);
+        assert_eq!(work_count, 1);
         Ok(())
     }
     .await;
