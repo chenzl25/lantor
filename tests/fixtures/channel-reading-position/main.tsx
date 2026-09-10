@@ -69,6 +69,13 @@ function Fixture() {
     list.scrollTop = toTop ? 0 : list.scrollTop - 600;
   }
   function append(c = channel) { setRoots(before => before.map((items, index) => index === c ? [...items, message(items.at(-1)!.seq + 1, c)] : items)); }
+  function readLocationChanged(next: ChannelReadLocation) {
+    setLocation(next);
+    // Model a parent reconciling buffered message snapshots when the viewport
+    // reports its position. These updates must yield to layout, not recurse
+    // through the scroll hook's layout effect in the same React commit.
+    if (params.has("snapshot-chain") && next.channelId === channels[0].id && Number(next.latestRootId?.split("-")[1]) < 180) append(0);
+  }
   const shared = { channel: channels[channel], channels, agents: [], channelAgents: [], ownerProfile: { display_name: "Owner", avatar: "O", description: "" },
     agentActivities: [], agentRuns: [], agentWorkItems: [], messages: shown, activeRoot: null, taskTitleDrafts: {}, setTaskTitleDraft: noop, saveTaskTitle: noop,
     claimTask: noop, updateTaskStatus: noop, openAgentDetail: noop, openArtifact: noop, onReferenceMessageJump: noop, onReferenceThreadJump: noop,
@@ -80,7 +87,7 @@ function Fixture() {
       openTask={noop} createGithubReviewTask={async () => {throw Error("unused");}} createGithubIssueTask={async () => {throw Error("unused");}}
       setDraft={setDraft} addDraftAttachments={noop} removeDraftAttachment={noop} sendRootMessage={() => append()} hasMoreRootMessages={channel === 0 && roots[0][0].seq > 1}
       historyBeforeSeq={channel === 0 ? (roots[0].some(row => row.seq === 1) ? 1 : 41) : undefined}
-      isLoadingOlderRootMessages={loading} onLoadOlderRootMessages={older} isChannelReady={hydrated} onReadLocation={setLocation} />
+      isLoadingOlderRootMessages={loading} onLoadOlderRootMessages={older} isChannelReady={hydrated} onReadLocation={readLocationChanged} />
     <aside style={{overflow: "auto", padding: 12, fontSize: 12}}>
       <h2>Reading regression controls</h2>
       <button onClick={() => setReady(true)}>Hydrate channel</button>

@@ -73,6 +73,15 @@ if (process.argv.includes("--serve")) {
         assert.equal((await state()).channel, 1);
         assert.ok((await state()).distance <= 2, "late history response cannot move another channel");
         assert.equal((await state()).pages, 1);
+        await page.goto(`${url}/?reset&ready&snapshot-chain`);
+        await page.waitForFunction(() => {
+          const text = document.querySelector('[aria-label="Reading diagnostics"]')?.textContent;
+          return text?.trim().startsWith("{") && JSON.parse(text).location?.latestRootId === "0-180";
+        });
+        await bottom();
+        assert.equal((await state()).rowCount, 140, "parent snapshot reconciliation finishes without nested render updates");
+        await page.waitForTimeout(400);
+        assert.equal((await state()).receipts.at(-1).throughSeq, 180, "read receipt follows the settled final snapshot");
         assert.deepEqual(errors, []);
         console.log(`${engine.name()}: channel restoration and read-receipt regressions passed`);
       } finally { await browser.close(); }

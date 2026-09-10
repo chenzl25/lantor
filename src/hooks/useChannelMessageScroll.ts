@@ -46,7 +46,7 @@ export function useChannelMessageScroll(options: Options) {
     let anchor = saved?.anchor ?? null;
     let follow = !saved || saved.atBottom;
     let initial = true, placing = false, disposed = false, inFlight = false;
-    let frame = 0, settleFrame = 0, loadFrame = 0, userUntil = 0;
+    let frame = 0, settleFrame = 0, loadFrame = 0, reportFrame = 0, userUntil = 0;
     let focusId: string | null = null, lastFocusId: string | null = null;
     let lastReported: ChannelReadLocation | null = null;
     let failedRestore = false;
@@ -78,8 +78,8 @@ export function useChannelMessageScroll(options: Options) {
       if (!preserveSavedPosition && anchor && lastRoot()) rememberChannelPosition(channelId!, { anchor, atBottom: distance() <= 2, latestRootId: lastRoot()!.id });
     }
     function cancelFrames() {
-      cancelAnimationFrame(frame); cancelAnimationFrame(settleFrame);
-      frame = settleFrame = 0;
+      cancelAnimationFrame(frame); cancelAnimationFrame(settleFrame); cancelAnimationFrame(reportFrame);
+      frame = settleFrame = reportFrame = 0;
     }
     function finishPlacement() {
       if (!isLive()) return;
@@ -185,7 +185,15 @@ export function useChannelMessageScroll(options: Options) {
       const id = latest.current.focusedMessageId;
       if (id && id !== lastFocusId) { focusId = id; follow = false; }
       lastFocusId = id;
-      report(); schedule();
+      // This runs from a layout effect. Reporting here can update the parent,
+      // commit another message snapshot and re-enter this effect before the
+      // browser gets a frame. Coalesce reports without waiting for history
+      // restoration, which still needs to invalidate an old read location.
+      if (!reportFrame) reportFrame = requestAnimationFrame(() => {
+        reportFrame = 0;
+        if (isLive()) report();
+      });
+      schedule();
     }
     controller.current = {
       viewport, changed, userScroll, resize: schedule,
