@@ -562,7 +562,13 @@ pub(crate) async fn ensure_streaming_agent_message(
         .map_err(to_string)?;
     let sender_name: String = sender.get("display_name");
     let sender_role: String = sender.get("role");
-    let mut transaction = pool.begin().await.map_err(to_string)?;
+    // Claim the writer before preparing the insert. Concurrent warm starts
+    // must wait at BEGIN instead of failing a deferred transaction's upgrade
+    // while SQLite prepares the message/FTS trigger writes.
+    let mut transaction = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(to_string)?;
     let message_id: Uuid = sqlx::query_scalar(
         r#"
         insert into messages (

@@ -16,6 +16,50 @@ use sqlx::Row;
 use uuid::Uuid;
 
 #[tokio::test]
+async fn streaming_placeholders_handle_concurrent_starts() {
+    let (pool, schema) = crate::test_support::test_pool_with_connections(8)
+        .await
+        .expect("create concurrent streaming test database");
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "concurrent-streamer").await?;
+        let channel_id = insert_test_channel(&pool, "concurrent-streaming").await?;
+        let mut pending = tokio::task::JoinSet::new();
+        for index in 0..64 {
+            let pool = pool.clone();
+            pending.spawn(async move {
+                ensure_streaming_agent_message(
+                    &pool,
+                    agent_id,
+                    channel_id,
+                    None,
+                    &format!("concurrent-start-{index}"),
+                )
+                .await
+            });
+        }
+        let mut failures = Vec::new();
+        while let Some(outcome) = pending.join_next().await {
+            if let Err(error) = outcome.map_err(|error| error.to_string())? {
+                failures.push(error);
+            }
+        }
+        if !failures.is_empty() {
+            return Err(format!("concurrent placeholder failures: {failures:?}"));
+        }
+        let count: i64 = sqlx::query_scalar("select count(*) from messages where channel_id = $1")
+            .bind(channel_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|error| error.to_string())?;
+        assert_eq!(count, 64);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn streaming_agent_messages_append_and_finish() {
     let Some((pool, schema)) = test_pool().await else {
         return;
