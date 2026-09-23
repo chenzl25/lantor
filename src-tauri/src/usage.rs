@@ -77,6 +77,9 @@ fn model_cost_micros(runtime: &str, model: &str, input_tokens: i64, output_token
     let (input_per_million, output_per_million) = if runtime == "claude" {
         if model.contains("fable") || model.contains("mythos") {
             (10_000_000_i64, 50_000_000_i64)
+        } else if model.contains("opus-5-5") || model == "opus" {
+            // Claude Opus 5.5; the bare `opus` alias resolves to it in current Claude Code.
+            (4_000_000_i64, 20_000_000_i64)
         } else if model.contains("opus") {
             (5_000_000_i64, 25_000_000_i64)
         } else if model.contains("haiku") {
@@ -86,6 +89,10 @@ fn model_cost_micros(runtime: &str, model: &str, input_tokens: i64, output_token
         }
     } else if runtime == "codex" && model == "gpt-6-astra" {
         (10_000_000_i64, 50_000_000_i64)
+    } else if runtime == "codex" && model == "gpt-6-sol" {
+        (2_000_000_i64, 10_000_000_i64)
+    } else if runtime == "codex" && model == "gpt-6-luna" {
+        (100_000_i64, 500_000_i64)
     } else if model.contains("mini") {
         (150_000_i64, 600_000_i64)
     } else if model.contains("codex") {
@@ -269,6 +276,34 @@ mod tests {
     }
 
     #[test]
+    fn gpt_6_sol_and_luna_usage_use_current_public_rates() {
+        assert_eq!(
+            model_cost_micros("codex", "gpt-6-sol", 1_000_000, 1_000_000),
+            12_000_000
+        );
+        assert_eq!(
+            model_cost_micros("codex", "gpt-6-luna", 1_000_000, 1_000_000),
+            600_000
+        );
+    }
+
+    #[test]
+    fn claude_opus_5_5_usage_uses_current_public_rate() {
+        assert_eq!(
+            model_cost_micros("claude", "claude-opus-5-5", 1_000_000, 1_000_000),
+            24_000_000
+        );
+        assert_eq!(
+            model_cost_micros("claude", "claude-opus-5-5[1m]", 1_000_000, 1_000_000),
+            24_000_000
+        );
+        assert_eq!(
+            model_cost_micros("claude", "claude-opus-5", 1_000_000, 1_000_000),
+            30_000_000
+        );
+    }
+
+    #[test]
     fn claude_fable_usage_uses_current_public_rate() {
         assert_eq!(
             model_cost_micros("claude", "fable", 1_000_000, 1_000_000),
@@ -284,7 +319,7 @@ mod tests {
     fn claude_code_aliases_use_current_public_rates() {
         assert_eq!(
             model_cost_micros("claude", "opus", 1_000_000, 1_000_000),
-            30_000_000
+            24_000_000
         );
         assert_eq!(
             model_cost_micros("claude", "sonnet", 1_000_000, 1_000_000),

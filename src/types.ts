@@ -598,7 +598,7 @@ export const EMPTY_AGENT_FORM: AgentForm = {
   role: "agent",
   avatar: "",
   runtime: "codex",
-  model: "gpt-5.6-sol",
+  model: "gpt-6-sol",
   reasoningEffort: "medium",
   serviceTier: "",
   description: "",
@@ -615,10 +615,12 @@ export const ACTIVE_RUN_STATUSES = new Set(["starting", "running", "stopping"]);
 export const RUNTIME_PRESETS: Record<string, { label: string; defaultModel: string; commandName: string; models: string[] }> = {
   codex: {
     label: "Codex",
-    defaultModel: "gpt-5.6-sol",
+    defaultModel: "gpt-6-sol",
     commandName: "codex",
     models: [
       "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
@@ -629,14 +631,21 @@ export const RUNTIME_PRESETS: Record<string, { label: string; defaultModel: stri
     label: "Claude",
     defaultModel: "sonnet",
     commandName: "claude",
-    models: ["fable", "sonnet", "opus", "haiku"],
+    models: ["fable", "claude-opus-5-5", "claude-opus-5-5[1m]", "opus", "sonnet", "haiku"],
   },
 };
 
 const MODEL_LABELS: Record<string, string> = {
   fable: "Claude Fable 5.1",
   "claude-fable-5-1": "Claude Fable 5.1",
+  "claude-opus-5-5": "Claude Opus 5.5",
+  "claude-opus-5-5[1m]": "Claude Opus 5.5 (1M context)",
+  opus: "Claude Opus (latest)",
+  sonnet: "Claude Sonnet (latest)",
+  haiku: "Claude Haiku (latest)",
   "gpt-6-astra": "GPT-6 Astra",
+  "gpt-6-sol": "GPT-6 Sol",
+  "gpt-6-luna": "GPT-6 Luna",
   "gpt-5.6-sol": "GPT-5.6 Sol",
   "gpt-5.6-terra": "GPT-5.6 Terra",
   "gpt-5.6-luna": "GPT-5.6 Luna",
@@ -659,13 +668,15 @@ export const CODEX_REASONING_EFFORTS = [
 function maxCodexReasoningEffort(model: string) {
   const normalizedModel = model.trim().toLowerCase();
   if (
+    normalizedModel === "gpt-6-astra" ||
+    normalizedModel === "gpt-6-sol" ||
     normalizedModel === "gpt-5.6" ||
     normalizedModel === "gpt-5.6-sol" ||
     normalizedModel === "gpt-5.6-terra"
   ) {
     return "ultra";
   }
-  if (normalizedModel === "gpt-6-astra" || normalizedModel === "gpt-5.6-luna") {
+  if (normalizedModel === "gpt-6-luna" || normalizedModel === "gpt-5.6-luna") {
     return "max";
   }
   return "xhigh";
