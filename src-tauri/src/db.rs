@@ -471,6 +471,30 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         )
         "#,
         r#"
+        create table if not exists decisions (
+            id blob primary key not null default (randomblob(16)),
+            message_id blob not null unique references messages(id) on delete cascade,
+            channel_id blob not null references channels(id) on delete cascade,
+            thread_root_id blob references messages(id) on delete set null,
+            requester_agent_id blob references agents(id) on delete set null,
+            task_id blob references tasks(id) on delete set null,
+            title text not null,
+            context text not null default '',
+            options text not null default '[]',
+            status text not null default 'open',
+            answer_option_id text,
+            answer_note text not null default '',
+            answer_message_id blob references messages(id) on delete set null,
+            resolved_at text,
+            created_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+            updated_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
+        )
+        "#,
+        r#"
+        create index if not exists decisions_status_created_idx
+            on decisions (status, created_at)
+        "#,
+        r#"
         create table if not exists github_resource_threads (
             id blob primary key not null default (randomblob(16)),
             channel_id blob not null references channels(id) on delete cascade,

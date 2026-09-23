@@ -13,6 +13,8 @@ import { formatClockTime, formatDateDivider, formatTime } from "../ui-utils";
 import { AgentAvatar, AgentAvatarWithProfile } from "./AgentAvatar";
 import { MessageAttachments } from "./MessageAttachments";
 import { MessageArtifacts } from "./MessageArtifacts";
+import { DecisionCard } from "./DecisionCard";
+import { useMessageDecision } from "../decisions";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { MessageReplySummary } from "./MessageReplySummary";
 
@@ -45,7 +47,7 @@ type MessageRowProps = {
   taskStatus?: string;
 };
 
-const INTERACTIVE_TARGETS = "a,button,input,select,textarea,summary,[contenteditable='true'],[role='button'],[role='link'],.message-artifacts,.message-attachments";
+const INTERACTIVE_TARGETS = "a,button,input,select,textarea,summary,[contenteditable='true'],[role='button'],[role='link'],.message-artifacts,.message-attachments,.decision-card";
 
 export const MessageRow = memo(function MessageRow({
   data, actions, variant, compact = false, dateDivider = false, saved, expanded,
@@ -55,10 +57,11 @@ export const MessageRow = memo(function MessageRow({
   const { agent, deletedAgent, ownerAvatar, references, reply } = data;
   const finalOnly = useAgentReplyMode() === "final";
   const message = useStreamingMessage(data.message, finalOnly);
+  const decision = useMessageDecision(message.id);
   const channel = variant === "channel";
   const root = variant === "thread-root";
   const system = message.sender_role === "system";
-  const collapsible = message.delivery_state !== "streaming" && shouldCollapseMessage(message.body);
+  const collapsible = !decision && message.delivery_state !== "streaming" && shouldCollapseMessage(message.body);
   const onMount = actions.onMount;
   const setNode = useCallback((node: HTMLElement | null) => onMount?.(message.id, node), [message.id, onMount]);
   const act = (action: MessageRowAction) => actions.onAction(message, action);
@@ -102,7 +105,7 @@ export const MessageRow = memo(function MessageRow({
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => { event.stopPropagation(); act("save"); }}><Bookmark size={14} /></button>
       </div>
-      {(message.delivery_state !== "streaming" || messageHasVisibleContent(message)) && <>
+      {decision ? <DecisionCard decision={decision} /> : (message.delivery_state !== "streaming" || messageHasVisibleContent(message)) && <>
         <div className={collapsible && !expanded ? "message-long-preview collapsed" : "message-long-preview"}>{body}</div>
         {collapsible && <button type="button" className="message-expand-button" aria-expanded={expanded}
           onPointerDown={(event) => event.stopPropagation()}

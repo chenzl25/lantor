@@ -202,6 +202,37 @@ export type Task = {
   updated_at: string;
 };
 
+export type DecisionOption = {
+  id: string;
+  label: string;
+  detail: string;
+  recommended: boolean;
+};
+
+export type DecisionStatus = "open" | "answered" | "dismissed" | "withdrawn";
+
+export type Decision = {
+  id: string;
+  message_id: string;
+  channel_id: string;
+  channel_name: string;
+  thread_root_id: string | null;
+  requester_agent_id: string | null;
+  requester_handle: string | null;
+  task_id: string | null;
+  task_number: number | null;
+  title: string;
+  context: string;
+  options: DecisionOption[];
+  status: DecisionStatus | string;
+  answer_option_id: string | null;
+  answer_note: string;
+  answer_message_id: string | null;
+  resolved_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type GithubAccount = {
   login: string;
   host: string;
@@ -492,6 +523,8 @@ export type Bootstrap = {
   read_inbox_items: Record<string, string>;
   artifacts: Artifact[];
   tasks: Task[];
+  /** Open decisions plus recently resolved ones. Absent in older fixtures. */
+  decisions?: Decision[];
   reminders: Reminder[];
   agent_schedules: AgentSchedule[];
   agent_runs: AgentRun[];

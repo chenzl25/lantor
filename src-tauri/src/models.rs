@@ -214,6 +214,41 @@ pub(crate) struct AttachmentUpload {
     pub(crate) staged: Option<crate::attachments::StagedAttachment>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct DecisionOption {
+    pub(crate) id: String,
+    pub(crate) label: String,
+    #[serde(default)]
+    pub(crate) detail: String,
+    #[serde(default)]
+    pub(crate) recommended: bool,
+}
+
+/// A structured question an agent asks the owner. The card message carries a
+/// plain-text rendering so history, search, and context tools stay readable.
+#[derive(Debug, Serialize)]
+pub(crate) struct Decision {
+    pub(crate) id: Uuid,
+    pub(crate) message_id: Uuid,
+    pub(crate) channel_id: Uuid,
+    pub(crate) channel_name: String,
+    pub(crate) thread_root_id: Option<Uuid>,
+    pub(crate) requester_agent_id: Option<Uuid>,
+    pub(crate) requester_handle: Option<String>,
+    pub(crate) task_id: Option<Uuid>,
+    pub(crate) task_number: Option<i64>,
+    pub(crate) title: String,
+    pub(crate) context: String,
+    pub(crate) options: Vec<DecisionOption>,
+    pub(crate) status: String,
+    pub(crate) answer_option_id: Option<String>,
+    pub(crate) answer_note: String,
+    pub(crate) answer_message_id: Option<Uuid>,
+    pub(crate) resolved_at: Option<DateTime<Utc>>,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct Task {
     pub(crate) id: Uuid,
@@ -451,6 +486,7 @@ pub(crate) struct Bootstrap {
     pub(crate) read_inbox_items: HashMap<String, DateTime<Utc>>,
     pub(crate) artifacts: Vec<Artifact>,
     pub(crate) tasks: Vec<Task>,
+    pub(crate) decisions: Vec<Decision>,
     pub(crate) reminders: Vec<Reminder>,
     pub(crate) agent_schedules: Vec<AgentSchedule>,
     pub(crate) agent_runs: Vec<AgentRun>,

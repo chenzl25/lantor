@@ -14,6 +14,7 @@ use crate::{
     agent_profile::{load_agents, load_owner_profile},
     app::{to_string, CommandResult},
     channels::{load_channel_members, load_channels, load_thread_activities},
+    decision_store::load_decisions,
     domain::{reminders::load_reminders, schedules::load_agent_schedules},
     launch_agent,
     message_store::{
@@ -282,6 +283,10 @@ async fn load_bootstrap_with_options(
     push_phase(&mut phases, "tasks", started_at, Some(tasks.len()));
 
     let started_at = Instant::now();
+    let decisions = load_decisions(pool).await?;
+    push_phase(&mut phases, "decisions", started_at, Some(decisions.len()));
+
+    let started_at = Instant::now();
     let reminders = load_reminders(pool).await?;
     push_phase(&mut phases, "reminders", started_at, Some(reminders.len()));
 
@@ -402,6 +407,7 @@ async fn load_bootstrap_with_options(
         read_inbox_items,
         artifacts,
         tasks,
+        decisions,
         reminders,
         agent_schedules,
         agent_runs,

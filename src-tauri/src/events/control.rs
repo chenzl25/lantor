@@ -16,6 +16,10 @@ use crate::attachments::{
     default_attachment_message_body, load_agent_attachment_uploads, AgentAttachmentFile,
 };
 use crate::channels::{add_agent_to_channel, create_channel_in_pool, normalize_channel_name};
+use crate::decision_store::{
+    create_agent_decision, resolve_run_decision_anchor, withdraw_agent_decision,
+    DecisionOptionInput, NewDecision,
+};
 use crate::domain::parse_due_at;
 use crate::domain::reminders::{cancel_reminder_in_pool, create_reminder_in_pool};
 use crate::events::activity::{normalize_agent_activity_kind, record_agent_activity};
@@ -161,6 +165,28 @@ pub(crate) enum AgentEvent {
         thread_root_id: Uuid,
         reason: Option<String>,
         body: String,
+    },
+    DecisionRequest {
+        #[serde(default)]
+        channel: Option<String>,
+        #[serde(default)]
+        channel_id: Option<Uuid>,
+        #[serde(default)]
+        thread_root_id: Option<Uuid>,
+        #[serde(alias = "question")]
+        title: String,
+        #[serde(default)]
+        context: Option<String>,
+        #[serde(default)]
+        options: Option<Vec<DecisionOptionInput>>,
+        #[serde(default)]
+        task_number: Option<i64>,
+    },
+    DecisionWithdraw {
+        #[serde(alias = "msg")]
+        message_id: String,
+        #[serde(default)]
+        reason: Option<String>,
     },
 }
 
@@ -418,7 +444,8 @@ fn control_event_creates_visible_chat_message(json: &str) -> bool {
             | "task_create"
             | "task_handoff"
             | "attachment_create"
-            | "handoff_create",
+            | "handoff_create"
+            | "decision_request",
         ) => true,
         Some("artifact_create") => {
             let kind_supported = value
@@ -1296,6 +1323,83 @@ pub(crate) async fn handle_agent_event(
             Ok(format!(
                 "handoff created for @{target_handle}: {work_item_id}"
             ))
+        }
+        AgentEvent::DecisionRequest {
+            channel,
+            channel_id,
+            thread_root_id,
+            title,
+            context,
+            options,
+            task_number,
+        } => {
+            let (anchor_channel_id, anchor_thread_root_id, anchor_task_id) =
+                resolve_run_decision_anchor(pool, agent_id, run_id).await?;
+            let (channel_id, thread_root_id) = if channel_id.is_some() || channel.is_some() {
+                (
+                    resolve_event_channel(pool, channel_id, channel.as_deref()).await?,
+                    thread_root_id,
+                )
+            } else if let Some(anchor_channel_id) = anchor_channel_id {
+                (anchor_channel_id, thread_root_id.or(anchor_thread_root_id))
+            } else {
+                return Err(
+                    "decision_request requires channel_id outside a conversation turn".to_owned(),
+                );
+            };
+            let task_id = match task_number {
+                Some(task_number) => Some(
+                    sqlx::query_scalar::<_, Uuid>("select id from tasks where number = $1")
+                        .bind(task_number)
+                        .fetch_optional(pool)
+                        .await
+                        .map_err(to_string)?
+                        .ok_or_else(|| format!("task #{task_number} does not exist"))?,
+                ),
+                None => anchor_task_id,
+            };
+            let (decision_id, message_id) = create_agent_decision(
+                pool,
+                NewDecision {
+                    agent_id,
+                    channel_id,
+                    thread_root_id,
+                    task_id,
+                    title: &title,
+                    context: context.as_deref(),
+                    options,
+                },
+            )
+            .await?;
+            record_agent_activity(
+                pool,
+                Some(agent_id),
+                Some(run_id),
+                "decision",
+                "Decision requested",
+                json!({
+                    "decision_id": decision_id,
+                    "message_id": message_id,
+                    "title": title.trim()
+                })
+                .to_string(),
+            )
+            .await?;
+            Ok(format!("decision requested: {decision_id}"))
+        }
+        AgentEvent::DecisionWithdraw { message_id, reason } => {
+            let decision_id =
+                withdraw_agent_decision(pool, agent_id, &message_id, reason.as_deref()).await?;
+            record_agent_activity(
+                pool,
+                Some(agent_id),
+                Some(run_id),
+                "decision",
+                "Decision withdrawn",
+                json!({ "decision_id": decision_id }).to_string(),
+            )
+            .await?;
+            Ok(format!("decision withdrawn: {decision_id}"))
         }
     }
 }

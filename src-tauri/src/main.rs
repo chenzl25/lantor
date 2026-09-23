@@ -18,6 +18,7 @@ mod channels;
 mod commands;
 mod context_tool;
 mod db;
+mod decision_store;
 mod domain;
 mod events;
 mod freshness;
@@ -69,6 +70,7 @@ use commands::{
         create_channel, delete_channel, open_dm_with_agent, set_channel_agent_membership,
         update_channel,
     },
+    decisions::{answer_decision, dismiss_decision},
     github::{
         bind_github_repository, create_github_issue_task, create_github_review_task,
         load_github_issue_detail, load_github_review_comparisons, load_github_review_queue,
@@ -357,7 +359,9 @@ pub fn run() {
             update_owner_profile,
             update_thread_followed,
             update_task_title,
-            update_task_status
+            update_task_status,
+            answer_decision,
+            dismiss_decision
         ])
         .run(tauri::generate_context!())
         .expect("error while running Lantor");

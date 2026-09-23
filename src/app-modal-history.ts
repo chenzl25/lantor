@@ -1,4 +1,4 @@
-export type AppModal = "search" | "activity" | "saved";
+export type AppModal = "search" | "activity" | "saved" | "needs";
 
 export type AppModalHistoryEntry = {
   index: number;

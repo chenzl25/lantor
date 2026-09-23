@@ -19,7 +19,7 @@ import {
   useState,
 } from "react";
 import { createRoot } from "react-dom/client";
-import { Bookmark, Home, Inbox, Search } from "lucide-react";
+import { Hand, Home, Inbox, Search } from "lucide-react";
 import {
   apiInvoke,
   apiInvokeMeasured,
@@ -55,6 +55,8 @@ import { ActivityFeedModal } from "./components/ActivityFeedModal";
 import { ArtifactViewerModal } from "./components/ArtifactViewerModal";
 import { OwnerProfileModal, ownerProfileToForm, type OwnerProfileForm } from "./components/OwnerProfileModal";
 import { SavedMessagesModal } from "./components/SavedMessagesModal";
+import { NeedsYouModal } from "./components/NeedsYouModal";
+import { DecisionStore, DecisionStoreContext, deriveNeedsYou } from "./decisions";
 import { SearchModal } from "./components/SearchModal";
 import { SettingsModal, type ChatTextSize, type FontPreset, type ThemePreference } from "./components/SettingsModal";
 import { Sidebar } from "./components/Sidebar";
@@ -93,6 +95,7 @@ import {
   SearchScope,
   SearchTimeRange,
   Task,
+  Decision,
   ThreadActivity,
   ThreadReplySummary,
 } from "./types";
@@ -371,7 +374,8 @@ function isAppHistoryState(value: unknown): value is AppHistoryState {
       state.activeModal === null ||
       state.activeModal === "search" ||
       state.activeModal === "activity" ||
-      state.activeModal === "saved"
+      state.activeModal === "saved" ||
+      state.activeModal === "needs"
     );
 }
 
@@ -812,6 +816,7 @@ function App() {
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [showActivityFeedModal, setShowActivityFeedModal] = useState(false);
   const [showSavedModal, setShowSavedModal] = useState(false);
+  const [showNeedsYouModal, setShowNeedsYouModal] = useState(false);
   const [showOwnerProfileModal, setShowOwnerProfileModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => getStoredThemePreference());
@@ -1003,7 +1008,9 @@ function App() {
       ? "activity"
       : showSavedModal
         ? "saved"
-        : null;
+        : showNeedsYouModal
+          ? "needs"
+          : null;
   const appSurfaceStateRef = useRef({
     activeModal: activeAppModal,
     blockingModalOpen: false,
@@ -1995,7 +2002,7 @@ function App() {
         }
         if (event.type === "message_delete") {
           applyMessageDelete(event.message_id);
-          requestUiState(["channels", "thread_activities", "tasks", "saved_messages", "artifacts"]);
+          requestUiState(["channels", "thread_activities", "tasks", "saved_messages", "artifacts", "decisions"]);
           continue;
         }
         if (event.type === "activity_upsert") {
@@ -2501,6 +2508,7 @@ function App() {
           else if (showSearchModal) setShowSearchModal(false);
           else if (showActivityFeedModal) setShowActivityFeedModal(false);
           else if (showSavedModal) setShowSavedModal(false);
+          else if (showNeedsYouModal) setShowNeedsYouModal(false);
           else if (selectedAgentId) setSelectedAgentId(null);
           else if (showThread) setShowThread(false);
         });
@@ -2531,6 +2539,11 @@ function App() {
           closeAppModal("saved", () => setShowSavedModal(false));
           return;
         }
+        if (surface.activeModal === "needs") {
+          event.preventDefault();
+          closeAppModal("needs", () => setShowNeedsYouModal(false));
+          return;
+        }
         if (isTextInput(event.target)) return;
         if (surface.selectedAgentId) {
           event.preventDefault();
@@ -2557,6 +2570,7 @@ function App() {
     showOwnerProfileModal,
     showSettingsModal,
     showSavedModal,
+    showNeedsYouModal,
     showSearchModal,
     showThread,
   ]);
@@ -2623,6 +2637,7 @@ function App() {
       setShowSearchModal(historyState.activeModal === "search");
       setShowActivityFeedModal(historyState.activeModal === "activity");
       setShowSavedModal(historyState.activeModal === "saved");
+      setShowNeedsYouModal(historyState.activeModal === "needs");
     }
 
     window.addEventListener("popstate", onPopState);
@@ -2725,6 +2740,7 @@ function App() {
       showOwnerProfileModal ||
       showSettingsModal ||
       showSavedModal ||
+      showNeedsYouModal ||
       showSearchModal;
     const isSidebarSwipe = !showThread && !selectedAgentId;
     if (!isMobileViewport() || showMobileSidebar || hasOpenModal) return;
@@ -2836,6 +2852,7 @@ function App() {
     showOwnerProfileModal,
     showSettingsModal,
     showSavedModal,
+    showNeedsYouModal,
     showSearchModal,
     showThread,
   ]);
@@ -3032,6 +3049,29 @@ function App() {
     if (!Number.isFinite(readUntilTime)) return items.length;
     return items.filter((item) => new Date(item.created_at).getTime() > readUntilTime).length;
   }, [data?.saved_messages, dismissedActivityFeedItems]);
+
+  const decisionStoreRef = useRef<DecisionStore | null>(null);
+  if (!decisionStoreRef.current) decisionStoreRef.current = new DecisionStore();
+  const decisionStore = decisionStoreRef.current;
+  decisionStore.actions = {
+    answer: async (decision, optionId, note) => {
+      await apiInvoke("answer_decision", { decisionId: decision.id, optionId, note: note || null });
+      await reloadUiState(["decisions"]);
+    },
+    dismiss: async (decision) => {
+      await apiInvoke("dismiss_decision", { decisionId: decision.id });
+      await reloadUiState(["decisions"]);
+    },
+  };
+  useLayoutEffect(() => {
+    decisionStore.set(data?.decisions);
+  }, [data?.decisions, decisionStore]);
+
+  const needsYou = useMemo(
+    () => deriveNeedsYou(data?.decisions, data?.tasks ?? [], data?.thread_activities ?? [], Date.now()),
+    // Opening the view re-derives idle ages against the current clock.
+    [data?.decisions, data?.tasks, data?.thread_activities, showNeedsYouModal],
+  );
 
   const shareBaseUrl = useMemo(() => {
     if (!data) return window.location.origin;
@@ -3869,6 +3909,7 @@ function App() {
     setShowSearchModal(false);
     setShowActivityFeedModal(false);
     setShowSavedModal(false);
+    setShowNeedsYouModal(false);
     setSelectedAgentId(null);
     setShowThread(false);
     setShowMobileSidebar(true);
@@ -3884,6 +3925,7 @@ function App() {
     setMobileSidebarFocus("home");
     setShowActivityFeedModal(false);
     setShowSavedModal(false);
+    setShowNeedsYouModal(false);
     setShowSearchModal(true);
     void reloadUiState(["agent_work_items", "agent_activities", "thread_activities", "read_inbox_items", "dismissed_inbox_items"])
       .catch((err) => setAppError(errorMessage(err, "Failed to load search context")));
@@ -3897,6 +3939,7 @@ function App() {
     setMobileSidebarFocus("home");
     setShowSearchModal(false);
     setShowSavedModal(false);
+    setShowNeedsYouModal(false);
     setShowActivityFeedModal(true);
     void Promise.all([
       hydrateActivityFeedMessages(),
@@ -3912,8 +3955,36 @@ function App() {
     setMobileSidebarFocus("home");
     setShowSearchModal(false);
     setShowActivityFeedModal(false);
+    setShowNeedsYouModal(false);
     setShowSavedModal(true);
     void markSavedMessagesRead();
+  }
+
+  function openNeedsYouModal() {
+    if (shouldReplaceAppModalHistory(appSurfaceStateRef.current.activeModal, "needs")) {
+      replaceNextAppHistoryEntryRef.current = true;
+    }
+    setShowMobileSidebar(false);
+    setMobileSidebarFocus("home");
+    setShowSearchModal(false);
+    setShowActivityFeedModal(false);
+    setShowSavedModal(false);
+    setShowNeedsYouModal(true);
+    void reloadUiState(["decisions", "tasks", "thread_activities"])
+      .catch((err) => setAppError(errorMessage(err, "Failed to load Needs you")));
+  }
+
+  function openDecision(decision: Decision) {
+    selectChannel(decision.channel_id);
+    revealThread(decision.thread_root_id ?? decision.message_id, decision.channel_id);
+    setFocusedMessageId(decision.message_id);
+    setActiveTab("chat");
+    setShowNeedsYouModal(false);
+  }
+
+  function openNeedsYouTask(task: Task) {
+    setShowNeedsYouModal(false);
+    openTask(task);
   }
 
   async function markSavedMessagesRead() {
@@ -4896,6 +4967,7 @@ function App() {
   }
 
   return (
+    <DecisionStoreContext.Provider value={decisionStore}>
     <main
       className={`app theme-liquid ${selectedAgent || showThread ? "" : "thread-hidden"} ${selectedAgent || activeThreadId ? "right-panel-active" : ""} ${showMobileSidebar ? "mobile-sidebar-open" : ""} ${mobileDragSurface === "sidebar" ? "mobile-sidebar-dragging" : ""} ${mobileDragSurface === "panel" ? "mobile-panel-dragging" : ""} ${mobileComposerFocused ? "mobile-composer-focused" : ""}`}
       style={{
@@ -4910,9 +4982,11 @@ function App() {
         channel={channel}
         activityFeedUnreadCount={activityFeedUnreadCount}
         savedUnreadCount={savedUnreadCount}
+        needsYouCount={needsYou.count}
         openSearch={openSearchModal}
         openActivityFeed={openActivityFeedModal}
         openSaved={openSavedModal}
+        openNeedsYou={openNeedsYouModal}
         mobileFocus={mobileSidebarFocus}
         openCreateChannelModal={() => {
           const openedFromMobileHome = isMobileHomeOpen();
@@ -5002,6 +5076,16 @@ function App() {
         onOpenItem={openSavedMessage}
         onUnsaveItem={unsaveSavedMessage}
         onClose={() => closeAppModal("saved", () => setShowSavedModal(false))}
+      />
+
+      <NeedsYouModal
+        open={showNeedsYouModal}
+        needsYou={needsYou}
+        agents={data.agents}
+        onOpenDecision={openDecision}
+        onOpenTask={openNeedsYouTask}
+        onMarkTaskDone={(task) => void updateTaskStatus(task, "done")}
+        onClose={() => closeAppModal("needs", () => setShowNeedsYouModal(false))}
       />
 
       <ArtifactViewerModal
@@ -5188,14 +5272,14 @@ function App() {
         </button>
         <button
           type="button"
-          className={`${showSavedModal ? "active" : ""} ${savedUnreadCount ? "has-unread" : ""}`}
-          onClick={openSavedModal}
+          className={`${showNeedsYouModal ? "active" : ""} ${needsYou.count ? "has-unread" : ""}`}
+          onClick={openNeedsYouModal}
         >
           <span className="mobile-bottom-nav-icon">
-            <Bookmark size={20} />
-            {savedUnreadCount > 0 && <UnreadBadge value={savedUnreadCount} />}
+            <Hand size={20} />
+            {needsYou.count > 0 && <UnreadBadge value={needsYou.count} />}
           </span>
-          <span>Saved</span>
+          <span>Needs you</span>
         </button>
         <button
           type="button"
@@ -5318,6 +5402,7 @@ function App() {
       />
 
     </main>
+    </DecisionStoreContext.Provider>
   );
 }
 

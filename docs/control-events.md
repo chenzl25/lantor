@@ -28,6 +28,7 @@ line to stdout. Non-matching stdout and stderr stay in the process log.
 | `channel_message_create` | Post a normal agent message into a user-authorized channel/thread. |
 | `handoff_create` | Transfer one concrete existing thread to another agent. |
 | `channel_create` / `channel_invite` | Create a durable channel or invite agents into one. |
+| `decision_request` / `decision_withdraw` | Ask the owner to choose between concrete options via a decision card, or withdraw your own open card. |
 
 Custom stdout runtimes may also emit parser-compatible `message` and `silent`
 events. Warm Codex and Claude agents should prefer normal assistant text plus
@@ -112,3 +113,45 @@ in a specific channel or thread:
 
 Normal `@agent` mentions in the body can dispatch work through the usual mention
 path.
+
+## Decision Example
+
+Use `decision_request` when work is blocked on an owner choice between concrete
+alternatives (a design fork, a scope call, or an irreversible/external action).
+Omit channel fields to place the card in the current conversation:
+
+```json
+{
+  "type": "decision_request",
+  "title": "How should NULL keys behave in AS CHANGELOG sinks?",
+  "context": "Optional markdown: why it matters and the tradeoff.",
+  "options": [
+    { "id": "a", "label": "Reject nullable key columns", "detail": "Safest; users add NOT NULL", "recommended": true },
+    { "id": "b", "label": "Treat NULL as a key value", "detail": "Matches DISTINCT; needs null-safe compare" }
+  ]
+}
+```
+
+Option rules:
+
+- Single choice, 2-6 mutually exclusive options (2-4 recommended). Omit
+  `options` for a plain Approve/Decline request.
+- `label` is a short outcome the agent will act on (80 chars); `detail` states
+  the consequence or cost (400 chars). Missing `id`s become `a`, `b`, `c`...
+- At most one option keeps `recommended: true`.
+- The owner can always add a free-text note or answer in words, so agents
+  should not add an "Other" option.
+
+The card renders inline and in the owner's **Needs you** view (mobile bottom
+nav), together with tasks in review and active tasks idle for 3+ days. When the
+owner answers, Lantor posts an owner message in the same thread that
+@mentions the requester (`Decision: <title> → [id] label` plus the note), which
+wakes the agent through the normal mention path. Double answers are rejected.
+
+The owner may also dismiss a card without answering. If the question is settled
+in chat, the requester withdraws its own card by message id (the `msg=` prefix
+from history is enough):
+
+```json
+{ "type": "decision_withdraw", "message_id": "6e0853de", "reason": "Settled in chat" }
+```

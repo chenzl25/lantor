@@ -6,6 +6,7 @@ import {
   Hash,
   Inbox,
   Bookmark,
+  Hand,
   Plus,
   Search,
   Settings,
@@ -35,6 +36,8 @@ type SidebarProps = {
   openSearch: () => void;
   openActivityFeed: () => void;
   openSaved: () => void;
+  openNeedsYou: () => void;
+  needsYouCount: number;
   mobileFocus: "home" | "dms";
   openCreateChannelModal: () => void;
   selectChannel: (channelId: string) => void;
@@ -69,6 +72,8 @@ export function Sidebar({
   openSearch,
   openActivityFeed,
   openSaved,
+  openNeedsYou,
+  needsYouCount,
   mobileFocus,
   openCreateChannelModal,
   selectChannel,
@@ -212,6 +217,20 @@ export function Sidebar({
                 role="menuitem"
                 onClick={() => {
                   setShowMobileOwnerMenu(false);
+                  openSaved();
+                }}
+              >
+                <Bookmark size={18} />
+                <span>
+                  <strong>Saved{savedUnreadCount > 0 ? ` (${savedUnreadCount} new)` : ""}</strong>
+                  <small>Messages you bookmarked</small>
+                </span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setShowMobileOwnerMenu(false);
                   openOwnerProfileModal();
                 }}
               >
@@ -244,6 +263,15 @@ export function Sidebar({
         <button type="button" className="channel quick-action-row" onClick={openSearch}>
           <Search size={17} />
           <span className="channel-name">Search</span>
+        </button>
+        <button
+          type="button"
+          className={`channel quick-action-row ${needsYouCount ? "has-unread" : ""}`}
+          onClick={openNeedsYou}
+        >
+          <Hand size={17} />
+          <span className="channel-name">Needs you</span>
+          {needsYouCount > 0 && <UnreadBadge value={needsYouCount} />}
         </button>
         <button
           type="button"

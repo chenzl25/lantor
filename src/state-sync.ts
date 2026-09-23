@@ -248,6 +248,7 @@ export function removeChannelsFromBootstrap(
       (item) => !channelIds.has(item.channel_id),
     ),
     tasks: next.tasks.filter((item) => !channelIds.has(item.channel_id)),
+    decisions: next.decisions?.filter((item) => !channelIds.has(item.channel_id)),
     reminders: next.reminders.filter(
       (item) => !item.channel_id || !channelIds.has(item.channel_id),
     ),

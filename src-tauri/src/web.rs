@@ -39,6 +39,7 @@ use crate::application::{
         self as channel_commands, ChannelIdRequest, CreateChannelRequest,
         SetChannelAgentMembershipRequest, UpdateChannelRequest,
     },
+    decisions::{self as decision_commands, AnswerDecisionRequest, DecisionIdRequest},
     github::{
         self as github_commands, BindGithubRepositoryRequest, CreateGithubIssueTaskRequest,
         CreateGithubReviewTaskRequest, GithubChannelRequest, GithubIssueRequest,
@@ -311,6 +312,8 @@ fn web_router(state: Arc<WebState>, dist_dir: PathBuf) -> Router {
         .route("/api/mark_channel_read", post(api_mark_channel_read))
         .route("/api/complete_reminder", post(api_complete_reminder))
         .route("/api/update_task_status", post(api_update_task_status))
+        .route("/api/answer_decision", post(api_answer_decision))
+        .route("/api/dismiss_decision", post(api_dismiss_decision))
         .route("/api/update_task_title", post(api_update_task_title))
         .route("/api/claim_task", post(api_claim_task))
         .route("/api/cancel_agent_work", post(api_cancel_agent_work))
@@ -860,6 +863,26 @@ async fn api_complete_reminder(
     Json(request): Json<ReminderIdRequest>,
 ) -> Result<impl IntoResponse, Response> {
     complete_reminder_in_pool(&state.pool, request.reminder_id)
+        .await
+        .map(|_| Json(json!({ "ok": true })))
+        .map_err(api_error)
+}
+
+async fn api_answer_decision(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<AnswerDecisionRequest>,
+) -> Result<impl IntoResponse, Response> {
+    decision_commands::answer_decision(&state.pool, request)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_dismiss_decision(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<DecisionIdRequest>,
+) -> Result<impl IntoResponse, Response> {
+    decision_commands::dismiss_decision(&state.pool, request)
         .await
         .map(|_| Json(json!({ "ok": true })))
         .map_err(api_error)

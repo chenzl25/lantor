@@ -9,6 +9,7 @@ import type {
   ChannelMessagePage,
   ChannelWikiOverview,
   ChannelWikiSearchHit,
+  Decision,
   GithubChannelOverview,
   GithubReviewComparisons,
   GithubIssueDetail,
@@ -308,6 +309,18 @@ export type ApiContract = {
     };
     result: MutationResult;
   };
+  answer_decision: {
+    args: {
+      decisionId: string;
+      optionId?: string | null;
+      note?: string | null;
+    };
+    result: Decision;
+  };
+  dismiss_decision: {
+    args: { decisionId: string };
+    result: MutationResult;
+  };
   update_task_title: {
     args: {
       taskId: string;
@@ -407,6 +420,8 @@ const API_COMMAND_NAMES = {
   mark_channel_read: true,
   complete_reminder: true,
   update_task_status: true,
+  answer_decision: true,
+  dismiss_decision: true,
   update_task_title: true,
   claim_task: true,
   cancel_agent_work: true,

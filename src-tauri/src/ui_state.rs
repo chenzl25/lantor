@@ -44,6 +44,7 @@ pub(crate) async fn load_ui_state_in_pool(
                 serde_json::to_value(crate::message_store::load_artifact_summaries(pool).await?)
             }
             "tasks" => serde_json::to_value(crate::task_store::load_tasks(pool).await?),
+            "decisions" => serde_json::to_value(crate::decision_store::load_decisions(pool).await?),
             "reminders" => {
                 serde_json::to_value(crate::domain::reminders::load_reminders(pool).await?)
             }
