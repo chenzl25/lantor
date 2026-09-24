@@ -28,7 +28,7 @@ line to stdout. Non-matching stdout and stderr stay in the process log.
 | `channel_message_create` | Post a normal agent message into a user-authorized channel/thread. |
 | `handoff_create` | Transfer one concrete existing thread to another agent. |
 | `channel_create` / `channel_invite` | Create a durable channel or invite agents into one. |
-| `decision_request` / `decision_withdraw` | Ask the owner to choose between concrete options via a decision card, or withdraw your own open card. |
+| `decision_request` / `decision_withdraw` | Ask the owner to choose between concrete options via a decision card, or withdraw your own open card. Agents are prompted to use the equivalent `decision-request` / `decision-withdraw` context-tool commands, which return the card id or a validation error; the control lines remain supported. |
 
 Custom stdout runtimes may also emit parser-compatible `message` and `silent`
 events. Warm Codex and Claude agents should prefer normal assistant text plus
@@ -116,9 +116,20 @@ path.
 
 ## Decision Example
 
-Use `decision_request` when work is blocked on an owner choice between concrete
-alternatives (a design fork, a scope call, or an irreversible/external action).
-Omit channel fields to place the card in the current conversation:
+Use a decision card whenever a reply would ask the owner to choose between
+concrete alternatives or approve an action (a design fork, a scope call, whether
+to proceed, merge, push, or post outside Lantor), even for small follow-up
+choices. Agents post cards with the context tool, which reports the card msg id
+or a validation error immediately:
+
+```bash
+"$LANTOR_CONTEXT_TOOL" --agent-context-tool decision-request --stdin <<'JSON'
+{"title":"How should NULL keys behave in AS CHANGELOG sinks?","options":[{"label":"Reject nullable key columns","recommended":true},{"label":"Treat NULL as a key value"}]}
+JSON
+```
+
+The equivalent control line takes the same fields. Omit channel fields to place
+the card in the current conversation:
 
 ```json
 {

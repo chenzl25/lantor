@@ -48,6 +48,11 @@ requested by the user or a reminder.
 "$LANTOR_CONTEXT_TOOL" --agent-context-tool attachment-info --attachment-id "<uuid>"
 "$LANTOR_CONTEXT_TOOL" --agent-context-tool artifact-read --artifact-id "<uuid>"
 "$LANTOR_CONTEXT_TOOL" --agent-context-tool agent-inspect --target "@handle"
+"$LANTOR_CONTEXT_TOOL" --agent-context-tool decision-request --stdin <<'JSON'
+{"title":"<question>","options":[{"label":"<outcome>","detail":"<cost>","recommended":true},{"label":"<outcome>"}]}
+JSON
+"$LANTOR_CONTEXT_TOOL" --agent-context-tool decision-withdraw --message-id "<card msg id>" --reason "<why>"
+"$LANTOR_CONTEXT_TOOL" --agent-context-tool decision-list --state open
 ```
 
 Inbox, workspace, and memory commands default to the current agent. Use
@@ -55,6 +60,11 @@ Inbox, workspace, and memory commands default to the current agent. Use
 `github sync` reads the bound repository's current review requests, updates the
 channel's cached review queue and badge, and returns a compact JSON result. It
 does not write to GitHub.
+`decision-request` posts a decision card (see `docs/control-events.md`) and
+prints its msg id or a validation error. The payload is the `decision_request`
+JSON on stdin, `--json`, or `--file`; `--title` alone makes an approve/decline
+card. Cards go to the agent's in-flight turn conversation unless `--target` is
+given. `decision-withdraw` and `decision-list` act only on the agent's own cards.
 
 ## Agent Memory
 

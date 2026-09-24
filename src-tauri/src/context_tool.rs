@@ -1,9 +1,11 @@
 use std::{
     env, fs,
+    io::Read,
     path::{Path, PathBuf},
 };
 
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use serde_json::Value;
 use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
 use uuid::Uuid;
@@ -15,9 +17,15 @@ use crate::channel_wiki::{
     ChannelWikiRevision, CHANNEL_WIKI_MAX_BYTES,
 };
 use crate::db::db_connect;
+use crate::decision_store::{
+    create_agent_decision, load_agent_decisions, load_decision, resolve_run_decision_anchor,
+    withdraw_agent_decision, DecisionOptionInput, NewDecision,
+};
+use crate::events::activity::record_agent_activity;
 use crate::freshness::advance_agent_target_watermark;
 use crate::github::{refresh_github_review_attention, GithubReviewAttentionRefreshResult};
 use crate::message_store::load_artifact;
+use crate::models::DecisionOption;
 use crate::ui_notifications::{enqueue_ui_event_in_tx, UiEvent};
 use crate::{
     app::{to_string, CommandResult},
@@ -1990,10 +1998,319 @@ pub(crate) async fn agent_context_github_sync(
     render_agent_context_github_sync(&channel_label, &result)
 }
 
+/// Same shape as the `decision_request` control line, minus `type`.
+#[derive(Debug, Deserialize)]
+struct DecisionRequestPayload {
+    #[serde(alias = "question")]
+    title: String,
+    #[serde(default)]
+    context: Option<String>,
+    #[serde(default)]
+    options: Option<Vec<DecisionOptionInput>>,
+    #[serde(default)]
+    task_number: Option<i64>,
+    #[serde(default)]
+    channel: Option<String>,
+    #[serde(default)]
+    channel_id: Option<Uuid>,
+    #[serde(default)]
+    thread_root_id: Option<Uuid>,
+}
+
+async fn require_current_agent(pool: &SqlitePool, command: &str) -> CommandResult<Uuid> {
+    current_agent_id_from_env(pool).await?.ok_or_else(|| {
+        format!("{command} must run inside an agent runtime (LANTOR_AGENT_ID is not set)")
+    })
+}
+
+/// The agent's in-flight run, if any. Decision cards default to that run's
+/// conversation, exactly like the agent's normal reply.
+async fn current_agent_run_id(pool: &SqlitePool, agent_id: Uuid) -> CommandResult<Option<Uuid>> {
+    sqlx::query_scalar(
+        r#"
+        select id
+        from agent_runs
+        where agent_id = $1 and status in ('starting', 'running', 'stopping')
+        order by started_at desc
+        limit 1
+        "#,
+    )
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)
+}
+
+fn read_decision_payload(args: &[String]) -> CommandResult<Option<DecisionRequestPayload>> {
+    let sources = [
+        arg_value(args, "--json").is_some(),
+        arg_value(args, "--file").is_some(),
+        has_arg(args, "--stdin"),
+    ];
+    if sources.iter().filter(|given| **given).count() > 1 {
+        return Err("decision-request accepts only one of --json, --file, or --stdin".to_owned());
+    }
+    let raw = if let Some(json) = arg_value(args, "--json") {
+        json
+    } else if let Some(path) = arg_value(args, "--file") {
+        fs::read_to_string(Path::new(&path))
+            .map_err(|err| format!("failed to read {path}: {err}"))?
+    } else if has_arg(args, "--stdin") {
+        let mut raw = String::new();
+        std::io::stdin()
+            .read_to_string(&mut raw)
+            .map_err(|err| format!("failed to read stdin: {err}"))?;
+        raw
+    } else {
+        return Ok(None);
+    };
+    if raw.trim().is_empty() {
+        return Err("decision-request payload is empty".to_owned());
+    }
+    serde_json::from_str(raw.trim())
+        .map(Some)
+        .map_err(|err| format!("invalid decision-request JSON: {err}"))
+}
+
+async fn decision_target_label(
+    pool: &SqlitePool,
+    channel_id: Uuid,
+    thread_root_id: Option<Uuid>,
+) -> CommandResult<String> {
+    let (_, label) = resolve_agent_context_channel(pool, &channel_id.to_string()).await?;
+    Ok(match thread_root_id {
+        Some(thread_root_id) => format!("{label}:{}", short_id(thread_root_id)),
+        None => label,
+    })
+}
+
+fn format_decision_options(options: &[DecisionOption]) -> String {
+    options
+        .iter()
+        .map(|option| {
+            let mut text = format!("[{}] {}", option.id, option.label);
+            if option.recommended {
+                text.push_str(" (recommended)");
+            }
+            text
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+pub(crate) async fn agent_context_decision_request(
+    pool: &SqlitePool,
+    args: &[String],
+) -> CommandResult<String> {
+    let agent_id = require_current_agent(pool, "decision-request").await?;
+    decision_request_for_agent(pool, agent_id, args).await
+}
+
+async fn decision_request_for_agent(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    args: &[String],
+) -> CommandResult<String> {
+    let payload = match read_decision_payload(args)? {
+        Some(payload) => payload,
+        None => DecisionRequestPayload {
+            title: arg_value(args, "--title").ok_or_else(|| {
+                "decision-request needs a JSON payload (--stdin, --json, or --file) or --title for an approve/decline card".to_owned()
+            })?,
+            context: arg_value(args, "--context"),
+            options: None,
+            task_number: None,
+            channel: None,
+            channel_id: None,
+            thread_root_id: None,
+        },
+    };
+    let run_id = current_agent_run_id(pool, agent_id).await?;
+    let (anchor_channel_id, anchor_thread_root_id, anchor_task_id) = match run_id {
+        Some(run_id) => resolve_run_decision_anchor(pool, agent_id, run_id).await?,
+        None => (None, None, None),
+    };
+    let (channel_id, thread_root_id, default_task_id) =
+        if let Some(target) = arg_value(args, "--target") {
+            let target = resolve_agent_context_target(pool, &target, None).await?;
+            (target.channel_id, target.thread_root_id, None)
+        } else if let Some(channel_id) = payload.channel_id {
+            (channel_id, payload.thread_root_id, None)
+        } else if let Some(channel) = payload.channel.as_deref() {
+            let (channel_id, _) = resolve_agent_context_channel(pool, channel).await?;
+            (channel_id, payload.thread_root_id, None)
+        } else if let Some(anchor_channel_id) = anchor_channel_id {
+            (
+                anchor_channel_id,
+                payload.thread_root_id.or(anchor_thread_root_id),
+                anchor_task_id,
+            )
+        } else {
+            return Err(
+                "no active Lantor conversation for this agent; pass --target \"#channel[:thread]\""
+                    .to_owned(),
+            );
+        };
+    let task_id = match payload.task_number {
+        Some(task_number) => Some(
+            sqlx::query_scalar::<_, Uuid>("select id from tasks where number = $1")
+                .bind(task_number)
+                .fetch_optional(pool)
+                .await
+                .map_err(to_string)?
+                .ok_or_else(|| format!("task #{task_number} does not exist"))?,
+        ),
+        None => default_task_id,
+    };
+    let (decision_id, message_id) = create_agent_decision(
+        pool,
+        NewDecision {
+            agent_id,
+            channel_id,
+            thread_root_id,
+            task_id,
+            title: &payload.title,
+            context: payload.context.as_deref(),
+            options: payload.options,
+        },
+    )
+    .await?;
+    let decision = load_decision(pool, decision_id).await?;
+    record_agent_activity(
+        pool,
+        Some(agent_id),
+        run_id,
+        "decision",
+        "Decision requested",
+        serde_json::json!({
+            "decision_id": decision_id,
+            "message_id": message_id,
+            "title": decision.title,
+        })
+        .to_string(),
+    )
+    .await?;
+    let target = decision_target_label(pool, channel_id, thread_root_id).await?;
+    let task = decision
+        .task_number
+        .map(|number| format!(", linked to task #{number}"))
+        .unwrap_or_default();
+    Ok(format!(
+        "Posted decision card msg={} in {target}{task}: {}\nOptions: {}\nThe owner answers from the card or the Needs-you view; the answer arrives as an @mention in that thread. Do not repeat the options or re-ask the question in your reply.\nWithdraw if it is settled in chat: decision-withdraw --message-id {} --reason \"<why>\"",
+        short_id(message_id),
+        decision.title,
+        format_decision_options(&decision.options),
+        short_id(message_id),
+    ))
+}
+
+pub(crate) async fn agent_context_decision_withdraw(
+    pool: &SqlitePool,
+    args: &[String],
+) -> CommandResult<String> {
+    let agent_id = require_current_agent(pool, "decision-withdraw").await?;
+    decision_withdraw_for_agent(pool, agent_id, args).await
+}
+
+async fn decision_withdraw_for_agent(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    args: &[String],
+) -> CommandResult<String> {
+    let message_ref = arg_value(args, "--message-id")
+        .or_else(|| arg_value(args, "--msg"))
+        .ok_or_else(|| "decision-withdraw requires --message-id <card msg id>".to_owned())?;
+    let reason = arg_value(args, "--reason");
+    let decision_id =
+        withdraw_agent_decision(pool, agent_id, &message_ref, reason.as_deref()).await?;
+    let run_id = current_agent_run_id(pool, agent_id).await?;
+    record_agent_activity(
+        pool,
+        Some(agent_id),
+        run_id,
+        "decision",
+        "Decision withdrawn",
+        serde_json::json!({ "decision_id": decision_id }).to_string(),
+    )
+    .await?;
+    let decision = load_decision(pool, decision_id).await?;
+    Ok(format!(
+        "Withdrew decision card msg={}: {}",
+        short_id(decision.message_id),
+        decision.title
+    ))
+}
+
+pub(crate) async fn agent_context_decision_list(
+    pool: &SqlitePool,
+    args: &[String],
+) -> CommandResult<String> {
+    let agent_id = require_current_agent(pool, "decision-list").await?;
+    decision_list_for_agent(pool, agent_id, args).await
+}
+
+async fn decision_list_for_agent(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    args: &[String],
+) -> CommandResult<String> {
+    let state = arg_value(args, "--state").unwrap_or_else(|| "open".to_owned());
+    let open_only = match state.as_str() {
+        "open" => true,
+        "all" => false,
+        other => return Err(format!("invalid --state {other}; use open or all")),
+    };
+    let limit = parse_context_tool_limit(args, 20, 100)?;
+    let decisions = load_agent_decisions(pool, agent_id, open_only, limit).await?;
+    if decisions.is_empty() {
+        return Ok(format!("No {state} decision cards."));
+    }
+    let mut output = vec![format!(
+        "Your decision cards (state={state}, {} shown):",
+        decisions.len()
+    )];
+    for decision in decisions {
+        let target =
+            decision_target_label(pool, decision.channel_id, decision.thread_root_id).await?;
+        let mut line = format!(
+            "[msg={} status={} time={} target={}] {}",
+            short_id(decision.message_id),
+            decision.status,
+            decision.created_at.to_rfc3339(),
+            target,
+            decision.title,
+        );
+        match decision.status.as_str() {
+            "open" => {
+                line.push_str("\n  options: ");
+                line.push_str(&format_decision_options(&decision.options));
+            }
+            "answered" => {
+                let answer = decision
+                    .answer_option_id
+                    .as_deref()
+                    .and_then(|id| decision.options.iter().find(|option| option.id == id))
+                    .map(|option| format!("[{}] {}", option.id, option.label))
+                    .unwrap_or_else(|| "answered in words".to_owned());
+                line.push_str(&format!("\n  answer: {answer}"));
+            }
+            _ => {}
+        }
+        if decision.status != "open" && !decision.answer_note.trim().is_empty() {
+            line.push_str(&format!(
+                "\n  note: {}",
+                compact_chars_middle(decision.answer_note.trim(), 400).replace('\n', " ")
+            ));
+        }
+        output.push(line);
+    }
+    Ok(output.join("\n"))
+}
+
 pub(crate) async fn run_agent_context_tool(args: &[String]) -> CommandResult<String> {
     if args.is_empty() || has_arg(args, "--help") || has_arg(args, "-h") {
         return Ok(
-            "Lantor agent context tool\n\nCommands:\n  inbox-list [--state active|unread|processing|archived|all] [--limit 20]\n  inbox-read --inbox-id <uuid-or-prefix>\n  inbox-archive --inbox-id <uuid-or-prefix>\n  workspace-info [--target @handle]\n  workspace-list [--target @handle] [--max-depth 2] [--limit 80]\n  memory-read [--target @handle] [--limit 16000]\n  run-read --run-id <uuid-or-prefix> [--target @handle] [--limit 8] [--log-limit 8000]\n  history-read --target \"#channel[:thread]\" [--limit 30]\n  message-search --query <text> [--target \"#channel\"] [--limit 30]\n  wiki-read --channel \"#channel\"\n  wiki-write --channel \"#channel\" [--parent <rev>] --file <markdown-path> | --content <text> [--note \"<one-line reason>\"]\n  wiki-log --channel \"#channel\" [--limit 10]\n  github sync --channel \"#channel\"\n  attachment-info --attachment-id <uuid>\n  artifact-read --artifact-id <uuid>\n  agent-inspect --target @handle\n\nTargets may be #channel, #channel:<message-id-prefix>, dm:@agent, channel UUID, or channel UUID:<message-id-prefix>. Inbox, run, workspace, and memory commands default to the current LANTOR_AGENT_ID when invoked by an agent."
+            "Lantor agent context tool\n\nCommands:\n  inbox-list [--state active|unread|processing|archived|all] [--limit 20]\n  inbox-read --inbox-id <uuid-or-prefix>\n  inbox-archive --inbox-id <uuid-or-prefix>\n  workspace-info [--target @handle]\n  workspace-list [--target @handle] [--max-depth 2] [--limit 80]\n  memory-read [--target @handle] [--limit 16000]\n  run-read --run-id <uuid-or-prefix> [--target @handle] [--limit 8] [--log-limit 8000]\n  history-read --target \"#channel[:thread]\" [--limit 30]\n  message-search --query <text> [--target \"#channel\"] [--limit 30]\n  wiki-read --channel \"#channel\"\n  wiki-write --channel \"#channel\" [--parent <rev>] --file <markdown-path> | --content <text> [--note \"<one-line reason>\"]\n  wiki-log --channel \"#channel\" [--limit 10]\n  github sync --channel \"#channel\"\n  attachment-info --attachment-id <uuid>\n  artifact-read --artifact-id <uuid>\n  agent-inspect --target @handle\n  decision-request --stdin | --json <payload> | --file <path> | --title <question> [--context <why>] [--target \"#channel[:thread]\"]\n  decision-withdraw --message-id <card-msg-id> [--reason <why>]\n  decision-list [--state open|all] [--limit 20]\n\nTargets may be #channel, #channel:<message-id-prefix>, dm:@agent, channel UUID, or channel UUID:<message-id-prefix>. Inbox, run, workspace, and memory commands default to the current LANTOR_AGENT_ID when invoked by an agent."
                 .to_owned(),
         );
     }
@@ -2044,6 +2361,24 @@ pub(crate) async fn run_agent_context_tool(args: &[String]) -> CommandResult<Str
         "artifact-read" | "artifact" | "artifact-view" => {
             agent_context_artifact_read_in_pool(&pool, args).await
         }
+        "decision-request" | "request-decision" => {
+            agent_context_decision_request(&pool, args).await
+        }
+        "decision-withdraw" | "withdraw-decision" => {
+            agent_context_decision_withdraw(&pool, args).await
+        }
+        "decision-list" | "list-decisions" | "decisions" => {
+            agent_context_decision_list(&pool, args).await
+        }
+        "decision" => match args.get(1).map(String::as_str) {
+            Some("request") => agent_context_decision_request(&pool, &args[1..]).await,
+            Some("withdraw") => agent_context_decision_withdraw(&pool, &args[1..]).await,
+            Some("list") => agent_context_decision_list(&pool, &args[1..]).await,
+            Some(other) => Err(format!("unknown decision command: {other}")),
+            None => {
+                Err("decision requires a subcommand; available: request, withdraw, list".to_owned())
+            }
+        },
         other => Err(format!("unknown agent context tool command: {other}")),
     }
 }

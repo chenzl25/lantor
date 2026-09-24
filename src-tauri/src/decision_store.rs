@@ -374,6 +374,27 @@ pub(crate) async fn load_decisions(pool: &SqlitePool) -> CommandResult<Vec<Decis
     Ok(rows.iter().map(decision_from_row).collect())
 }
 
+/// One agent's own decisions, newest first; `open_only` hides resolved cards.
+pub(crate) async fn load_agent_decisions(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    open_only: bool,
+    limit: i64,
+) -> CommandResult<Vec<Decision>> {
+    let sql = format!(
+        "{DECISION_SELECT} where d.requester_agent_id = $1 and ($2 = 0 or d.status = 'open') \
+         order by d.created_at desc limit $3"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(agent_id)
+        .bind(open_only)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .map_err(to_string)?;
+    Ok(rows.iter().map(decision_from_row).collect())
+}
+
 pub(crate) async fn load_decision(pool: &SqlitePool, decision_id: Uuid) -> CommandResult<Decision> {
     let sql = format!("{DECISION_SELECT} where d.id = $1");
     sqlx::query(&sql)

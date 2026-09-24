@@ -4,6 +4,7 @@ use super::{
     agent_context_inbox_read, agent_context_memory_read, agent_context_message_search,
     agent_context_run_read, agent_context_wiki_log, agent_context_wiki_read,
     agent_context_wiki_write, agent_context_workspace_info, agent_context_workspace_list,
+    decision_list_for_agent, decision_request_for_agent, decision_withdraw_for_agent,
     render_agent_context_github_sync, short_id,
 };
 use crate::channels::open_dm_with_agent_in_pool;
@@ -13,6 +14,7 @@ use crate::message_store::send_owner_message_in_pool;
 use crate::models::AttachmentUpload;
 use crate::test_support::{drop_test_schema, insert_test_agent, insert_test_channel, test_pool};
 use crate::text::read_compact_memory_file;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 #[test]
@@ -670,6 +672,212 @@ async fn wiki_tools_write_read_log_and_surface_search_matches() {
         )
         .await?;
         assert!(!stale_search.contains("Channel wiki matches"));
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    assert!(result.is_ok(), "{:?}", result.err());
+}
+
+fn cli_args(items: &[&str]) -> Vec<String> {
+    items.iter().map(|item| (*item).to_owned()).collect()
+}
+
+async fn insert_running_turn(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    channel_id: Uuid,
+    thread_root_id: Uuid,
+) -> Result<Uuid, String> {
+    let work_item_id: Uuid = sqlx::query_scalar(
+        r#"
+        insert into agent_work_items (agent_id, channel_id, thread_root_id, title, status)
+        values ($1, $2, $3, 'Owner question', 'running')
+        returning id
+        "#,
+    )
+    .bind(agent_id)
+    .bind(channel_id)
+    .bind(thread_root_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|err| err.to_string())?;
+    sqlx::query_scalar(
+        "insert into agent_runs (agent_id, command, status, work_item_id) values ($1, 'claude', 'running', $2) returning id",
+    )
+    .bind(agent_id)
+    .bind(work_item_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|err| err.to_string())
+}
+
+#[tokio::test]
+async fn decision_cli_posts_in_the_current_turn_lists_and_withdraws() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "decider-cli").await?;
+        let channel_id = insert_test_channel(&pool, "decision-cli").await?;
+        let root_id: Uuid = sqlx::query_scalar(
+            "insert into messages (channel_id, sender_name, sender_role, body) values ($1, 'Dylan', 'owner', 'which menu items stay?') returning id",
+        )
+        .bind(channel_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        let run_id = insert_running_turn(&pool, agent_id, channel_id, root_id).await?;
+
+        let posted = decision_request_for_agent(
+            &pool,
+            agent_id,
+            &cli_args(&[
+                "decision-request",
+                "--json",
+                r#"{"title":"Which menu items stay?","context":"Usage data says most are unused.","options":[{"label":"Keep three","detail":"Drop four"},{"label":"Keep two","recommended":true},{"label":"Change nothing"}]}"#,
+            ]),
+        )
+        .await?;
+        let thread_label = format!("#decision-cli:{}", short_id(root_id));
+        assert!(posted.starts_with("Posted decision card msg="), "{posted}");
+        assert!(posted.contains(&thread_label), "{posted}");
+        assert!(posted.contains("[a] Keep three · [b] Keep two (recommended) · [c] Change nothing"), "{posted}");
+        assert!(posted.contains("decision-withdraw --message-id"), "{posted}");
+
+        let (thread_root_id, status, message_thread): (Option<Uuid>, String, Option<Uuid>) =
+            sqlx::query_as(
+                r#"
+                select d.thread_root_id, d.status, m.thread_root_id
+                from decisions d join messages m on m.id = d.message_id
+                where d.requester_agent_id = $1
+                "#,
+            )
+            .bind(agent_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        assert_eq!(thread_root_id, Some(root_id));
+        assert_eq!(message_thread, Some(root_id));
+        assert_eq!(status, "open");
+        let activity_runs: Vec<Option<Uuid>> = sqlx::query_scalar(
+            "select run_id from agent_activities where agent_id = $1 and title = 'Decision requested'",
+        )
+        .bind(agent_id)
+        .fetch_all(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(activity_runs, vec![Some(run_id)]);
+
+        let too_few = decision_request_for_agent(
+            &pool,
+            agent_id,
+            &cli_args(&["decision-request", "--json", r#"{"title":"Only one?","options":[{"label":"Yes"}]}"#]),
+        )
+        .await
+        .expect_err("a single option must be rejected");
+        assert!(too_few.contains("at least 2 options"), "{too_few}");
+        let bad_json = decision_request_for_agent(
+            &pool,
+            agent_id,
+            &cli_args(&["decision-request", "--json", "{not json"]),
+        )
+        .await
+        .expect_err("malformed JSON must be rejected");
+        assert!(bad_json.contains("invalid decision-request JSON"), "{bad_json}");
+
+        let approval = decision_request_for_agent(
+            &pool,
+            agent_id,
+            &cli_args(&["decision-request", "--title", "Merge PR #175?", "--context", "CI is green."]),
+        )
+        .await?;
+        assert!(approval.contains("[approve] Approve · [decline] Decline"), "{approval}");
+
+        let first_msg = posted
+            .strip_prefix("Posted decision card msg=")
+            .map(|rest| rest[..8].to_owned())
+            .ok_or("missing card msg id")?;
+        let open = decision_list_for_agent(&pool, agent_id, &cli_args(&["decision-list"])).await?;
+        assert!(open.contains("state=open, 2 shown"), "{open}");
+        assert!(open.contains(&format!("[msg={first_msg} status=open")), "{open}");
+        assert!(open.contains(&format!("target={thread_label}]")), "{open}");
+
+        let withdrawn = decision_withdraw_for_agent(
+            &pool,
+            agent_id,
+            &cli_args(&["decision-withdraw", "--message-id", &first_msg, "--reason", "Settled in chat"]),
+        )
+        .await?;
+        assert_eq!(withdrawn, format!("Withdrew decision card msg={first_msg}: Which menu items stay?"));
+        let again = decision_withdraw_for_agent(
+            &pool,
+            agent_id,
+            &cli_args(&["decision-withdraw", "--message-id", &first_msg]),
+        )
+        .await
+        .expect_err("a withdrawn card is no longer open");
+        assert!(again.contains("no open decision"), "{again}");
+
+        let open = decision_list_for_agent(&pool, agent_id, &cli_args(&["decision-list"])).await?;
+        assert!(open.contains("state=open, 1 shown") && open.contains("Merge PR #175?"), "{open}");
+        let all = decision_list_for_agent(
+            &pool,
+            agent_id,
+            &cli_args(&["decision-list", "--state", "all"]),
+        )
+        .await?;
+        assert!(all.contains("status=withdrawn") && all.contains("note: Settled in chat"), "{all}");
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    assert!(result.is_ok(), "{:?}", result.err());
+}
+
+#[tokio::test]
+async fn decision_cli_needs_a_live_turn_or_explicit_target() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "idle-decider").await?;
+        insert_test_channel(&pool, "decision-target").await?;
+        let args = |extra: &[&str]| {
+            let mut args = cli_args(&[
+                "decision-request",
+                "--json",
+                r#"{"title":"Ship it?","options":[{"label":"Ship"},{"label":"Wait"}]}"#,
+            ]);
+            args.extend(cli_args(extra));
+            args
+        };
+        let error = decision_request_for_agent(&pool, agent_id, &args(&[]))
+            .await
+            .expect_err("no running turn and no target");
+        assert!(error.contains("pass --target"), "{error}");
+
+        let posted =
+            decision_request_for_agent(&pool, agent_id, &args(&["--target", "#decision-target"]))
+                .await?;
+        assert!(posted.contains("in #decision-target: Ship it?"), "{posted}");
+        let thread_root_id: Option<Uuid> = sqlx::query_scalar(
+            "select thread_root_id from decisions where requester_agent_id = $1",
+        )
+        .bind(agent_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(thread_root_id, None);
+
+        let conflicting = decision_request_for_agent(
+            &pool,
+            agent_id,
+            &cli_args(&["decision-request", "--json", "{}", "--stdin"]),
+        )
+        .await
+        .expect_err("two payload sources");
+        assert!(conflicting.contains("only one of"), "{conflicting}");
         Ok(())
     }
     .await;

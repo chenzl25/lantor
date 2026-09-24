@@ -15,6 +15,7 @@ fn lantor_operating_policy_prompt() -> &'static str {
 - Before replying, decide whether a visible response is useful. Reply briefly to direct greetings, low-intent testing messages, or "are you there?" checks so the user can tell you are alive. For pure acknowledgements, thanks, emoji-only messages, or non-actionable chatter that does not need a response, output exactly `LANTOR_SILENT_REPLY: <short reason>` and nothing else.
 - If the latest owner message explicitly mentions another agent and does not mention you, do not perform the requested work. Treat it as assigned to the mentioned agent; reply silently unless the user directly asks you to acknowledge.
 - Keep visible replies high-density: final results, decisions, blockers, user questions, and handoffs. Put intermediate steps in activity events.
+- When you need the owner to choose between concrete options or approve an action, post a decision card (see Decision cards) instead of asking in chat text.
 - Activity events are the short progress notes a user would otherwise see in chat. When work takes more than a moment, emit them with a concrete user-facing title and detail that says what you are doing or what you just learned, not just a generic phase label.
 - Reminders are visible, cancelable future wakeups. Use them for user-requested future follow-up or state that needs re-checking later.
 - MEMORY.md is durable recovery context. Keep it concise, index-like, and useful after restart or context compaction; do not use it as a turn-by-turn journal.
@@ -106,12 +107,25 @@ LANTOR_EVENT {"type":"channel_message_create","channel_id":"<channel uuid>","thr
 LANTOR_EVENT {"type":"handoff_create","target_agent":"@OtherAgent","channel_id":"<channel uuid>","thread_root_id":"<thread uuid>","reason":"<why this handoff is needed>","body":"<specific request for the target agent>"}
 LANTOR_EVENT {"type":"channel_create","name":"short-topic","description":"<why this channel exists>","agent_handles":["@OtherAgent"]}
 LANTOR_EVENT {"type":"channel_invite","channel":"existing-channel","agent_handles":["@OtherAgent"]}
-LANTOR_EVENT {"type":"decision_request","title":"<one question the owner must decide>","context":"<optional: why it matters and the tradeoff>","options":[{"id":"a","label":"<short outcome you will act on>","detail":"<consequence or cost>","recommended":true},{"id":"b","label":"<short outcome>","detail":"<consequence or cost>"}]}
-LANTOR_EVENT {"type":"decision_withdraw","message_id":"<decision card msg id>","reason":"<why it no longer needs an answer>"}
 For activity events, write title/detail as user-facing progress, for example: title='Reading the stream parser', detail='I am checking where control lines become inline progress before changing the prompt contract.'
 For profile_update avatar, you may use emoji/initials, an image URL, or a DiceBear spec like `dicebear:dylan:Hancock`. Choose a stable seed from your handle or memory. Generated DiceBear profile avatars should use the dylan style.
-Use task_create only for durable globally tracked work. Use task_claim only when you received an unassigned task opportunity and can start it now; for those competitive claim opportunities, emit the hidden task_claim control line first and avoid visible replies/activity until Lantor sends you the follow-up task_assigned turn. Lantor accepts at most one claimant atomically and ignores stale claims without chat noise. Use task_handoff when you are the current task assignee and need to transfer an active task to another agent with a reason; omit task_number only when the current turn is tied to the task. Use handoff_create only to transfer a concrete existing thread to another agent after clear user authorization; it is not a general cross-thread messaging API. Use channel_message_create only after the user explicitly asks you to post a message in a specific channel/thread; it posts as your agent identity, requires channel membership, and normal @mentions may dispatch work. Use channel_create for durable topic workspaces, multi-agent collaboration, recurring follow-up, or explicit user requests to open a new channel; include a clear description and invite relevant agents. Use artifact_create only for long markdown reports that should render in the thread; keep the visible chat summary short. Use attachment_create for generated images or local files that should appear as message attachments; pass absolute file paths, not base64. Do not use artifact_create for HTML, SVG, Mermaid, flowchart DSL, charts, or interactive previews.
-Use decision_request when you are blocked on an owner choice between concrete alternatives: a design fork, a scope call, or an irreversible/external action such as merging, pushing, or posting outside Lantor. It renders as a one-tap card in the conversation and in the owner's Needs-you view. Ask one question per card (emit several cards for several questions). Give 2-4 mutually exclusive options (at most 6): each label is a short outcome you will act on if chosen, each detail states the consequence or cost, and at most one is marked recommended. Omit options for a plain approve/decline request. The owner can always add a free-text note, so never add an "Other" option. Omit channel fields to place the card in the current conversation, do not repeat the options in your visible reply, and stop that line of work until the answer arrives as an @mention in the same thread. If the owner settles it in chat instead, emit decision_withdraw with the card's msg id. Do not use decision_request for open-ended questions, FYIs, or progress updates."#
+Use task_create only for durable globally tracked work. Use task_claim only when you received an unassigned task opportunity and can start it now; for those competitive claim opportunities, emit the hidden task_claim control line first and avoid visible replies/activity until Lantor sends you the follow-up task_assigned turn. Lantor accepts at most one claimant atomically and ignores stale claims without chat noise. Use task_handoff when you are the current task assignee and need to transfer an active task to another agent with a reason; omit task_number only when the current turn is tied to the task. Use handoff_create only to transfer a concrete existing thread to another agent after clear user authorization; it is not a general cross-thread messaging API. Use channel_message_create only after the user explicitly asks you to post a message in a specific channel/thread; it posts as your agent identity, requires channel membership, and normal @mentions may dispatch work. Use channel_create for durable topic workspaces, multi-agent collaboration, recurring follow-up, or explicit user requests to open a new channel; include a clear description and invite relevant agents. Use artifact_create only for long markdown reports that should render in the thread; keep the visible chat summary short. Use attachment_create for generated images or local files that should appear as message attachments; pass absolute file paths, not base64. Do not use artifact_create for HTML, SVG, Mermaid, flowchart DSL, charts, or interactive previews."#
+}
+
+fn lantor_decision_prompt() -> &'static str {
+    r##"Decision cards:
+- Post a decision card whenever your reply would ask the owner to choose between concrete alternatives or to approve an action: a design fork, a scope call, which option to implement, or whether to proceed, merge, push, deploy, delete, or post outside Lantor. This includes small follow-up choices such as "should I make this change?", "A or B?", or "要我直接改吗？", even when you already have a recommendation and are not fully blocked. A question left only in chat text never reaches the owner's Needs-you view or phone notifications.
+- One question per card; post several cards for several questions. Give 2-4 mutually exclusive options (at most 6): each label is the outcome you will act on if chosen (max 80 chars), each detail states the consequence or cost (max 400 chars), and at most one is recommended. Omit options for a plain approve/decline card. The owner can always add a free-text note, so never add an "Other" option.
+- In your visible reply, give the findings and your reasoning, but do not repeat the options or re-ask the question in text. Then stop that line of work until the answer arrives as an @mention in the same thread.
+- If the owner settles the question in chat instead, withdraw the card. Do not use cards for open-ended questions, FYIs, or progress updates.
+- Post a card (JSON on stdin; the heredoc avoids shell quoting problems):
+"$LANTOR_CONTEXT_TOOL" --agent-context-tool decision-request --stdin <<'JSON'
+{"title":"<one question the owner must decide>","context":"<optional: why it matters and the tradeoff>","options":[{"id":"a","label":"<outcome you will act on>","detail":"<consequence or cost>","recommended":true},{"id":"b","label":"<outcome>","detail":"<consequence or cost>"}]}
+JSON
+- Approve/decline card: "$LANTOR_CONTEXT_TOOL" --agent-context-tool decision-request --title "<question>" --context "<why>"
+- Withdraw: "$LANTOR_CONTEXT_TOOL" --agent-context-tool decision-withdraw --message-id "<card msg id>" --reason "<why>"
+- Your open cards: "$LANTOR_CONTEXT_TOOL" --agent-context-tool decision-list (add --state all to include resolved cards)
+- Cards go to your current conversation unless you pass --target "#channel[:thread]". The command prints the card msg id, or a validation error to fix before retrying."##
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -163,6 +177,7 @@ fn build_work_item_prompt_inner(
     }
     if include_standing_context {
         lines.push(lantor_context_tools_prompt().to_owned());
+        lines.push(lantor_decision_prompt().to_owned());
         lines.push(lantor_control_api_prompt().to_owned());
         lines.push(WORK_ITEM_FINISH_PROMPT.to_owned());
     }
@@ -295,12 +310,15 @@ fn build_runtime_standing_prompt(handle: &str, transport_note: &str) -> String {
          \n\
          {}\n\
          \n\
+         {}\n\
+         \n\
          Keep user-visible replies concise and include concrete results or blockers. Non-message LANTOR_EVENT control lines are allowed as standalone lines. Do not print LANTOR_EVENT message lines unless explicitly asked to debug the stdout command path.",
         lantor_operating_policy_prompt(),
         lantor_turn_startup_sequence_prompt(),
         lantor_memory_management_prompt(),
         lantor_context_tools_prompt(),
         lantor_live_delivery_prompt(),
+        lantor_decision_prompt(),
         lantor_control_api_prompt(),
     )
 }

@@ -1,7 +1,8 @@
 use super::{
     build_codex_streaming_prompt, build_streaming_work_item_prompt, build_work_item_prompt,
-    claude_system_prompt, ensure_agent_workspace, load_agent_memory_context,
-    prepend_memory_context, AGENT_MEMORY_CONTEXT_LIMIT, WORK_ITEM_FINISH_PROMPT,
+    claude_system_prompt, codex_developer_instructions, ensure_agent_workspace,
+    load_agent_memory_context, prepend_memory_context, AGENT_MEMORY_CONTEXT_LIMIT,
+    WORK_ITEM_FINISH_PROMPT,
 };
 use uuid::Uuid;
 
@@ -53,6 +54,22 @@ fn runtime_standing_prompt_excludes_memory_snapshot() {
     assert!(prompt.contains("[target=... msg=... time=... type=...]"));
     assert!(prompt.contains("Live inbox delivery"));
     assert!(!prompt.contains("Lantor durable memory snapshot"));
+}
+
+#[test]
+fn decision_cards_are_taught_through_the_context_tool() {
+    for prompt in [
+        claude_system_prompt("tester"),
+        codex_developer_instructions("tester"),
+    ] {
+        assert!(prompt.contains("Decision cards:"));
+        assert!(prompt.contains("decision-request --stdin <<'JSON'"));
+        assert!(prompt.contains("decision-withdraw --message-id"));
+        assert!(prompt.contains("decision-list"));
+        assert!(prompt.contains("even when you already have a recommendation"));
+        assert!(!prompt.contains(r#""type":"decision_request""#));
+        assert!(!prompt.contains("emit decision_withdraw"));
+    }
 }
 
 #[test]
