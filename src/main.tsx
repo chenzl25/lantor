@@ -57,6 +57,7 @@ import { OwnerProfileModal, ownerProfileToForm, type OwnerProfileForm } from "./
 import { SavedMessagesModal } from "./components/SavedMessagesModal";
 import { NeedsYouModal } from "./components/NeedsYouModal";
 import { DecisionStore, DecisionStoreContext, deriveNeedsYou } from "./decisions";
+import { isPushTarget, OPEN_TARGET_MESSAGE, parseOpenTargetHash, setAppBadge, syncPushSubscription, type PushTarget } from "./web-push";
 import { SearchModal } from "./components/SearchModal";
 import { SettingsModal, type ChatTextSize, type FontPreset, type ThemePreference } from "./components/SettingsModal";
 import { Sidebar } from "./components/Sidebar";
@@ -830,6 +831,7 @@ function App() {
   const [mobileComposerFocused, setMobileComposerFocused] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null);
+  const openPushTargetRef = useRef<(target: PushTarget) => void>(() => {});
   const [appError, setAppError] = useState<string | null>(null);
   useEffect(() => {
     const onError = (event: Event) => setAppError((event as CustomEvent<string>).detail);
@@ -2580,6 +2582,26 @@ function App() {
   }, [activeChannelId, data?.channels]);
 
   useEffect(() => {
+    const target = data ? parseOpenTargetHash(window.location.hash) : null;
+    if (!target) return;
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}`);
+    openPushTargetRef.current(target);
+  }, [data]);
+
+  useEffect(() => {
+    if (isTauriRuntime() || !("serviceWorker" in navigator)) return;
+    void syncPushSubscription().catch(() => {});
+    const workers = navigator.serviceWorker;
+    function onWorkerMessage(event: MessageEvent) {
+      if (event.data?.type === OPEN_TARGET_MESSAGE && isPushTarget(event.data.target)) {
+        openPushTargetRef.current(event.data.target);
+      }
+    }
+    workers.addEventListener("message", onWorkerMessage);
+    return () => workers.removeEventListener("message", onWorkerMessage);
+  }, []);
+
+  useEffect(() => {
     if (!data || !window.location.hash.startsWith("#/message/")) return;
     const messageId = decodeURIComponent(window.location.hash.replace("#/message/", ""));
     const message = data.messages.find((item) => item.id === messageId || item.id.startsWith(messageId));
@@ -3072,6 +3094,11 @@ function App() {
     // Opening the view re-derives idle ages against the current clock.
     [data?.decisions, data?.tasks, data?.thread_activities, showNeedsYouModal],
   );
+  const hasData = Boolean(data);
+  useEffect(() => {
+    // Mirror the Needs-you count on the Home Screen icon (installed web app).
+    if (hasData) setAppBadge(needsYou.count);
+  }, [hasData, needsYou.count]);
 
   const shareBaseUrl = useMemo(() => {
     if (!data) return window.location.origin;
@@ -3981,6 +4008,21 @@ function App() {
     setActiveTab("chat");
     setShowNeedsYouModal(false);
   }
+
+  /** A notification tap: land in the conversation, whatever was open. */
+  function openPushTarget(target: PushTarget) {
+    if (!data?.channels.some((item) => item.id === target.channel_id)) return;
+    setShowMobileSidebar(false);
+    setShowSearchModal(false);
+    setShowActivityFeedModal(false);
+    setShowSavedModal(false);
+    setShowNeedsYouModal(false);
+    selectChannel(target.channel_id);
+    revealThread(target.thread_root_id ?? target.message_id, target.channel_id);
+    setFocusedMessageId(target.message_id);
+    setActiveTab("chat");
+  }
+  openPushTargetRef.current = openPushTarget;
 
   function openNeedsYouTask(task: Task) {
     setShowNeedsYouModal(false);

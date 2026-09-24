@@ -80,3 +80,22 @@ The Runtime panel can install a user LaunchAgent at:
 
 That lets macOS keep the `--supervisor` process alive via `launchctl`.
 Uninstall removes the plist and unloads the service.
+
+## Push notifications
+
+The web UI can send system notifications to a phone or browser when an agent
+needs you: a new decision card, or a task moved to review. Open **Needs you**
+and tap **Turn on** on the device that should get them; **Test** sends a sample
+notification. Tapping a notification opens the conversation.
+
+- Push needs HTTPS (Tailscale Serve or a Cloudflare Tunnel) and the production
+  web build, because it runs in the app-shell service worker.
+- On iPhone and iPad, Safari only offers push to the installed web app: use
+  Share → **Add to Home Screen**, open Lantor from the Home Screen icon, then
+  turn notifications on there. The icon badge shows the Needs-you count.
+- The server keeps its VAPID key and subscriptions in the SQLite database and
+  delivers through `curl`. It only accepts browser push services (Apple,
+  Google, Mozilla, Microsoft) as endpoints. Set `LANTOR_PUSH_CONTACT` to a
+  `mailto:` or `https:` contact if you want one other than the project URL.
+- Items already waiting when the web process starts, or older than ten
+  minutes, are not announced, so a restart never floods the phone.

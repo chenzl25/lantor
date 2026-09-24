@@ -95,3 +95,58 @@ self.addEventListener("fetch", (event) => {
   if (!navigation && !paths.has(url.pathname) && !hashedAsset.test(url.pathname)) return;
   event.respondWith(shellResponse(request, url.pathname));
 });
+
+// Web Push: the server announces decision cards and tasks moved to review.
+// Payload: { title, body, tag, target: { channel_id, thread_root_id, message_id } | null, badge }.
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try { payload = event.data?.json() ?? {}; } catch { payload = { body: event.data?.text() ?? "" }; }
+  const text = (value, fallback) => (typeof value === "string" && value ? value : fallback);
+  const shown = self.registration.showNotification(text(payload.title, "Lantor"), {
+    body: text(payload.body, ""),
+    tag: text(payload.tag, undefined),
+    icon: "/lantor-icon-192.png",
+    badge: "/lantor-icon-192.png",
+    data: { target: payload.target ?? null },
+  });
+  const badge = Number.isInteger(payload.badge) && self.navigator.setAppBadge
+    ? (payload.badge > 0 ? self.navigator.setAppBadge(payload.badge) : self.navigator.clearAppBadge()).catch(() => {})
+    : null;
+  event.waitUntil(Promise.all([shown, badge]));
+});
+
+function openTargetUrl(target) {
+  if (typeof target?.channel_id !== "string" || typeof target?.message_id !== "string") return "/";
+  const parts = [target.channel_id, target.thread_root_id ?? "", target.message_id].map(encodeURIComponent);
+  return `/#/open/${parts.join("/")}`;
+}
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = event.notification.data?.target ?? null;
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const client = windows.find((item) => item.visibilityState === "visible") ?? windows[0];
+    if (!client) {
+      await self.clients.openWindow(openTargetUrl(target));
+      return;
+    }
+    await client.focus().catch(() => {});
+    if (target) client.postMessage({ type: "LANTOR_OPEN_TARGET", target });
+  })());
+});
+
+self.addEventListener("pushsubscriptionchange", (event) => {
+  const post = (path, body) => fetch(`/api/push/${path}`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  event.waitUntil((async () => {
+    const applicationServerKey = event.oldSubscription?.options?.applicationServerKey;
+    const next = event.newSubscription
+      ?? (applicationServerKey ? await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey }) : null);
+    if (!next) return;
+    await post("subscribe", next.toJSON());
+    const previous = event.oldSubscription?.endpoint;
+    if (previous && previous !== next.endpoint) await post("unsubscribe", { endpoint: previous });
+  })().catch(() => {}));
+});

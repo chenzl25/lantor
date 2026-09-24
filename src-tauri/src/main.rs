@@ -43,6 +43,7 @@ mod ui_state;
 mod usage;
 mod web;
 mod web_avatar;
+mod web_push;
 mod web_upload;
 
 use std::{env, fs, path::PathBuf};
@@ -272,6 +273,7 @@ fn spawn_shared_background_workers(pool: SqlitePool, database_url: String) {
     spawn_attachment_garbage_collector(pool.clone());
     spawn_ui_events_pruner(pool.clone());
     web::spawn_web_server_if_configured(pool.clone(), database_url);
+    web_push::spawn_push_worker(pool.clone());
     spawn_reminder_worker(pool);
 }
 

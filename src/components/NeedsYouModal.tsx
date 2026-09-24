@@ -6,6 +6,7 @@ import { formatTime } from "../ui-utils";
 import { AgentAvatar } from "./AgentAvatar";
 import { DecisionCard } from "./DecisionCard";
 import { DialogSurface } from "./DialogSurface";
+import { PushNotificationsRow } from "./PushNotificationsRow";
 
 type NeedsYouModalProps = {
   open: boolean;
@@ -104,6 +105,7 @@ export function NeedsYouModal({
       </header>
 
       <div className="activity-feed-body needs-you-body">
+        <PushNotificationsRow />
         {empty && (
           <div className="search-empty">
             <Hand size={34} />

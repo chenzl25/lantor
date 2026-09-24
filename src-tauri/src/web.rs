@@ -65,6 +65,7 @@ use crate::system_commands::{
     check_runtime_in_env, report_client_crash_in_pool, ClientCrashReport,
 };
 use crate::ui_notifications::{enqueue_ui_event, enqueue_ui_event_in_tx, UiEvent};
+use crate::web_push;
 use crate::web_upload::parse_multipart_send_message;
 use crate::{
     app::to_string, cancel_agent_work_in_pool, claim_task_in_pool, retry_agent_work_in_pool,
@@ -313,6 +314,10 @@ fn web_router(state: Arc<WebState>, dist_dir: PathBuf) -> Router {
         .route("/api/complete_reminder", post(api_complete_reminder))
         .route("/api/update_task_status", post(api_update_task_status))
         .route("/api/answer_decision", post(api_answer_decision))
+        .route("/api/push/config", get(api_push_config))
+        .route("/api/push/subscribe", post(api_push_subscribe))
+        .route("/api/push/unsubscribe", post(api_push_unsubscribe))
+        .route("/api/push/test", post(api_push_test))
         .route("/api/dismiss_decision", post(api_dismiss_decision))
         .route("/api/update_task_title", post(api_update_task_title))
         .route("/api/claim_task", post(api_claim_task))
@@ -873,6 +878,45 @@ async fn api_answer_decision(
     Json(request): Json<AnswerDecisionRequest>,
 ) -> Result<impl IntoResponse, Response> {
     decision_commands::answer_decision(&state.pool, request)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_push_config(
+    State(state): State<Arc<WebState>>,
+) -> Result<impl IntoResponse, Response> {
+    web_push::load_push_config(&state.pool)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_push_subscribe(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<web_push::PushSubscribeRequest>,
+) -> Result<impl IntoResponse, Response> {
+    web_push::save_push_subscription(&state.pool, request)
+        .await
+        .map(|()| Json(json!({ "ok": true })))
+        .map_err(api_error)
+}
+
+async fn api_push_unsubscribe(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<web_push::PushEndpointRequest>,
+) -> Result<impl IntoResponse, Response> {
+    web_push::delete_push_subscription(&state.pool, request)
+        .await
+        .map(|()| Json(json!({ "ok": true })))
+        .map_err(api_error)
+}
+
+async fn api_push_test(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<web_push::PushEndpointRequest>,
+) -> Result<impl IntoResponse, Response> {
+    web_push::send_test_push(&state.pool, request)
         .await
         .map(Json)
         .map_err(api_error)

@@ -495,6 +495,33 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             on decisions (status, created_at)
         "#,
         r#"
+        create table if not exists push_vapid_keys (
+            id integer primary key default 1 check (id = 1),
+            private_key_pkcs8 text not null,
+            public_key text not null,
+            created_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
+        )
+        "#,
+        r#"
+        create table if not exists push_subscriptions (
+            endpoint text primary key not null,
+            p256dh text not null,
+            auth text not null,
+            user_agent text not null default '',
+            failure_count integer not null default 0,
+            last_error text,
+            last_success_at text,
+            created_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+            updated_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
+        )
+        "#,
+        r#"
+        create table if not exists push_announced_items (
+            item_key text primary key not null,
+            announced_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
+        )
+        "#,
+        r#"
         create table if not exists github_resource_threads (
             id blob primary key not null default (randomblob(16)),
             channel_id blob not null references channels(id) on delete cascade,

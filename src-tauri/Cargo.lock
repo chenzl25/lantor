@@ -1968,10 +1968,12 @@ version = "0.1.0"
 dependencies = [
  "async-stream",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "http-body-util",
  "image",
  "mime_guess",
+ "ring",
  "serde",
  "serde_json",
  "sha2",
