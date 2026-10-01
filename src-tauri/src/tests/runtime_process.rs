@@ -3,6 +3,23 @@ use crate::events::activity::activity_status;
 use serde_json::{json, Value};
 
 #[test]
+fn process_group_signals_separate_negative_pid_from_options() {
+    for signal in ["-TERM", "-0", "-KILL"] {
+        let command = super::process_group_signal_command(119669, signal);
+        let args: Vec<_> = command.as_std().get_args().collect();
+        assert_eq!(args, [signal, "--", "-119669"]);
+    }
+}
+
+#[tokio::test]
+async fn process_group_termination_rejects_broadcast_and_invalid_targets() {
+    for pid in [i32::MIN, -123, -1, 0, 1] {
+        let error = super::terminate_process_group(pid).await.unwrap_err();
+        assert!(error.contains("invalid process group leader pid"));
+    }
+}
+
+#[test]
 fn ignores_known_codex_manifest_default_prompt_warning() {
     let line = json!({
         "timestamp": "2026-05-14T13:05:55.340546Z",
