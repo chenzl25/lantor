@@ -1,4 +1,5 @@
 import { isTauriRuntime } from "./apiClient";
+import { isStandaloneDisplay } from "./display-mode";
 
 /**
  * Web Push for the mobile web app. The server announces new "needs you" items
@@ -28,11 +29,6 @@ const OPEN_TARGET_HASH = "#/open/";
 function isIos() {
   return /iPad|iPhone|iPod/.test(navigator.userAgent)
     || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-}
-
-function isStandalone() {
-  return window.matchMedia?.("(display-mode: standalone)").matches
-    || (navigator as Navigator & { standalone?: boolean }).standalone === true;
 }
 
 function pushApiAvailable() {
@@ -76,7 +72,7 @@ function saveSubscription(subscription: PushSubscription) {
 
 export async function readPushState(): Promise<PushState> {
   if (isTauriRuntime()) return "unsupported";
-  if (!pushApiAvailable()) return isIos() && !isStandalone() ? "install" : "unsupported";
+  if (!pushApiAvailable()) return isIos() && !isStandaloneDisplay() ? "install" : "unsupported";
   const registration = await workerRegistration();
   if (!registration) return "unsupported";
   if (Notification.permission === "denied") return "denied";

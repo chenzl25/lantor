@@ -3,7 +3,9 @@ import { AppToast } from "./AppToast";
 import { type MouseEvent, type PointerEvent, useEffect, useState } from "react";
 import { Download, FileText, Image, X, ZoomIn, ZoomOut } from "lucide-react";
 import { attachmentAssetUrl, downloadAttachment, isTauriRuntime, openExternalUrl } from "../apiClient";
+import { openAttachmentSheet, triggerBrowserDownload, usesAttachmentSheet } from "../attachment-sheet";
 import { MessageAttachment } from "../types";
+import { formatByteSize } from "../ui-utils";
 
 type MessageAttachmentsProps = {
   attachments: MessageAttachment[];
@@ -22,12 +24,6 @@ type DownloadNotice = {
   message: string;
 };
 
-function formatBytes(value: number) {
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
-}
-
 function filenameFromPath(path: string, fallback: string) {
   const normalized = path.replace(/\\/g, "/");
   return normalized.split("/").pop() || fallback;
@@ -38,6 +34,11 @@ function errorMessage(error: unknown) {
 }
 
 async function openStoredAttachment(event: MouseEvent<HTMLAnchorElement>, attachment: MessageAttachment, onNotice: (notice: Omit<DownloadNotice, "id">) => void) {
+  if (usesAttachmentSheet()) {
+    event.preventDefault();
+    openAttachmentSheet(attachment);
+    return;
+  }
   if (attachment.local_url || !isTauriRuntime()) return;
 
   event.preventDefault();
@@ -74,20 +75,14 @@ async function downloadStoredAttachment(
     return;
   }
 
+  if (usesAttachmentSheet()) {
+    openAttachmentSheet(attachment);
+    return;
+  }
   triggerBrowserDownload(
     attachment.local_url ?? attachmentAssetUrl(attachment.storage_path, attachment.id),
     attachment.original_name,
   );
-}
-
-function triggerBrowserDownload(url: string, filename: string) {
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.rel = "noreferrer";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
 }
 
 function isolateAttachmentEvent(event: MouseEvent<HTMLElement> | PointerEvent<HTMLElement>) {
@@ -175,7 +170,7 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
                       <span className="attachment-meta">
                         <span className="attachment-name">{attachment.original_name}</span>
                         <small className="attachment-type">{attachment.mime_type || "image"}</small>
-                        <small className="attachment-size">{formatBytes(attachment.size_bytes)}</small>
+                        <small className="attachment-size">{formatByteSize(attachment.size_bytes)}</small>
                       </span>
                     </>
                   )}
@@ -217,7 +212,7 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
                 <span className="attachment-meta">
                   <span className="attachment-name">{attachment.original_name}</span>
                   <small className="attachment-type">{attachment.mime_type || "file"}</small>
-                  <small className="attachment-size">{formatBytes(attachment.size_bytes)}</small>
+                  <small className="attachment-size">{formatByteSize(attachment.size_bytes)}</small>
                 </span>
               </a>
               <button

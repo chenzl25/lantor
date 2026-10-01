@@ -1,5 +1,6 @@
 import { activeDialog } from "./dialog-layers";
 import { AppToast } from "./components/AppToast";
+import { AttachmentSheetHost } from "./components/AttachmentSheet";
 import { UI_ERROR_EVENT } from "./ui-notice";
 import { reportClientCrash, watchWindowErrors } from "./crash-report";
 import {
@@ -5338,6 +5339,8 @@ function App() {
       {!activeAppModal && mobileBottomNavigation}
 
       {appError && <AppToast message={appError} onDismiss={() => setAppError(null)} />}
+
+      <AttachmentSheetHost />
 
       <CreateChannelModal
         open={showCreateChannelModal}

@@ -4112,6 +4112,137 @@ mark {
   top: calc(98px + env(safe-area-inset-top));
 }
 
+/* In-app file sheet for the Home Screen web app, which has no browser chrome. */
+.modal-card.attachment-sheet {
+  display: grid;
+  width: min(760px, calc(100vw - 64px));
+  grid-template-rows: auto minmax(0, 1fr);
+  /* Opaque: a document reader must not show the conversation through it. */
+  background: var(--bg-panel);
+}
+
+.attachment-sheet-head {
+  min-width: 0;
+}
+
+.attachment-sheet-title {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.attachment-sheet-title h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-sheet-title small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--type-size-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-sheet-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.attachment-sheet-share,
+.attachment-sheet-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-weight: var(--type-weight-semibold);
+}
+
+.attachment-sheet-share {
+  background: var(--accent);
+  color: var(--ink-on-accent);
+}
+
+.attachment-sheet-share:disabled {
+  cursor: progress;
+  opacity: 0.48;
+}
+
+.attachment-sheet-retry {
+  margin-top: 10px;
+  background: var(--bg-control);
+  color: var(--ink-primary);
+}
+
+.attachment-sheet-body {
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+
+.attachment-sheet-status,
+.attachment-sheet-placeholder {
+  color: var(--muted);
+  text-align: center;
+}
+
+.attachment-sheet-placeholder {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 32px 12px;
+}
+
+.attachment-sheet-placeholder p {
+  margin: 0;
+}
+
+.attachment-sheet-error {
+  margin: 0 0 12px;
+  color: var(--status-danger);
+}
+
+.attachment-sheet-media {
+  display: block;
+  max-width: 100%;
+  margin: 0 auto;
+  border-radius: 12px;
+}
+
+.attachment-sheet-audio {
+  width: 100%;
+}
+
+.attachment-sheet-text {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--type-size-code);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .modal-backdrop:has(.attachment-sheet) {
+    padding: calc(8px + env(safe-area-inset-top)) 8px calc(8px + env(safe-area-inset-bottom));
+  }
+
+  .modal-card.attachment-sheet {
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    max-height: 100%;
+  }
+
+  .attachment-sheet .modal-body {
+    max-height: none;
+    padding: 14px;
+  }
+}
+
 .message-stream-state {
   display: inline-flex;
   align-items: center;

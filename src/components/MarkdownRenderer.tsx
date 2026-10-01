@@ -16,6 +16,7 @@ import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markd
 import remarkGfm from "remark-gfm";
 import type { PluggableList } from "unified";
 import { attachmentAssetUrl, isTauriRuntime, openExternalUrl } from "../apiClient";
+import { openAttachmentSheet, usesAttachmentSheet } from "../attachment-sheet";
 import { copyText } from "../clipboard";
 import {
   MESSAGE_REFERENCE_PATTERN,
@@ -192,6 +193,10 @@ function handleLinkClick(
     return;
   }
   if (!href || event.detail > 1) return;
+  if (attachment && usesAttachmentSheet()) {
+    openAttachmentSheet(attachment);
+    return;
+  }
 
   void openLink(href, attachment).catch((err) => {
     console.error("Failed to open external link", err);

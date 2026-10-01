@@ -20,9 +20,18 @@ Agents often hand files to the owner as Markdown links to absolute host paths (`
 - The copy is staged under `attachments/.tmp/` and then renamed like a multipart upload. On APFS, `fs::copy` clones, so a snapshot costs no extra space until either file changes. Each message keeps the version that existed when it was sent.
 - `MarkdownRenderer` resolves a link whose decoded href equals an attachment's `source_path`. Browsers and the PWA open `/api/attachments/{id}`. The desktop app still opens the original path and falls back to the snapshot once the original is gone. `attachment_create` files record their given path too, so links to them resolve without a second copy.
 
+## Home Screen web app
+
+An installed Home Screen web app (`display: standalone`) has no browser chrome, so any navigation to a file traps the user: in-scope new windows and downloads replace the app view with no back, close, or share control. When `usesAttachmentSheet()` is true (standalone display outside Tauri), the file card, every download button (including the image lightbox), and snapshot links all open `AttachmentSheet` and never navigate.
+
+- The sheet fetches the attachment once. Images, video, and audio are previewed from that blob, and text/Markdown up to 512KiB is rendered in place. PDFs and Office files show no inline preview, because iOS renders only the first page of an embedded PDF.
+- Share calls `navigator.share({ files })` synchronously within the tap, which iOS requires, and opens the native share sheet (Save to Files, Books, Keynote, AirDrop). Browsers without file sharing get a blob download instead.
+- Close, Escape, or a back gesture returns to the conversation. Ordinary browser tabs and the desktop app keep their existing behavior.
+
 ## Verification
 
 - `cargo test --manifest-path src-tauri/Cargo.toml`: range bodies/validators/HEAD/active-content disposition, 64MiB boundary, never-ready body early rejection, bounded reads for a ready 100MiB stream, invalid metadata, disconnected/cancelled requests, and database rollback cleanup, plus the full existing suite.
 - `npm run test:attachments`: opt-in fresh isolated database and real Axum server, binary multipart persistence, native Chromium image rendering/CDP cache events, direct local `curl --noproxy '*' -r 0-99`, and two 100MiB upload attempts with/without Content-Length. The Node client generates 64KiB chunks and samples the server's RSS using `ps` about every 10ms. No deployed supervisor or live database is involved.
 - To collect JSON, set `LANTOR_ATTACHMENT_EVIDENCE_DIR` to an existing output directory. `LANTOR_ATTACHMENT_BASELINE=1` makes the same benchmark observational for a checkout before this change (copy the fixture module and browser script into that checkout).
+- `npm run test:attachment-sheet`: Chromium and iPhone WebKit with emulated standalone display check that the card, download, lightbox download, and snapshot link open the sheet. They also check that shared files carry the exact bytes, that close, Escape, and back work, that errors are retried, that the download fallback works, and that nothing navigates, opens a window, or downloads.
 - `npm test`, `npm run build`, `npm run test:web-sync`, and `git diff --check` cover frontend compatibility and integration.

@@ -183,6 +183,12 @@ function timeFormatter(preset: keyof typeof TIME_FORMAT_OPTIONS) {
   return formatter;
 }
 
+export function formatByteSize(value: number) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
 export function formatTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
