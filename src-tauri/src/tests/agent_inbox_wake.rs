@@ -294,6 +294,7 @@ async fn inbox_wake_context_exposes_root_message_attachments() {
                 mime_type: "text/markdown".to_owned(),
                 bytes: b"# plan\n".to_vec(),
                 staged: None,
+                source_path: None,
             }],
         )
         .await?;

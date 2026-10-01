@@ -16,6 +16,7 @@ async-stream = "0.3.6"
 base64 = "0.22"
 http-body-util = "0.1"
 mime_guess = "2.0.5"
+pulldown-cmark = { version = "0.13.3", default-features = false }
 ring = "0.17"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 serde = { version = "1.0.219", features = ["derive"] }

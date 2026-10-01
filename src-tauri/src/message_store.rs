@@ -1,5 +1,7 @@
+mod linked_files;
 mod search;
 
+pub(crate) use linked_files::attach_linked_files_best_effort;
 pub(crate) use search::search_messages_without_artifact_content;
 
 use std::collections::HashMap;
@@ -868,7 +870,7 @@ pub(crate) async fn load_message_patch_in_tx(
     let mut message = message_from_row(&row);
     let attachment_rows = sqlx::query(
         r#"
-        select id, message_id, original_name, mime_type, size_bytes, storage_path, created_at
+        select id, message_id, original_name, mime_type, size_bytes, storage_path, source_path, created_at
         from message_attachments
         where message_id = $1
         order by created_at asc
@@ -887,6 +889,7 @@ pub(crate) async fn load_message_patch_in_tx(
             mime_type: row.get("mime_type"),
             size_bytes: row.get("size_bytes"),
             storage_path: row.get("storage_path"),
+            source_path: row.get("source_path"),
             created_at: row.get("created_at"),
         })
         .collect();
@@ -1043,6 +1046,7 @@ pub(crate) async fn insert_agent_message_with_options(
         Some(msg_id),
     )
     .await?;
+    attach_linked_files_best_effort(pool, msg_id).await;
     if !as_task && dispatch_mentions {
         queue_agent_message_mentions(pool, msg_id).await?;
     }
@@ -1334,9 +1338,10 @@ pub(crate) async fn insert_message_attachments_tx(
                 original_name,
                 mime_type,
                 size_bytes,
-                storage_path
+                storage_path,
+                source_path
             )
-            values ($1, $2, $3, $4, $5, $6)
+            values ($1, $2, $3, $4, $5, $6, $7)
             "#,
         )
         .bind(attachment_id)
@@ -1345,6 +1350,7 @@ pub(crate) async fn insert_message_attachments_tx(
         .bind(mime_type)
         .bind(size_bytes as i64)
         .bind(storage_path)
+        .bind(attachment.source_path.as_deref())
         .execute(&mut **tx)
         .await
         .map_err(to_string)?;
@@ -1438,6 +1444,7 @@ pub(crate) async fn insert_agent_attachment_message(
         Some(msg_id),
     )
     .await?;
+    attach_linked_files_best_effort(pool, msg_id).await;
     queue_agent_message_mentions(pool, msg_id).await?;
     Ok(msg_id)
 }
@@ -1456,7 +1463,7 @@ async fn attach_message_attachments(
         .join(", ");
     let sql = format!(
         r#"
-        select id, message_id, original_name, mime_type, size_bytes, storage_path, created_at
+        select id, message_id, original_name, mime_type, size_bytes, storage_path, source_path, created_at
         from message_attachments
         where message_id in ({placeholders})
         order by created_at asc
@@ -1476,6 +1483,7 @@ async fn attach_message_attachments(
             mime_type: row.get("mime_type"),
             size_bytes: row.get("size_bytes"),
             storage_path: row.get("storage_path"),
+            source_path: row.get("source_path"),
             created_at: row.get("created_at"),
         };
         attachments_by_message

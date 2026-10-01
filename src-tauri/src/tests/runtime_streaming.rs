@@ -1597,3 +1597,79 @@ async fn reconciled_first_visible_text_orders_reply_after_messages_posted_meanwh
     );
     drop_test_schema(pool, database).await;
 }
+
+#[tokio::test]
+async fn completed_streaming_reply_attaches_linked_workspace_files() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let workspace = std::env::temp_dir().join(format!("lantor-stream-links-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.canonicalize().unwrap();
+    std::fs::write(workspace.join("chart.png"), b"png").unwrap();
+    let result: Result<Vec<String>, String> = async {
+        let agent_id = insert_test_agent(&pool, "stream-linker").await?;
+        sqlx::query("update agents set working_directory = $1 where id = $2")
+            .bind(workspace.to_string_lossy().as_ref())
+            .bind(agent_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let channel_id = insert_test_channel(&pool, "stream-links").await?;
+        let chart = workspace.join("chart.png").to_string_lossy().into_owned();
+        let stream_key = "stream-links:item";
+        let message_id = append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            stream_key,
+            "Chart: [chart](",
+        )
+        .await?;
+        let count = || async {
+            sqlx::query_scalar::<_, i64>(
+                "select count(*) from message_attachments where message_id = $1",
+            )
+            .bind(message_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())
+        };
+        append_streaming_agent_message(
+            &pool,
+            agent_id,
+            channel_id,
+            None,
+            stream_key,
+            &format!("{chart})"),
+        )
+        .await?;
+        assert_eq!(count().await?, 0, "nothing is snapshotted while streaming");
+        finish_streaming_agent_message(&pool, stream_key, "complete").await?;
+
+        let rows = sqlx::query(
+            "select storage_path, source_path from message_attachments where message_id = $1",
+        )
+        .bind(message_id)
+        .fetch_all(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        let storage_paths = rows
+            .iter()
+            .map(|row| row.get::<String, _>("storage_path"))
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].get::<Option<String>, _>("source_path").as_deref(),
+            Some(chart.as_str())
+        );
+        Ok(storage_paths)
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    let _ = std::fs::remove_dir_all(&workspace);
+    // Completion uses the configured attachment root; remove what it wrote.
+    crate::attachments::remove_attachment_files(&result.clone().unwrap_or_default());
+    result.unwrap();
+}

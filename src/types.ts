@@ -159,6 +159,8 @@ export type MessageAttachment = {
   mime_type: string;
   size_bytes: number;
   storage_path: string;
+  /** Local path an agent linked; such links resolve to this attachment. */
+  source_path?: string | null;
   local_url?: string;
   created_at: string;
 };

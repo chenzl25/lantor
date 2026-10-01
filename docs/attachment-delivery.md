@@ -12,6 +12,14 @@ The internal `StagedAttachment` is skipped by JSON deserialization; clients cann
 
 Thumbnails were optional in task #106's final handoff and are deferred. Original image URLs and frontend rendering are unchanged.
 
+## Local file links in agent messages
+
+Agents often hand files to the owner as Markdown links to absolute host paths (`[deck](/…/agents/<handle>/artifacts/deck.pptx)`). A browser cannot open those paths: the web server answers them with the app shell. When an agent message becomes complete (direct insert, `attachment_create`, or the end of a streamed reply), `message_store/linked_files.rs` snapshots each linked file as an ordinary attachment of that message and records the link target in `message_attachments.source_path`. The message body is never rewritten.
+
+- Only Markdown link destinations count, not code spans or blocks. An absolute path, `~/`, or `file://` target is percent-decoded the way the renderer decodes hrefs. It must canonicalize (following symlinks) to a non-empty regular file within the sender's working directory or the attachment root, within the 64MiB limit. At most 16 files are snapshotted per message, and links with a `:line` suffix are left alone. Anything else stays a plain link, and failures never block the message.
+- The copy is staged under `attachments/.tmp/` and then renamed like a multipart upload. On APFS, `fs::copy` clones, so a snapshot costs no extra space until either file changes. Each message keeps the version that existed when it was sent.
+- `MarkdownRenderer` resolves a link whose decoded href equals an attachment's `source_path`. Browsers and the PWA open `/api/attachments/{id}`. The desktop app still opens the original path and falls back to the snapshot once the original is gone. `attachment_create` files record their given path too, so links to them resolve without a second copy.
+
 ## Verification
 
 - `cargo test --manifest-path src-tauri/Cargo.toml`: range bodies/validators/HEAD/active-content disposition, 64MiB boundary, never-ready body early rejection, bounded reads for a ready 100MiB stream, invalid metadata, disconnected/cancelled requests, and database rollback cleanup, plus the full existing suite.

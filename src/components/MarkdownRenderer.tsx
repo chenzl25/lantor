@@ -15,14 +15,14 @@ import {
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PluggableList } from "unified";
-import { openExternalUrl } from "../apiClient";
+import { attachmentAssetUrl, isTauriRuntime, openExternalUrl } from "../apiClient";
 import { copyText } from "../clipboard";
 import {
   MESSAGE_REFERENCE_PATTERN,
   type ResolvedMessageReference,
   resolveMessageReference,
 } from "../message-references";
-import type { Channel, Message } from "../types";
+import type { Channel, Message, MessageAttachment } from "../types";
 import type { MessageReferenceStore } from "../message-reference-store";
 import { StreamingReferenceCard } from "./StreamingReferenceCard";
 import { MessageReferenceCard } from "./MessageReferenceCard";
@@ -38,6 +38,8 @@ export type MessageMarkdownProps = {
   onOpenReference?: (sourceMessageId: string, reference: ResolvedMessageReference) => void;
   scrollKey?: string;
   enableLantorLinks?: boolean;
+  /** Attachments of the message; local file links resolve to their snapshots. */
+  attachments?: MessageAttachment[];
 };
 
 const INLINE_CODE_SPLIT = /(`[^`\n]*(?:`|$))/g;
@@ -148,11 +150,39 @@ function referenceFromHref(
   return resolveMessageReference({ kind, id, token: `[[${kind}:${id}]]` }, messages, channels);
 }
 
+// Decodes a local file href the same way the backend records `source_path`.
+function localPathFromHref(href: string) {
+  const path = href.replace(/^file:\/\/(?:localhost)?/i, "");
+  if (!(path.startsWith("/") && !path.startsWith("//")) && !path.startsWith("~/")) return null;
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
+
+function linkedAttachment(href: string | undefined, attachments: MessageAttachment[] | undefined) {
+  if (!href || !attachments?.length) return null;
+  const path = localPathFromHref(href);
+  return path ? attachments.find((attachment) => attachment.source_path === path) ?? null : null;
+}
+
+async function openLink(href: string, attachment: MessageAttachment | null) {
+  try {
+    await openExternalUrl(href);
+  } catch (error) {
+    // The desktop app opens the original file; once that is gone, open the snapshot.
+    if (!attachment || !isTauriRuntime()) throw error;
+    await openExternalUrl(attachment.storage_path);
+  }
+}
+
 function handleLinkClick(
   event: MouseEvent<HTMLAnchorElement>,
   href: string | undefined,
   isLocalLink: boolean,
   onLocalAgentLink: ((handle: string) => void) | undefined,
+  attachment: MessageAttachment | null,
 ) {
   event.preventDefault();
   event.stopPropagation();
@@ -163,7 +193,7 @@ function handleLinkClick(
   }
   if (!href || event.detail > 1) return;
 
-  void openExternalUrl(href).catch((err) => {
+  void openLink(href, attachment).catch((err) => {
     console.error("Failed to open external link", err);
     reportUiError("Could not open link", err);
   });
@@ -218,6 +248,7 @@ export function MarkdownRenderer({
   onOpenReference,
   scrollKey,
   enableLantorLinks = true,
+  attachments,
   remarkPlugins = defaultRemarkPlugins,
   rehypePlugins,
 }: MessageMarkdownProps & { remarkPlugins?: PluggableList; rehypePlugins?: PluggableList }) {
@@ -249,16 +280,21 @@ export function MarkdownRenderer({
         );
       }
       const isLocalLink = Boolean(href?.startsWith(LOCAL_ENTITY_PATH_PREFIX));
+      const attachment = isLocalLink ? null : linkedAttachment(href, attachments);
+      // Browsers cannot reach host paths, so they get the snapshot instead.
+      const target = attachment && !isTauriRuntime()
+        ? attachmentAssetUrl(attachment.storage_path, attachment.id)
+        : href;
       return (
         <a
           {...props}
-          href={href}
+          href={target}
           className={isLocalLink ? "local-entity-link" : undefined}
           target={isLocalLink ? undefined : "_blank"}
           rel={isLocalLink ? undefined : "noreferrer"}
           onPointerDown={isolateLinkEvent}
           onContextMenu={isolateLinkEvent}
-          onClick={(event) => handleLinkClick(event, href, isLocalLink, onLocalAgentLink)}
+          onClick={(event) => handleLinkClick(event, target, isLocalLink, onLocalAgentLink, attachment)}
         >
           {children}
         </a>
@@ -272,7 +308,7 @@ export function MarkdownRenderer({
       tableIndexRef.current += 1;
       return <MarkdownTableScroll scrollKey={tableScrollKey}>{children}</MarkdownTableScroll>;
     },
-  }), [streamingReferenceStore, references, channels, handleOpenReference, messages, onLocalAgentLink, onOpenReference, scrollKey, sourceMessageId]);
+  }), [streamingReferenceStore, references, channels, handleOpenReference, messages, onLocalAgentLink, onOpenReference, scrollKey, sourceMessageId, attachments]);
 
   return (
     <div className="markdown-body">

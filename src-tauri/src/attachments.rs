@@ -50,6 +50,19 @@ impl StagedAttachment {
             .map_err(to_string)?;
         Ok((staged, tokio::fs::File::from_std(file)))
     }
+
+    /// Stages a copy of a local file. On APFS `fs::copy` clones the file, so the
+    /// snapshot takes no extra space until one of the copies changes.
+    pub(crate) fn copy_from(root: &Path, source: &Path) -> CommandResult<Self> {
+        let directory = root.join(".tmp");
+        fs::create_dir_all(&directory).map_err(to_string)?;
+        let mut staged = Self {
+            path: directory.join(Uuid::new_v4().to_string()),
+            size_bytes: 0,
+        };
+        staged.size_bytes = fs::copy(source, &staged.path).map_err(to_string)?;
+        Ok(staged)
+    }
 }
 
 impl Drop for StagedAttachment {
@@ -114,7 +127,7 @@ pub(crate) struct AgentAttachmentFile {
     pub(crate) mime_type: Option<String>,
 }
 
-fn infer_attachment_mime_type(path: &Path, original_name: &str) -> String {
+pub(crate) fn infer_attachment_mime_type(path: &Path, original_name: &str) -> String {
     let extension = Path::new(original_name)
         .extension()
         .or_else(|| path.extension())
@@ -133,6 +146,10 @@ fn infer_attachment_mime_type(path: &Path, original_name: &str) -> String {
         "csv" => "text/csv",
         "html" | "htm" => "text/html",
         "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         _ => "application/octet-stream",
     }
     .to_owned()
@@ -191,6 +208,7 @@ pub(crate) fn load_agent_attachment_uploads(
             mime_type,
             bytes,
             staged: None,
+            source_path: Some(raw_path.to_owned()),
         });
     }
     Ok(uploads)
@@ -693,6 +711,7 @@ mod staged_tests {
                 mime_type: "text/plain".into(),
                 bytes: vec![],
                 staged: Some(staged),
+                source_path: None,
             }],
         )
         .await;

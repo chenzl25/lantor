@@ -182,6 +182,8 @@ pub(crate) struct MessageAttachment {
     pub(crate) mime_type: String,
     pub(crate) size_bytes: i64,
     pub(crate) storage_path: String,
+    /// Local path the file was snapshotted from; links to it resolve here.
+    pub(crate) source_path: Option<String>,
     pub(crate) created_at: DateTime<Utc>,
 }
 
@@ -212,6 +214,9 @@ pub(crate) struct AttachmentUpload {
     // from JSON/Tauri requests.
     #[serde(skip)]
     pub(crate) staged: Option<crate::attachments::StagedAttachment>,
+    /// Host path this upload was copied from, when an agent supplied one.
+    #[serde(skip)]
+    pub(crate) source_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

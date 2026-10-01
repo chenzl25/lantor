@@ -73,6 +73,7 @@ export const MessageRow = memo(function MessageRow({
     onOpenReference={actions.onReference}
     onLocalAgentLink={actions.onAgent}
     scrollKey={`message:${message.id}`}
+    attachments={message.attachments}
   /> : null;
   const avatar = compact ? <time className="message-compact-time" dateTime={message.created_at}>{formatClockTime(message.created_at)}</time>
     : agent ? <button type="button" className="message-agent-avatar-trigger" aria-label={`View @${agent.handle} details`}

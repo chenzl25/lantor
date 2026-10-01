@@ -141,6 +141,7 @@ async fn parse_multipart_in(
                     mime_type,
                     bytes: Vec::new(),
                     staged: Some(staged),
+                    source_path: None,
                 });
             }
             _ => {

@@ -927,6 +927,7 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .await?;
     ensure_text_column(pool, "reminders", "recurrence_anchor_at", "text").await?;
+    ensure_text_column(pool, "message_attachments", "source_path", "text").await?;
     backfill_reminder_recurrence_anchors(pool).await?;
 
     sqlx::query(

@@ -21,7 +21,7 @@ use crate::freshness::{
     hold_work_item_output_if_stale, stale_output_for_work_item,
     try_complete_streaming_message_if_fresh,
 };
-use crate::message_store::load_message_patch_in_tx;
+use crate::message_store::{attach_linked_files_best_effort, load_message_patch_in_tx};
 use crate::ui_notifications::{
     enqueue_ui_event_in_tx, enqueue_ui_work_item_changed_in_tx, reconcile_work_item_change, UiEvent,
 };
@@ -872,6 +872,7 @@ async fn finish_streaming_agent_message_inner(
                 try_complete_streaming_message_if_fresh(pool, agent_id, work_item_id, stream_key)
                     .await?
             {
+                attach_linked_files_best_effort(pool, message_id).await;
                 if dispatch_mentions {
                     queue_agent_message_mentions(pool, message_id).await?;
                 }
@@ -951,9 +952,12 @@ async fn finish_streaming_agent_message_inner(
         }
     }
     transaction.commit().await.map_err(to_string)?;
-    if delivery_state == "complete" && dispatch_mentions {
+    if delivery_state == "complete" {
         if let Some(message_id) = completed_message_id {
-            queue_agent_message_mentions(pool, message_id).await?;
+            attach_linked_files_best_effort(pool, message_id).await;
+            if dispatch_mentions {
+                queue_agent_message_mentions(pool, message_id).await?;
+            }
         }
     }
     Ok(())
