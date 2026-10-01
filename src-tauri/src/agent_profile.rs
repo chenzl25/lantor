@@ -75,7 +75,12 @@ fn normalize_reasoning_effort(
         let model = model.trim().to_ascii_lowercase();
         let supports_ultra = matches!(
             model.as_str(),
-            "gpt-6-astra" | "gpt-6-sol" | "gpt-5.6" | "gpt-5.6-sol" | "gpt-5.6-terra"
+            "gpt-6-astra"
+                | "gpt-6.1-sol"
+                | "gpt-6-sol"
+                | "gpt-5.6"
+                | "gpt-5.6-sol"
+                | "gpt-5.6-terra"
         );
         let supports_max =
             supports_ultra || matches!(model.as_str(), "gpt-6-luna" | "gpt-5.6-luna");
@@ -630,6 +635,8 @@ mod tests {
         for (model, effort) in [
             ("gpt-6-astra", "max"),
             ("gpt-6-astra", "ultra"),
+            ("gpt-6.1-sol", "max"),
+            ("gpt-6.1-sol", "ultra"),
             ("gpt-6-sol", "max"),
             ("gpt-6-sol", "ultra"),
             ("gpt-6-luna", "max"),

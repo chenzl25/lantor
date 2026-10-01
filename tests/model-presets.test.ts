@@ -20,13 +20,20 @@ test("GPT-6 Astra preset uses the current model id and effort range", () => {
   assert.equal(normalizeCodexReasoningEffortForModel("gpt-6-astra", "ultra"), "ultra");
 });
 
-test("GPT-6 Sol and Luna presets follow the Codex app-server effort ranges", () => {
+test("GPT-6 Sol models and Luna presets follow the Codex app-server effort ranges", () => {
   assert.equal(RUNTIME_PRESETS.codex.defaultModel, "gpt-6-sol");
   assert.equal(EMPTY_AGENT_FORM.model, "gpt-6-sol");
+  assert.ok(modelOptionsForRuntime("codex").includes("gpt-6.1-sol"));
   assert.ok(modelOptionsForRuntime("codex").includes("gpt-6-sol"));
   assert.ok(modelOptionsForRuntime("codex").includes("gpt-6-luna"));
+  assert.equal(modelLabel("gpt-6.1-sol"), "GPT-6.1 Sol");
   assert.equal(modelLabel("gpt-6-sol"), "GPT-6 Sol");
   assert.equal(modelLabel("gpt-6-luna"), "GPT-6 Luna");
+  assert.deepEqual(
+    codexReasoningEffortsForModel("gpt-6.1-sol").map((effort) => effort.value),
+    ["low", "medium", "high", "xhigh", "max", "ultra"],
+  );
+  assert.equal(normalizeCodexReasoningEffortForModel("gpt-6.1-sol", "ultra"), "ultra");
   assert.deepEqual(
     codexReasoningEffortsForModel("gpt-6-sol").map((effort) => effort.value),
     ["low", "medium", "high", "xhigh", "max", "ultra"],
