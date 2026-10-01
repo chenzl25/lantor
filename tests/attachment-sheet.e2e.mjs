@@ -68,6 +68,14 @@ try {
     // Home Screen app with share support (iOS 15+).
     {
       const { context, page, leaks, errors } = await open({}, standalone());
+      // Position links must resolve to the same snapshot and stay in the PWA.
+      for (const name of ["line notes", "hash notes"]) {
+        await page.getByRole("link", { name, exact: true }).click();
+        const preview = sheet(page, "implementation.md");
+        await preview.getByRole("heading", { name: "Deploy notes" }).waitFor();
+        await preview.getByRole("button", { name: "Close", exact: true }).click();
+        await preview.waitFor({ state: "detached" });
+      }
       // File card: Markdown renders in place and shares the exact bytes.
       await page.getByRole("link", { name: "Open implementation.md", exact: true }).click();
       const notes = sheet(page, "implementation.md");

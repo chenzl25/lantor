@@ -35,9 +35,29 @@ test("browser local file links resolve to the message's snapshot attachments", (
     "/api/attachments/deck",
     "/api/attachments/cn",
     "/api/attachments/pdf",
-    "/ws/out/report.pdf:3",
+    "/api/attachments/pdf",
     "/ws/out/missing.md",
     "https://example.com/report.pdf",
   ]);
   assert.deepEqual(hrefs("[deck](</ws/out/meeting deck.pptx>)"), ["/ws/out/meeting%20deck.pptx"]);
+});
+
+
+test("position links resolve the underlying snapshot and preserve encoded filename punctuation", () => {
+  const attachments = [snapshot("code", "/ws/@owner/code.rs"), snapshot("literal", "/ws/literal:42")];
+  assert.deepEqual(hrefs([
+    "[line](/ws/@owner/code.rs:42)",
+    "[column](/ws/@owner/code.rs:42:5)",
+    "[hash](/ws/@owner/code.rs#L42)",
+    "[range](/ws/@owner/code.rs#L42-L50)",
+    "[literal](/ws/literal%3A42)",
+  ].join(" "), attachments), [
+    "/api/attachments/code", "/api/attachments/code", "/api/attachments/code", "/api/attachments/code", "/api/attachments/literal",
+  ]);
+});
+
+
+test("invalid position suffixes do not match an unrelated snapshot", () => {
+  const paths = ["/ws/code.rs:0", "/ws/code.rs:0:5", "/ws/code.rs:4294967296:5", "/ws/code.rs#L0", "/ws/code.rs#L42-L0"];
+  assert.deepEqual(hrefs(paths.map((path) => `[file](${path})`).join(" "), [snapshot("code", "/ws/code.rs")]), paths);
 });

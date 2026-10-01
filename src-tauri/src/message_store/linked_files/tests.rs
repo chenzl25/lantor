@@ -115,7 +115,7 @@ fn snapshot_source_requires_a_non_empty_file_inside_an_allowed_root() {
     assert_eq!(
         snapshot_source(&link("out/deck.pptx:12"), &roots),
         None,
-        "code links with a line are not files"
+        "snapshot_source expects a normalized filesystem path"
     );
     assert_eq!(
         snapshot_source(&link("out"), &roots),
@@ -285,4 +285,63 @@ async fn agent_message_insert_attaches_linked_files() {
 
     drop_test_schema(pool, database).await;
     fs::remove_dir_all(workspace).unwrap();
+}
+
+#[test]
+fn position_links_are_normalized_before_decoding_and_deduplicated() {
+    assert_eq!(linked_local_paths(
+        "[one](/ws/code.rs:42) [two](/ws/code.rs:42:5) [three](/ws/code.rs#L42) [four](/ws/code.rs#L42-L50) [literal](/ws/literal%3A42) [hash](/ws/literal%23L42)"
+    ), ["/ws/code.rs", "/ws/literal:42", "/ws/literal#L42"]);
+}
+
+#[tokio::test]
+async fn a_message_with_only_position_links_snapshots_the_underlying_file() {
+    let (pool, database) = test_pool().await.unwrap();
+    let workspace = temp_dir("position-workspace");
+    let outside = temp_dir("position-outside");
+    let attachment_root = temp_dir("position-attachments");
+    fs::write(workspace.join("code.rs"), b"fn main() {}\n").unwrap();
+    fs::write(outside.join("secret.rs"), b"private").unwrap();
+    symlink(outside.join("secret.rs"), workspace.join("escape.rs")).unwrap();
+    let agent = agent_with_workspace(&pool, "position-linker", &workspace).await;
+    let channel = insert_test_channel(&pool, "positions").await.unwrap();
+    let source = workspace.join("code.rs").to_string_lossy().into_owned();
+    let body = format!(
+        "[one]({source}:42) [two]({source}#L50) [escape]({}/escape.rs:1)",
+        workspace.display()
+    );
+    let message = insert_complete_agent_message(&pool, agent, channel, &body).await;
+    assert_eq!(
+        attach_linked_files(&pool, message, &attachment_root)
+            .await
+            .unwrap(),
+        1
+    );
+    let rows = attachment_rows(&pool, message).await;
+    assert_eq!(rows[0].0, "code.rs");
+    assert_eq!(rows[0].3, source);
+    assert_eq!(fs::read(&rows[0].2).unwrap(), b"fn main() {}\n");
+    assert_eq!(
+        attach_linked_files(&pool, message, &attachment_root)
+            .await
+            .unwrap(),
+        0
+    );
+    drop_test_schema(pool, database).await;
+    fs::remove_dir_all(workspace).unwrap();
+    fs::remove_dir_all(outside).unwrap();
+    fs::remove_dir_all(attachment_root).unwrap();
+}
+
+#[test]
+fn invalid_positions_are_not_stripped() {
+    for path in [
+        "/ws/code.rs:0",
+        "/ws/code.rs:0:5",
+        "/ws/code.rs:4294967296:5",
+        "/ws/code.rs#L0",
+        "/ws/code.rs#L42-L0",
+    ] {
+        assert_eq!(linked_local_paths(&format!("[file]({path})")), [path]);
+    }
 }

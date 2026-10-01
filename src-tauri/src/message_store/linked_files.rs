@@ -145,7 +145,38 @@ fn local_path_from_link(destination: &str) -> Option<String> {
     if !is_local {
         return None;
     }
+    // Strip URL position syntax before decoding so %3A42 and %23L42 remain
+    // literal filename characters. Different references share one snapshot.
+    let path = strip_link_position(path);
     Some(percent_decode_utf8(path).unwrap_or_else(|| path.to_owned()))
+}
+
+fn strip_link_position(path: &str) -> &str {
+    fn position(value: &str) -> bool {
+        !value.is_empty()
+            && value.bytes().all(|byte| byte.is_ascii_digit())
+            && value.parse::<u32>().is_ok_and(|number| number > 0)
+    }
+    if let Some((file, location)) = path.rsplit_once("#L") {
+        let valid = match location.split_once('-') {
+            Some((start, end)) => position(start) && position(end.strip_prefix('L').unwrap_or(end)),
+            None => position(location),
+        };
+        if valid {
+            return file;
+        }
+    }
+    if let Some((file, last)) = path.rsplit_once(':') {
+        if position(last) {
+            if let Some((file, line)) = file.rsplit_once(':') {
+                if !line.is_empty() && line.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return if position(line) { file } else { path };
+                }
+            }
+            return file;
+        }
+    }
+    path
 }
 
 fn strip_file_scheme(destination: &str) -> Option<&str> {

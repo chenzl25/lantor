@@ -152,9 +152,15 @@ function referenceFromHref(
 }
 
 // Decodes a local file href the same way the backend records `source_path`.
-function localPathFromHref(href: string) {
-  const path = href.replace(/^file:\/\/(?:localhost)?/i, "");
+function localPathFromHref(href: string, stripPosition = false) {
+  let path = href.replace(/^file:\/\/(?:localhost)?/i, "");
   if (!(path.startsWith("/") && !path.startsWith("//")) && !path.startsWith("~/")) return null;
+  if (stripPosition) {
+    const suffix = path.match(/(?::(\d+)(?::(\d+))?|#L(\d+)(?:-L?(\d+))?)$/);
+    if (suffix && suffix.slice(1).filter(Boolean).every((value) => Number(value) > 0 && Number(value) <= 0xffffffff)) {
+      path = path.slice(0, suffix.index);
+    }
+  }
   try {
     return decodeURIComponent(path);
   } catch {
@@ -165,7 +171,12 @@ function localPathFromHref(href: string) {
 function linkedAttachment(href: string | undefined, attachments: MessageAttachment[] | undefined) {
   if (!href || !attachments?.length) return null;
   const path = localPathFromHref(href);
-  return path ? attachments.find((attachment) => attachment.source_path === path) ?? null : null;
+  if (!path) return null;
+  // Preserve exact matches (including literal encoded filename punctuation),
+  // then resolve editor-style positions through the underlying file snapshot.
+  return attachments.find((attachment) => attachment.source_path === path)
+    ?? attachments.find((attachment) => attachment.source_path === localPathFromHref(href, true))
+    ?? null;
 }
 
 async function openLink(href: string, attachment: MessageAttachment | null) {
