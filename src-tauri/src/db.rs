@@ -451,6 +451,7 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             runtime text not null,
             provider_thread_id text not null,
             status text not null default 'idle',
+            context_tokens integer not null default 0,
             created_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
             updated_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
             unique(agent_id, runtime)
@@ -923,6 +924,13 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         pool,
         "agent_runs",
         "current_input_tokens",
+        "integer not null default 0",
+    )
+    .await?;
+    ensure_integer_column(
+        pool,
+        "runtime_sessions",
+        "context_tokens",
         "integer not null default 0",
     )
     .await?;

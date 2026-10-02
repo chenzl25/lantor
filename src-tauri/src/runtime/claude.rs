@@ -39,6 +39,7 @@ use crate::usage::{record_run_usage, usage_from_runtime_event};
 
 mod protocol;
 mod reaper;
+mod session;
 mod text;
 mod turn;
 
@@ -48,13 +49,17 @@ use text::ClaudeTextState;
 mod recovery_tests;
 
 use protocol::{
-    claude_message_text_blocks, claude_result_error, claude_result_text, claude_session_id,
-    claude_stream_event_activity, claude_stream_key, claude_streaming_command_text,
-    claude_surface_boundary_marker, claude_text_delta, claude_user_input, claude_write_input,
-    CLAUDE_DISABLE_BACKGROUND_TASKS_ENV, CLAUDE_DISABLE_CRON_ENV, CLAUDE_MAX_RETRIES_ENV,
-    DEFAULT_CLAUDE_MAX_RETRIES,
+    claude_context_tokens, claude_message_text_blocks, claude_result_error, claude_result_text,
+    claude_resume_session_missing, claude_session_id, claude_stream_event_activity,
+    claude_stream_key, claude_streaming_command_text, claude_surface_boundary_marker,
+    claude_text_delta, claude_user_input, claude_write_input, CLAUDE_DISABLE_BACKGROUND_TASKS_ENV,
+    CLAUDE_DISABLE_CRON_ENV, CLAUDE_MAX_RETRIES_ENV, DEFAULT_CLAUDE_MAX_RETRIES,
 };
 use reaper::claude_warm_idle_reaper;
+use session::{
+    claude_context_rotate_tokens, plan_claude_session_start, prepend_claude_rotation_marker,
+    restart_after_missing_session, store_claude_context_tokens, ClaudeSessionStart,
+};
 use turn::finish_warm_claude_active_turn;
 
 const CLAUDE_DISABLE_AUTO_MEMORY_ENV: &str = "CLAUDE_CODE_DISABLE_AUTO_MEMORY";
@@ -91,6 +96,12 @@ struct WarmClaudeState {
     alive: bool,
     active: Option<ClaudeActiveTurn>,
     session_id: Option<String>,
+    /// Context size of the latest main-conversation request, persisted at turn
+    /// end so a respawn can decide between resuming and rotating the session.
+    context_tokens: i64,
+    /// Set when this process rotated away from an oversized session; the first
+    /// turn tells the model where the previous run can be read.
+    pending_rotation_marker: Option<String>,
     last_surface: Option<ClaudeSurface>,
     injected_memory_context: Option<String>,
     last_activity: Instant,
@@ -241,6 +252,9 @@ async fn spawn_warm_claude_runtime(
         config.model.trim().to_owned()
     };
     let effort = config.reasoning_effort.trim();
+    // Must run before this spawn overwrites the stored session with a pid placeholder.
+    let session_start =
+        plan_claude_session_start(pool, agent_id, claude_context_rotate_tokens()).await?;
     let mut command = Command::new("claude");
     command
         .arg("--system-prompt")
@@ -249,6 +263,9 @@ async fn spawn_warm_claude_runtime(
         .arg(&model);
     if !effort.is_empty() {
         command.arg("--effort").arg(effort);
+    }
+    if let Some(session_id) = session_start.resume_session_id() {
+        command.arg("--resume").arg(session_id);
     }
     apply_agent_environment_variables(&mut command, config.environment_variables)?;
     command
@@ -307,13 +324,23 @@ async fn spawn_warm_claude_runtime(
     };
     let stderr = child.stderr.take();
 
+    let (session_id, context_tokens, last_surface) = match &session_start {
+        ClaudeSessionStart::Resume {
+            session_id,
+            context_tokens,
+            last_surface,
+        } => (Some(session_id.clone()), *context_tokens, *last_surface),
+        _ => (None, 0, None),
+    };
     let runtime = Arc::new(WarmClaudeRuntime {
         stdin: AsyncMutex::new(stdin),
         state: AsyncMutex::new(WarmClaudeState {
             alive: true,
             active: None,
-            session_id: None,
-            last_surface: None,
+            session_id: session_id.clone(),
+            context_tokens,
+            pending_rotation_marker: session_start.rotation_marker(),
+            last_surface,
             injected_memory_context: None,
             last_activity: Instant::now(),
         }),
@@ -321,23 +348,24 @@ async fn spawn_warm_claude_runtime(
         environment_variables: config.environment_variables.to_owned(),
     });
 
-    upsert_runtime_thread_id(
-        pool,
-        agent_id,
-        "claude",
-        &pid.map(|pid| format!("pid:{pid}"))
-            .unwrap_or_else(|| "warming".to_owned()),
-        "idle",
-    )
-    .await?;
+    let provider_thread_id = session_id.unwrap_or_else(|| {
+        pid.map(|pid| format!("pid:{pid}"))
+            .unwrap_or_else(|| "warming".to_owned())
+    });
+    upsert_runtime_thread_id(pool, agent_id, "claude", &provider_thread_id, "idle").await?;
+    store_claude_context_tokens(pool, agent_id, context_tokens).await?;
     record_agent_activity(
         pool,
         Some(agent_id),
         None,
         "run",
         "Claude warm stream-json ready",
-        pid.map(|pid| format!("pid={pid}"))
-            .unwrap_or_else(|| "pid unavailable".to_owned()),
+        format!(
+            "{}, {}",
+            pid.map(|pid| format!("pid={pid}"))
+                .unwrap_or_else(|| "pid unavailable".to_owned()),
+            session_start.describe()
+        ),
     )
     .await?;
 
@@ -484,10 +512,11 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
         channel_id,
         thread_root_id,
     };
-    let (surface_boundary, memory_update) = {
+    let (surface_boundary, rotation_marker, memory_update) = {
         let state = runtime.state.lock().await;
         (
             claude_surface_boundary_marker(state.last_surface, current_surface).unwrap_or_default(),
+            state.pending_rotation_marker.clone(),
             memory_context_update(
                 state.injected_memory_context.as_deref(),
                 memory_context.as_deref(),
@@ -498,6 +527,10 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
         claude_prompt
     } else {
         format!("{surface_boundary}{claude_prompt}")
+    };
+    let claude_prompt = match rotation_marker {
+        Some(marker) => prepend_claude_rotation_marker(&claude_prompt, &marker),
+        None => claude_prompt,
     };
     let (claude_turn_prompt, next_injected_memory_context) = match memory_update {
         Some((memory_prompt, next_memory_context)) => (
@@ -618,6 +651,7 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
             Err(CLAUDE_BUSY_BEFORE_TURN_START.to_owned())
         } else {
             state.last_activity = Instant::now();
+            state.pending_rotation_marker = None;
             state.active = Some(ClaudeActiveTurn {
                 run_id,
                 started_at: Instant::now(),
@@ -750,6 +784,11 @@ async fn handle_claude_warm_stdout_line(
     }
     let value: Value = serde_json::from_str(line).map_err(to_string)?;
 
+    // Handle before the session-id capture below, which would store the missing ID again.
+    if claude_resume_session_missing(&value) {
+        return restart_after_missing_session(pool, agent_id, runtime, &value).await;
+    }
+
     if let Some(snapshot) = claude_subscription_status_from_event(&value) {
         persist_agent_subscription_status(pool, agent_id, &snapshot).await?;
     }
@@ -772,6 +811,10 @@ async fn handle_claude_warm_stdout_line(
             "idle"
         };
         let _ = upsert_runtime_thread_id(pool, agent_id, "claude", session_id, status).await;
+    }
+
+    if let Some(context_tokens) = claude_context_tokens(&value) {
+        runtime.state.lock().await.context_tokens = context_tokens;
     }
 
     if let Some((kind, title, detail)) = claude_stream_event_activity(&value) {
@@ -1038,6 +1081,8 @@ mod tests {
                     text: ClaudeTextState::default(),
                 }),
                 session_id: Some("test-claude-session".to_owned()),
+                context_tokens: 0,
+                pending_rotation_marker: None,
                 last_surface: None,
                 injected_memory_context: None,
                 last_activity: Instant::now(),

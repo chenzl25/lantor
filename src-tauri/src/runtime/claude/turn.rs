@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Instant};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use super::{ClaudeSurface, WarmClaudeRuntime};
+use super::{session::store_claude_context_tokens, ClaudeSurface, WarmClaudeRuntime};
 use crate::events::activity::{record_agent_activity, work_status_title};
 use crate::runtime::{
     process::{terminate_process_group, upsert_runtime_thread_id},
@@ -26,7 +26,7 @@ pub(super) async fn finish_warm_claude_active_turn(
     success: bool,
     error: Option<String>,
 ) -> CommandResult<()> {
-    let (active, session_id) = {
+    let (active, session_id, context_tokens) = {
         let mut state = runtime.state.lock().await;
         state.last_activity = Instant::now();
         let mut active = state.active.take();
@@ -45,7 +45,7 @@ pub(super) async fn finish_warm_claude_active_turn(
             });
         }
         let session_id = state.session_id.clone();
-        (active, session_id)
+        (active, session_id, state.context_tokens)
     };
     let Some(active) = active else {
         return Ok(());
@@ -213,6 +213,7 @@ pub(super) async fn finish_warm_claude_active_turn(
         outcome.runtime_session_status,
     )
     .await?;
+    store_claude_context_tokens(pool, agent_id, context_tokens).await?;
     record_agent_activity(
         pool,
         Some(agent_id),

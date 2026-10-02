@@ -282,3 +282,83 @@ async fn block_start_text_and_fenced_controls_remain_literal() {
     assert_eq!(receipts, 0);
     f.close().await;
 }
+
+#[tokio::test]
+async fn missing_resume_session_requeues_request_for_a_new_session() {
+    let f = Fixture::new().await;
+    let missing = "0b5c8f3e-1111-4222-8333-944455556666";
+    upsert_runtime_thread_id(&f.pool, f.agent, "claude", missing, "idle")
+        .await
+        .unwrap();
+    session::store_claude_context_tokens(&f.pool, f.agent, 42_000)
+        .await
+        .unwrap();
+    f.send(json!({
+        "type": "result",
+        "subtype": "error_during_execution",
+        "is_error": true,
+        "num_turns": 0,
+        "session_id": missing,
+        "errors": [format!("No conversation found with session ID: {missing}")]
+    }))
+    .await;
+
+    let session = sqlx::query(
+        "select provider_thread_id, context_tokens from runtime_sessions where agent_id=$1 and runtime='claude'",
+    )
+    .bind(f.agent)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(session.get::<String, _>("provider_thread_id"), "");
+    assert_eq!(session.get::<i64, _>("context_tokens"), 0);
+    assert_eq!(
+        session::plan_claude_session_start(&f.pool, f.agent, 200_000)
+            .await
+            .unwrap(),
+        session::ClaudeSessionStart::Fresh
+    );
+    let run_status: String = sqlx::query_scalar("select status from agent_runs where id=$1")
+        .bind(f.run)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(run_status, "failed");
+    let work_status: String = sqlx::query_scalar(
+        "select w.status from agent_work_items w join agent_runs r on r.work_item_id = w.id where r.id=$1",
+    )
+    .bind(f.run)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(work_status, "queued", "the request reruns in a new session");
+    let messages: i64 = sqlx::query_scalar("select count(*) from messages where stream_key=$1")
+        .bind(&f.key)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(messages, 0);
+    let state = f.runtime.state.lock().await;
+    assert!(!state.alive);
+    assert!(state.active.is_none());
+    drop(state);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn finished_turn_persists_context_size_for_the_next_spawn() {
+    let f = Fixture::new().await;
+    f.send(json!({"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}],"usage":{"input_tokens":3,"cache_creation_input_tokens":1_000,"cache_read_input_tokens":120_000,"output_tokens":50}}})).await;
+    // A subagent's request describes its own context, not the session's.
+    f.send(json!({"type":"assistant","parent_tool_use_id":"t1","message":{"id":"s1","content":[{"type":"text","text":"sub"}],"usage":{"input_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":9_000,"output_tokens":5}}})).await;
+    f.result("").await;
+    let context_tokens: i64 = sqlx::query_scalar(
+        "select context_tokens from runtime_sessions where agent_id=$1 and runtime='claude'",
+    )
+    .bind(f.agent)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(context_tokens, 121_003);
+    f.close().await;
+}

@@ -40,6 +40,43 @@ pub(super) fn claude_session_id(value: &Value) -> Option<&str> {
     value.get("session_id").and_then(Value::as_str)
 }
 
+/// Context occupied by the request behind a main-conversation `assistant`
+/// message. `input_tokens` alone excludes cache reads and writes, so it is not
+/// the context size; subagent messages describe a different context.
+pub(super) fn claude_context_tokens(value: &Value) -> Option<i64> {
+    if value.get("type").and_then(Value::as_str) != Some("assistant")
+        || value
+            .get("parent_tool_use_id")
+            .is_some_and(|parent| !parent.is_null())
+    {
+        return None;
+    }
+    let usage = value.pointer("/message/usage")?;
+    let tokens = [
+        "input_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+    ]
+    .iter()
+    .filter_map(|key| usage.get(key).and_then(Value::as_i64))
+    .sum::<i64>();
+    (tokens > 0).then_some(tokens)
+}
+
+/// The result Claude Code emits when `--resume` names a session it cannot find.
+pub(super) fn claude_resume_session_missing(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("result")
+        && value
+            .get("errors")
+            .and_then(Value::as_array)
+            .is_some_and(|errors| {
+                errors
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|error| error.starts_with("No conversation found with session ID"))
+            })
+}
+
 /// Text blocks of an `assistant` message in content order. Claude Code emits
 /// one `assistant` line per content block, so this is usually a single entry.
 pub(super) fn claude_message_text_blocks(value: &Value) -> Option<Vec<String>> {
@@ -434,5 +471,45 @@ mod tests {
                 json!({"tool": "Edit"}).to_string()
             ))
         );
+    }
+
+    #[test]
+    fn context_tokens_count_cached_input_of_main_conversation_only() {
+        let usage = json!({"input_tokens": 2, "cache_creation_input_tokens": 6218, "cache_read_input_tokens": 94408, "output_tokens": 563});
+        assert_eq!(
+            claude_context_tokens(
+                &json!({"type": "assistant", "parent_tool_use_id": null, "message": {"usage": usage}})
+            ),
+            Some(100_628)
+        );
+        assert_eq!(
+            claude_context_tokens(
+                &json!({"type": "assistant", "parent_tool_use_id": "toolu_1", "message": {"usage": usage}})
+            ),
+            None
+        );
+        assert_eq!(
+            claude_context_tokens(&json!({"type": "result", "usage": usage})),
+            None
+        );
+    }
+
+    #[test]
+    fn missing_resume_session_is_recognized_from_result_errors() {
+        // Shape emitted by Claude Code 2.1 for `--resume <unknown id>`.
+        let missing = json!({
+            "type": "result",
+            "subtype": "error_during_execution",
+            "is_error": true,
+            "num_turns": 0,
+            "session_id": "00000000-0000-4000-8000-000000000000",
+            "errors": ["No conversation found with session ID: 00000000-0000-4000-8000-000000000000"]
+        });
+        assert!(claude_resume_session_missing(&missing));
+        assert!(!claude_resume_session_missing(&json!({
+            "type": "result",
+            "is_error": true,
+            "result": "API Error: Connection dropped (ECONNRESET)"
+        })));
     }
 }
