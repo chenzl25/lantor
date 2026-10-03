@@ -22,7 +22,7 @@ const attachments = [
 
 createRoot(document.getElementById("root")!).render(<StrictMode>
   <main style={{ padding: 16 }}>
-    <MessageMarkdown body="Deliverables: [the report](/ws/out/report.pdf) and [notes](/ws/out/implementation.md)." attachments={attachments} />
+    <MessageMarkdown body="Deliverables: [the report](/ws/out/report.pdf) and [notes](/ws/out/implementation.md), [line notes](/ws/out/implementation.md:2), [hash notes](/ws/out/implementation.md#L2)." attachments={attachments} />
     <MessageAttachments attachments={attachments} showImageThumbnails />
     <button type="button" onClick={() => openGeneratedFileSheet(new File([exportedSvg], "thread-ui-review.svg", { type: "image/svg+xml" }))}>
       Export thread SVG
