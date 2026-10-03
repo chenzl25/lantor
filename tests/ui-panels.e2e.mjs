@@ -85,6 +85,37 @@ try {
     for (const name of ["Expand all messages in this thread", "Fold all messages in this thread", "Reference this thread"]) {
       assert.equal(await threadHeader.getByRole("button", { name, exact: true }).count(), 0);
     }
+    // Expanded thread: takes the conversation column on wide desktop, remembered across reload, Locate restores the channel.
+    const conversation = page.locator(".conversation");
+    const box = selector => page.locator(selector).first().evaluate(e => { const r = e.getBoundingClientRect(); return { left: r.left, width: r.width }; });
+    const shot = async label => { if (process.env.LANTOR_UI_SCREENSHOTS) { await mkdir(process.env.LANTOR_UI_SCREENSHOTS, { recursive: true }); await page.screenshot({ path: join(process.env.LANTOR_UI_SCREENSHOTS, `${label}-${name}.png`) }); } };
+    const sideBySideThread = await box(".thread");
+    await threadHeader.getByRole("button", { name: "Expand thread", exact: true }).click();
+    await page.locator("main.app.thread-expanded").waitFor();
+    assert.equal(await conversation.isVisible(), false, "expanded thread hides the conversation column");
+    assert.equal(await page.locator(".thread-resize-handle").isVisible(), false, "no resize handle while expanded");
+    const sidebarBox = await box(".sidebar"), expandedThread = await box(".thread"), content = await box(".thread-scroll-content");
+    assert.ok(Math.abs(expandedThread.left - (sidebarBox.left + sidebarBox.width)) <= 1 && expandedThread.width > sideBySideThread.width + 300, "thread fills the conversation column");
+    assert.ok(content.width <= 920 && Math.abs((content.left - expandedThread.left) - (expandedThread.left + expandedThread.width - content.left - content.width)) <= 20, "reading column is capped and centered");
+    const textarea = await box(".reply-composer textarea");
+    assert.ok(textarea.left >= content.left && textarea.left + textarea.width <= content.left + content.width + 1, "composer lines up with the reading column");
+    await shot("thread-expanded");
+    await page.reload(); await row.waitFor();
+    assert.equal(await page.evaluate(() => localStorage.getItem("lantor.threadExpanded")), "true", "expanded state is remembered");
+    await openThread(); await page.locator("main.app.thread-expanded .thread").waitFor();
+    await page.setViewportSize({ width: 1024, height: 960 });
+    assert.equal(await threadHeader.getByRole("button", { name: "Exit expanded thread", exact: true }).isVisible(), false, "compact layout has no expand toggle");
+    await page.setViewportSize({ width: 1440, height: 960 });
+    await threadHeader.getByRole("button", { name: "Exit expanded thread", exact: true }).click();
+    await page.locator("main.app.thread-expanded").waitFor({ state: "detached" });
+    assert.equal(await conversation.isVisible(), true);
+    await threadHeader.getByRole("button", { name: "Expand thread", exact: true }).click();
+    await page.locator("main.app.thread-expanded").waitFor();
+    await threadHeader.getByRole("button", { name: "Locate this thread in the channel", exact: true }).click();
+    await page.locator("main.app.thread-expanded").waitFor({ state: "detached" });
+    assert.equal(await conversation.isVisible(), true, "Locate brings the channel back");
+    assert.equal(await page.locator(".thread").count(), 1, "Locate keeps the thread open beside the channel");
+    assert.equal(await page.evaluate(() => localStorage.getItem("lantor.threadExpanded")), "false");
     await page.getByRole("button", { name: "Open DM with @Hancock", exact: true }).click();
     await page.locator(".dm-conversation").waitFor();
     await page.locator('.sidebar .channel').filter({ hasText: "ui-review" }).click();
@@ -221,7 +252,7 @@ try {
     assert.equal(await page.locator(".thread").count(), 1);
     assert.ok(await inline.evaluate(e => e.getBoundingClientRect().height < 80 && getComputedStyle(e).position !== "fixed"));
     assert.deepEqual(errors, []);
-    console.log(`${name}: empty/restored/closed/mobile thread, DM composer, wrapping task titles at 1440/1024/390, status groups/filters/edit/reopen, app modal layering/history/focus, mobile bottom navigation, thread reference entry/remove/paste/inline layout passed`);
+    console.log(`${name}: empty/restored/closed/mobile thread, expanded thread toggle/reload/locate, DM composer, wrapping task titles at 1440/1024/390, status groups/filters/edit/reopen, app modal layering/history/focus, mobile bottom navigation, thread reference entry/remove/paste/inline layout passed`);
     await browser.close(); browser = null;
   }
 } finally { await browser?.close(); for (const client of clients) client.end(); api.closeAllConnections(); await new Promise(done => api.close(done)); }

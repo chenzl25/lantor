@@ -7870,6 +7870,36 @@ body.resizing-column * {
   grid-template-columns: minmax(0, var(--sidebar-width)) minmax(0, 1fr);
 }
 
+/* Expanded thread (wide desktop): the thread takes the conversation column and
+   centers a capped reading column. Narrower layouts already show the thread
+   in place of the conversation, so the toggle is hidden there. */
+@media (min-width: 1101px) {
+  .app.thread-expanded {
+    --thread-expanded-content-width: 920px;
+    grid-template-columns: minmax(0, var(--sidebar-width)) minmax(0, 1fr);
+  }
+
+  .app.thread-expanded .conversation,
+  .app.thread-expanded .thread-resize-handle {
+    display: none;
+  }
+
+  .app.thread-expanded .thread-scroll-content {
+    max-width: var(--thread-expanded-content-width);
+    margin-inline: auto;
+  }
+
+  .app.thread-expanded .reply-composer {
+    padding-inline: max(16px, calc((100% - var(--thread-expanded-content-width)) / 2 + 16px));
+  }
+}
+
+@media (max-width: 1100px) {
+  .thread header .thread-expand-toggle {
+    display: none;
+  }
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;

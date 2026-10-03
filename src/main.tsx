@@ -236,6 +236,7 @@ const OWNER_MENTION_HANDLES = ["@Theo", "@Dylan"];
 const ACTIVE_CHANNEL_STORAGE_KEY = "lantor.activeChannelId";
 const CHANNEL_THREAD_MEMORY_STORAGE_KEY = "lantor.channelThreadMemory";
 const THREAD_PANEL_WIDTH_STORAGE_KEY = "lantor.threadPanelWidth";
+const THREAD_EXPANDED_STORAGE_KEY = "lantor.threadExpanded";
 const AGENT_DRAWER_WIDTH_STORAGE_KEY = "lantor.agentDrawerWidth";
 const SIDEBAR_WIDTH_STORAGE_KEY = "lantor.sidebarWidth";
 const THEME_PREFERENCE_STORAGE_KEY = "lantor.themePreference";
@@ -856,6 +857,10 @@ function App() {
       : value;
     return Math.min(maxWidth, Math.max(MIN_THREAD_PANEL_WIDTH, preferredWidth));
   });
+  // Wide desktop only: the open thread takes over the conversation column.
+  const [threadExpanded, setThreadExpanded] = useState(
+    () => window.localStorage.getItem(THREAD_EXPANDED_STORAGE_KEY) === "true",
+  );
   const [agentDrawerWidth, setAgentDrawerWidth] = useState(() => {
     const value = getStoredNumber(
       AGENT_DRAWER_WIDTH_STORAGE_KEY,
@@ -2399,6 +2404,10 @@ function App() {
   }, [threadPanelWidth]);
 
   useEffect(() => {
+    window.localStorage.setItem(THREAD_EXPANDED_STORAGE_KEY, String(threadExpanded));
+  }, [threadExpanded]);
+
+  useEffect(() => {
     window.localStorage.setItem(AGENT_DRAWER_WIDTH_STORAGE_KEY, String(agentDrawerWidth));
   }, [agentDrawerWidth]);
 
@@ -3748,6 +3757,8 @@ function App() {
 
   function revealThreadRootInChannel(message: Message) {
     setSelectedAgentId(null);
+    // An expanded thread hides the channel column, so locating must bring it back.
+    setThreadExpanded(false);
     setActiveTab("chat");
     setActiveChannelId(message.channel_id);
     if (isMobileViewport()) {
@@ -5051,7 +5062,7 @@ function App() {
   return (
     <DecisionStoreContext.Provider value={decisionStore}>
     <main
-      className={`app theme-liquid ${selectedAgent || showThread ? "" : "thread-hidden"} ${selectedAgent || activeThreadId ? "right-panel-active" : ""} ${showMobileSidebar ? "mobile-sidebar-open" : ""} ${mobileDragSurface === "sidebar" ? "mobile-sidebar-dragging" : ""} ${mobileDragSurface === "panel" ? "mobile-panel-dragging" : ""} ${mobileComposerFocused ? "mobile-composer-focused" : ""}`}
+      className={`app theme-liquid ${selectedAgent || showThread ? "" : "thread-hidden"} ${selectedAgent || activeThreadId ? "right-panel-active" : ""} ${threadExpanded && showThread && !selectedAgent ? "thread-expanded" : ""} ${showMobileSidebar ? "mobile-sidebar-open" : ""} ${mobileDragSurface === "sidebar" ? "mobile-sidebar-dragging" : ""} ${mobileDragSurface === "panel" ? "mobile-panel-dragging" : ""} ${mobileComposerFocused ? "mobile-composer-focused" : ""}`}
       style={{
         "--sidebar-width": `${sidebarWidth}px`,
         "--thread-width": `${selectedAgent ? agentDrawerWidth : threadPanelWidth}px`,
@@ -5328,6 +5339,8 @@ function App() {
           onReferenceThreadJump={openReferencedThread}
           messages={data.messages}
           onLocateRoot={revealThreadRootInChannel}
+          expanded={threadExpanded}
+          onToggleExpanded={() => setThreadExpanded((current) => !current)}
           savedMessageIds={savedMessageIds}
           focusedMessageId={focusedMessageId}
           showImageThumbnails={showImageThumbnails}

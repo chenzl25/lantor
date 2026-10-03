@@ -92,7 +92,13 @@ function addExportBottomSpacer(clone: HTMLElement) {
 }
 
 function serializeThreadElement(source: HTMLElement) {
-  const panelWidth = Math.max(360, Math.ceil(source.getBoundingClientRect().width));
+  // An expanded thread is far wider than its centered reading column; export
+  // that column's width so the image keeps the normal panel proportions.
+  const expandedContent = source.closest(".thread-expanded")
+    ? source.querySelector<HTMLElement>(".thread-scroll-content")
+    : null;
+  const sourceWidth = (expandedContent ?? source).getBoundingClientRect().width;
+  const panelWidth = Math.max(360, Math.ceil(sourceWidth));
   const clone = source.cloneNode(true) as HTMLElement;
   makeScrollableContentVisible(clone, panelWidth);
   removeTransientUi(clone);

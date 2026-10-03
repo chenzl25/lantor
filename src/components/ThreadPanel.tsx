@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowLeft, CheckCircle2, Crosshair, FileImage, Hash, MessageSquare, MoreHorizontal, Paperclip, RotateCcw, Send, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, CheckCircle2, Crosshair, FileImage, Hash, Maximize2, MessageSquare, Minimize2, MoreHorizontal, Paperclip, RotateCcw, Send, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type TextareaHTMLAttributes, type WheelEvent as ReactWheelEvent } from "react";
 import { useEventCallback } from "../hooks/useEventCallback";
 import { useMessageRows } from "../hooks/useMessageRows";
@@ -106,6 +106,8 @@ type ThreadPanelProps = {
   onReferenceThreadJump: (originMessageId: string, threadId: string) => void;
   messages: Message[];
   onLocateRoot: (message: Message) => void;
+  expanded: boolean;
+  onToggleExpanded: () => void;
   savedMessageIds: Set<string>;
   focusedMessageId: string | null;
   showImageThumbnails: boolean;
@@ -194,6 +196,8 @@ export function ThreadPanel({
   onReferenceThreadJump,
   messages,
   onLocateRoot,
+  expanded,
+  onToggleExpanded,
   savedMessageIds,
   focusedMessageId,
   showImageThumbnails,
@@ -816,6 +820,16 @@ export function ThreadPanel({
             aria-label={isDm ? "Locate this thread in the DM" : "Locate this thread in the channel"}
           >
             <Crosshair size={18} />
+          </button>
+          <button
+            type="button"
+            className="thread-expand-toggle"
+            onClick={onToggleExpanded}
+            aria-pressed={expanded}
+            data-tooltip={expanded ? "Show the channel next to this thread" : "Expand thread over the channel"}
+            aria-label={expanded ? "Exit expanded thread" : "Expand thread"}
+          >
+            {expanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
           </button>
           <button type="button" className="thread-close" onClick={onClose} aria-label="Close thread panel"><X size={18} /></button>
         </span>
