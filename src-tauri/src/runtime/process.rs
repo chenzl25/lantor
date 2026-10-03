@@ -838,10 +838,20 @@ pub(crate) fn configure_agent_identity_env(command: &mut Command, agent_id: Uuid
 
 const PROCESS_KILL_ESCALATION_DELAY_SECS: u64 = 10;
 
+fn process_group_signal_command(pid: i32, signal: &str) -> Command {
+    let mut command = Command::new("kill");
+    // Negative process-group IDs must be operands, not options. In particular,
+    // procps kill can interpret `kill -TERM -12345` as kill(-1, SIGTERM).
+    command.args([signal, "--", &format!("-{pid}")]);
+    command
+}
+
 pub(crate) async fn terminate_process_group(pid: i32) -> CommandResult<()> {
-    let status = Command::new("kill")
-        .arg("-TERM")
-        .arg(format!("-{pid}"))
+    // -1 broadcasts to every permitted process; 0 targets our own group.
+    if pid <= 1 {
+        return Err(format!("invalid process group leader pid: {pid}"));
+    }
+    let status = process_group_signal_command(pid, "-TERM")
         .status()
         .await
         .map_err(to_string)?;
@@ -857,19 +867,13 @@ pub(crate) async fn terminate_process_group(pid: i32) -> CommandResult<()> {
             PROCESS_KILL_ESCALATION_DELAY_SECS,
         ))
         .await;
-        let alive = Command::new("kill")
-            .arg("-0")
-            .arg(format!("-{pid}"))
+        let alive = process_group_signal_command(pid, "-0")
             .status()
             .await
             .map(|status| status.success())
             .unwrap_or(false);
         if alive {
-            let _ = Command::new("kill")
-                .arg("-KILL")
-                .arg(format!("-{pid}"))
-                .status()
-                .await;
+            let _ = process_group_signal_command(pid, "-KILL").status().await;
         }
     });
 
