@@ -69,7 +69,7 @@ try {
     state.tasks = structuredClone(initialTasks);
     state.messages = state.messages.map(message => message.id === reply.id ? reply : message);
     browser = await engine.launch();
-    const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 1440, height: 960 } });
+    const context = await browser.newContext({ acceptDownloads: true, serviceWorkers: "block", viewport: { width: 1440, height: 960 } });
     const page = await context.newPage(); page.setDefaultTimeout(8000);
     const errors = []; page.on("pageerror", error => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${api.address().port}`, { waitUntil: "domcontentloaded" });
@@ -116,6 +116,20 @@ try {
     assert.equal(await conversation.isVisible(), true, "Locate brings the channel back");
     assert.equal(await page.locator(".thread").count(), 1, "Locate keeps the thread open beside the channel");
     assert.equal(await page.evaluate(() => localStorage.getItem("lantor.threadExpanded")), "false");
+    // Export as SVG previews in the file sheet first; Close goes back to the thread, Download saves the file.
+    const exportSheet = page.getByRole("dialog", { name: "thread-in-ui-review.svg", exact: true });
+    await threadHeader.getByRole("button", { name: "Export thread as SVG", exact: true }).click();
+    await exportSheet.locator("img.attachment-sheet-media").waitFor();
+    assert.ok(await exportSheet.locator("img.attachment-sheet-media").evaluate(img => img.complete && img.naturalWidth > 0), "the SVG preview renders");
+    await shot("thread-svg-preview");
+    await exportSheet.getByRole("button", { name: "Close", exact: true }).click();
+    await exportSheet.waitFor({ state: "detached" });
+    assert.equal(await page.locator(".thread").count(), 1, "closing the preview keeps the thread open");
+    await threadHeader.getByRole("button", { name: "Export thread as SVG", exact: true }).click();
+    const [svgDownload] = await Promise.all([page.waitForEvent("download"), exportSheet.getByRole("button", { name: "Download", exact: true }).click()]);
+    assert.equal(svgDownload.suggestedFilename(), "thread-in-ui-review.svg");
+    assert.match(await readFile(await svgDownload.path(), "utf8"), /^<\?xml[\s\S]*<foreignObject[\s\S]*Thread reply/);
+    await page.keyboard.press("Escape"); await exportSheet.waitFor({ state: "detached" });
     await page.getByRole("button", { name: "Open DM with @Hancock", exact: true }).click();
     await page.locator(".dm-conversation").waitFor();
     await page.locator('.sidebar .channel').filter({ hasText: "ui-review" }).click();
@@ -208,6 +222,21 @@ try {
     await page.getByRole("button", { name: "Thread actions", exact: true }).click();
     await capture("thread-mobile-menu");
     assert.equal(await page.getByRole("menuitem", { name: "Export as SVG", exact: true }).count(), 1);
+    await page.getByRole("menuitem", { name: "Export as SVG", exact: true }).click();
+    const mobileExport = page.getByRole("dialog", { name: "thread-in-ui-review.svg", exact: true });
+    await mobileExport.locator("img.attachment-sheet-media").waitFor();
+    // The preview is scaled down by transform (WebKit clips foreignObject in a downsized <img>) and fits the sheet.
+    await page.waitForFunction(() => document.querySelector("img.attachment-sheet-svg")?.style.transform.startsWith("scale("));
+    const fit = await mobileExport.locator(".attachment-sheet-svg-frame").evaluate(frame => {
+      const img = frame.querySelector("img"), box = img.getBoundingClientRect(), frameBox = frame.getBoundingClientRect();
+      return { scaled: box.width < img.naturalWidth, inside: box.left >= frameBox.left - 1 && box.right <= frameBox.right + 1, height: Math.abs(box.height - frameBox.height) <= 1 };
+    });
+    assert.deepEqual(fit, { scaled: true, inside: true, height: true });
+    await capture("thread-mobile-svg-preview");
+    await mobileExport.getByRole("button", { name: "Close", exact: true }).click();
+    await mobileExport.waitFor({ state: "detached" });
+    assert.equal(await page.locator(".thread").count(), 1, "closing the mobile preview returns to the thread");
+    await page.getByRole("button", { name: "Thread actions", exact: true }).click();
     assert.equal(await page.getByRole("menuitem", { name: "Locate in channel", exact: true }).count(), 1);
     for (const name of ["Expand all messages", "Fold all messages", "Reference thread"]) {
       assert.equal(await page.getByRole("menuitem", { name, exact: true }).count(), 0);
@@ -252,7 +281,7 @@ try {
     assert.equal(await page.locator(".thread").count(), 1);
     assert.ok(await inline.evaluate(e => e.getBoundingClientRect().height < 80 && getComputedStyle(e).position !== "fixed"));
     assert.deepEqual(errors, []);
-    console.log(`${name}: empty/restored/closed/mobile thread, expanded thread toggle/reload/locate, DM composer, wrapping task titles at 1440/1024/390, status groups/filters/edit/reopen, app modal layering/history/focus, mobile bottom navigation, thread reference entry/remove/paste/inline layout passed`);
+    console.log(`${name}: empty/restored/closed/mobile thread, expanded thread toggle/reload/locate, SVG export preview/close/download (desktop + mobile menu), DM composer, wrapping task titles at 1440/1024/390, status groups/filters/edit/reopen, app modal layering/history/focus, mobile bottom navigation, thread reference entry/remove/paste/inline layout passed`);
     await browser.close(); browser = null;
   }
 } finally { await browser?.close(); for (const client of clients) client.end(); api.closeAllConnections(); await new Promise(done => api.close(done)); }

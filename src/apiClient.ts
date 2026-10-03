@@ -37,6 +37,14 @@ export async function downloadAttachment(storagePath: string, originalName: stri
   return tauriInvoke<string>("download_attachment", { storagePath, originalName });
 }
 
+/** Desktop only: writes generated text (a thread SVG export) into Downloads. */
+export async function saveTextDownload(fileName: string, contents: string): Promise<string> {
+  if (!isTauriRuntime()) {
+    throw new Error("saveTextDownload is only available in the desktop app");
+  }
+  return tauriInvoke<string>("save_text_download", { fileName, contents });
+}
+
 export async function completeStartupSplash(): Promise<void> {
   if (!isTauriRuntime()) return;
   await tauriInvoke("complete_startup_splash");

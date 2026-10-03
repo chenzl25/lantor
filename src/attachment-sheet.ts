@@ -12,20 +12,35 @@ export function usesAttachmentSheet() {
   return !isTauriRuntime() && isStandaloneDisplay();
 }
 
-let openAttachment: MessageAttachment | null = null;
+/**
+ * What the sheet shows: a stored attachment fetched from the server, or a file
+ * the app generated in the browser (a thread SVG export) that the user previews
+ * before saving it.
+ */
+export type AttachmentSheetItem =
+  | { kind: "stored"; id: string; attachment: MessageAttachment }
+  | { kind: "generated"; id: string; file: File };
+
+let openItem: AttachmentSheetItem | null = null;
+let generatedSequence = 0;
 const listeners = new Set<() => void>();
 
-function setOpenAttachment(attachment: MessageAttachment | null) {
-  openAttachment = attachment;
+function setOpenItem(item: AttachmentSheetItem | null) {
+  openItem = item;
   listeners.forEach((listener) => listener());
 }
 
 export function openAttachmentSheet(attachment: MessageAttachment) {
-  setOpenAttachment(attachment);
+  setOpenItem({ kind: "stored", id: attachment.id, attachment });
+}
+
+export function openGeneratedFileSheet(file: File) {
+  generatedSequence += 1;
+  setOpenItem({ kind: "generated", id: `generated-${generatedSequence}`, file });
 }
 
 export function closeAttachmentSheet() {
-  setOpenAttachment(null);
+  setOpenItem(null);
 }
 
 function subscribe(listener: () => void) {
@@ -35,8 +50,24 @@ function subscribe(listener: () => void) {
   };
 }
 
-export function useOpenAttachment() {
-  return useSyncExternalStore(subscribe, () => openAttachment, () => null);
+export function useOpenAttachmentSheetItem() {
+  return useSyncExternalStore(subscribe, () => openItem, () => null);
+}
+
+export type AttachmentSheetDelivery = "save" | "share" | "download";
+
+/**
+ * How the sheet's primary button hands the file over:
+ * - the desktop app saves into Downloads natively, because its webview ignores
+ *   `<a download>`;
+ * - the Home Screen web app uses the share sheet, because a download would
+ *   leave the app;
+ * - everything else downloads normally.
+ */
+export function attachmentSheetDelivery({ shareable }: { shareable: boolean }): AttachmentSheetDelivery {
+  if (isTauriRuntime()) return "save";
+  if (usesAttachmentSheet() && shareable) return "share";
+  return "download";
 }
 
 export type AttachmentPreviewKind = "image" | "video" | "audio" | "markdown" | "text" | "none";

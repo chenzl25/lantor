@@ -1,7 +1,7 @@
 // Home Screen web app attachments: nothing may navigate, open a window, or
 // download, because standalone mode has no browser chrome to come back from.
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { build, preview } from "vite";
@@ -9,6 +9,16 @@ import react from "@vitejs/plugin-react";
 import { chromium, devices, webkit } from "playwright";
 
 const markdown = "# Deploy notes\n\nThe switch completed cleanly.\n";
+// Must match exportedSvg in the fixture.
+const exportedSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120"><rect width="240" height="120" fill="navy"/></svg>';
+// The desktop app: invoke() goes to Rust, which writes into Downloads.
+const desktopApp = `
+  window.__invoked = [];
+  window.__TAURI_INTERNALS__ = {
+    invoke: async (cmd, args) => { window.__invoked.push({ cmd, args }); return "/Users/me/Downloads/thread-ui-review (1).svg"; },
+    convertFileSrc: (path, protocol = "asset") => \`\${protocol}://localhost\${path}\`,
+    transformCallback: () => 0,
+  };`;
 const files = {
   markdown: { type: "text/markdown", body: Buffer.from(markdown) },
   pdf: { type: "application/pdf", body: Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(1191, 32)]) },
@@ -113,6 +123,15 @@ try {
       await lightbox.getByRole("button", { name: "Close image preview" }).click();
       await lightbox.waitFor({ state: "detached" });
 
+      // A generated thread SVG previews in the same sheet and shares its exact bytes.
+      await page.getByRole("button", { name: "Export thread SVG", exact: true }).click();
+      const exported = sheet(page, "thread-ui-review.svg");
+      await exported.locator("img.attachment-sheet-media").waitFor();
+      await exported.getByRole("button", { name: "Share" }).click();
+      assert.deepEqual((await shared(page, 3))[2], { name: "thread-ui-review.svg", type: "image/svg+xml", size: exportedSvg.length, text: exportedSvg });
+      await exported.getByRole("button", { name: "Close", exact: true }).click();
+      await exported.waitFor({ state: "detached" });
+
       // Load failures stay in the sheet and can be retried.
       await page.getByRole("link", { name: "Open flaky.txt", exact: true }).click();
       const flaky = sheet(page, "flaky.txt");
@@ -141,16 +160,41 @@ try {
       await context.close();
     }
 
-    // Ordinary browser tabs keep opening files in a new tab.
-    if (name === "chromium") {
-      const { context, page } = await open({});
-      const [popup] = await Promise.all([context.waitForEvent("page"), page.getByRole("link", { name: "Open implementation.md", exact: true }).click()]);
-      assert.equal(new URL(popup.url()).pathname, "/api/attachments/markdown");
-      assert.equal(await sheet(page, "implementation.md").count(), 0);
+    // Desktop app: the sheet saves natively, since its webview ignores <a download>.
+    {
+      const { context, page, leaks, errors } = await open({}, desktopApp);
+      await page.getByRole("button", { name: "Export thread SVG", exact: true }).click();
+      const exported = sheet(page, "thread-ui-review.svg");
+      await exported.locator("img.attachment-sheet-media").waitFor();
+      await exported.getByRole("button", { name: "Download" }).click();
+      await exported.getByText("Saved to Downloads: thread-ui-review (1).svg").waitFor();
+      const invoked = await page.evaluate(() => window.__invoked.filter((call) => call.cmd === "save_text_download"));
+      assert.deepEqual(invoked, [{ cmd: "save_text_download", args: { fileName: "thread-ui-review.svg", contents: exportedSvg } }]);
+      await exported.getByRole("button", { name: "Close", exact: true }).click();
+      await exported.waitFor({ state: "detached" });
+      assert.deepEqual(leaks, []);
+      assert.deepEqual(errors, []);
       await context.close();
     }
 
-    console.log(`${name}: standalone card/download/link/lightbox open the in-app sheet, share exact bytes, close via button/Escape/back, retry after errors, download fallback without Web Share, browser tabs unchanged`);
+    // Ordinary browser tabs keep opening files in a new tab.
+    if (name === "chromium") {
+      const { context, page } = await open({ acceptDownloads: true });
+      const [popup] = await Promise.all([context.waitForEvent("page"), page.getByRole("link", { name: "Open implementation.md", exact: true }).click()]);
+      assert.equal(new URL(popup.url()).pathname, "/api/attachments/markdown");
+      assert.equal(await sheet(page, "implementation.md").count(), 0);
+      await popup.close();
+      // A generated export still previews first, then downloads the exact bytes.
+      await page.getByRole("button", { name: "Export thread SVG", exact: true }).click();
+      const exported = sheet(page, "thread-ui-review.svg");
+      await exported.locator("img.attachment-sheet-media").waitFor();
+      const [download] = await Promise.all([page.waitForEvent("download"), exported.getByRole("button", { name: "Download" }).click()]);
+      assert.equal(download.suggestedFilename(), "thread-ui-review.svg");
+      assert.equal(await readFile(await download.path(), "utf8"), exportedSvg);
+      await context.close();
+    }
+
+    console.log(`${name}: standalone card/download/link/lightbox/generated SVG open the in-app sheet, share exact bytes, close via button/Escape/back, retry after errors, download fallback without Web Share, desktop app saves generated files natively, browser tabs unchanged and preview generated files before download`);
     await browser.close(); browser = null;
   }
 } finally {

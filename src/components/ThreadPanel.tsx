@@ -16,7 +16,8 @@ import { isCompactFollowupMessage } from "../message-grouping";
 import { shouldCollapseMessage as shouldCollapseThreadMessage } from "../message-preview";
 import { messageToMarkdown } from "../message-share";
 import { appendMessageReferenceToken, messageReferenceToken, parseMessageReferences, removeMessageReferenceToken, withoutMessageReferenceTokens, type MessageReferenceKind, type ResolvedMessageReference } from "../message-references";
-import { downloadThreadPanelSvg } from "../thread-svg-export";
+import { openGeneratedFileSheet } from "../attachment-sheet";
+import { renderThreadPanelSvg } from "../thread-svg-export";
 import { Agent, AgentActivity, AgentRun, AgentWorkItem, Artifact, Channel, DraftAttachment, Message, OwnerProfile, TASK_STATUSES, Task } from "../types";
 import { formatClockTime, formatTime, isSameCalendarDay, visibleAgentDescription, visibleChannelDescription } from "../ui-utils";
 import { ActivityProgressDock, activeProgressByAgent, indexProgress } from "./ActivityProgressDock";
@@ -702,7 +703,7 @@ export function ThreadPanel({
       await waitForNextFrame();
     }
     try {
-      await downloadThreadPanelSvg(threadPanel, surfaceLabel);
+      openGeneratedFileSheet(await renderThreadPanelSvg(threadPanel, surfaceLabel));
     } finally {
       if (shouldTemporarilyExpand) setActiveThreadExpandedMessageIds(previousExpandedMessageIds);
     }

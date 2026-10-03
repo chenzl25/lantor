@@ -246,20 +246,8 @@ function assertValidSvg(svg: string) {
   }
 }
 
-function downloadSvg(svg: string, surfaceLabel: string) {
-  assertValidSvg(svg);
-  const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `${fileSafeName(surfaceLabel)}.svg`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
-}
-
-export async function downloadThreadPanelSvg(source: HTMLElement, surfaceLabel: string) {
+/** Renders the thread panel into a standalone SVG file; the caller previews it before saving. */
+export async function renderThreadPanelSvg(source: HTMLElement, surfaceLabel: string): Promise<File> {
   await waitForRenderableAssets(source);
   const { clone, panelWidth } = serializeThreadElement(source);
   const panelHeight = measureExportHeight(clone, panelWidth);
@@ -276,5 +264,6 @@ export async function downloadThreadPanelSvg(source: HTMLElement, surfaceLabel: 
   </foreignObject>
 </svg>
 `;
-  downloadSvg(svg, surfaceLabel);
+  assertValidSvg(svg);
+  return new File([svg], `${fileSafeName(surfaceLabel)}.svg`, { type: "image/svg+xml" });
 }

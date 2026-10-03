@@ -4206,6 +4206,11 @@ mark {
   color: var(--status-danger);
 }
 
+.attachment-sheet-notice {
+  margin: 0 0 12px;
+  color: var(--status-success);
+}
+
 .attachment-sheet-media {
   display: block;
   max-width: 100%;
@@ -4215,6 +4220,20 @@ mark {
 
 .attachment-sheet-audio {
   width: 100%;
+}
+
+/* Centered even while the unscaled layout box is wider than the frame. */
+.attachment-sheet-svg-frame {
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.attachment-sheet-media.attachment-sheet-svg {
+  flex: none;
+  max-width: none;
+  margin: 0;
+  transform-origin: top center;
 }
 
 .attachment-sheet-text {

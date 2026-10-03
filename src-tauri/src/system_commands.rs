@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
     process::{Command as StdCommand, Stdio},
 };
@@ -431,6 +432,39 @@ pub(crate) async fn download_attachment(
     .map_err(to_string)?
 }
 
+/// Saves text the frontend generated (a thread SVG export) into Downloads. The
+/// desktop webview ignores `<a download>`, so the file is written natively.
+#[tauri::command]
+pub(crate) async fn save_text_download(
+    app: tauri::AppHandle,
+    file_name: String,
+    contents: String,
+) -> CommandResult<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let downloads_dir = app.path().download_dir().map_err(to_string)?;
+        write_text_download(&downloads_dir, &file_name, &contents)
+    })
+    .await
+    .map_err(to_string)?
+}
+
+fn write_text_download(
+    downloads_dir: &Path,
+    file_name: &str,
+    contents: &str,
+) -> Result<String, String> {
+    fs::create_dir_all(downloads_dir).map_err(to_string)?;
+    let target = unique_download_path(downloads_dir, &safe_download_filename(file_name));
+    // create_new: never overwrite a file that appeared after the name was picked.
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+        .map_err(to_string)?;
+    file.write_all(contents.as_bytes()).map_err(to_string)?;
+    Ok(target.to_string_lossy().to_string())
+}
+
 #[tauri::command]
 pub(crate) async fn complete_startup_splash(app: tauri::AppHandle) -> CommandResult<()> {
     if let Some(window) = app.get_webview_window("main") {
@@ -498,7 +532,23 @@ pub(crate) async fn check_runtime_in_env(runtime: String) -> CommandResult<Runti
 mod tests {
     use uuid::Uuid;
 
-    use super::{normalize_open_link_target, OpenLinkTarget};
+    use super::{normalize_open_link_target, write_text_download, OpenLinkTarget};
+
+    #[test]
+    fn text_downloads_get_safe_unique_names_and_exact_contents() {
+        let dir = std::env::temp_dir().join(format!("lantor-download-test-{}", Uuid::new_v4()));
+        let first = write_text_download(&dir, "Thread - #lantor-dev.svg", "<svg/>").unwrap();
+        let second = write_text_download(&dir, "Thread - #lantor-dev.svg", "<svg>2</svg>").unwrap();
+        // A path-like name keeps only its last component, so it cannot escape Downloads.
+        let escaped = write_text_download(&dir, "../outside.svg", "<svg>3</svg>").unwrap();
+        let path = |name: &str| dir.join(name).to_string_lossy().to_string();
+        assert_eq!(first, path("Thread - #lantor-dev.svg"));
+        assert_eq!(second, path("Thread - #lantor-dev (1).svg"));
+        assert_eq!(escaped, path("outside.svg"));
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "<svg/>");
+        assert_eq!(std::fs::read_to_string(&second).unwrap(), "<svg>2</svg>");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn open_link_target_normalization_allows_safe_schemes() {
