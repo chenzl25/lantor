@@ -236,7 +236,8 @@ function metadataEntries(activity: AgentActivity) {
 function visibleMetadataEntries(activity: AgentActivity) {
   const priority = ["command", "file", "operation", "tool", "duration_ms", "exit_code", "status", "type", "reason"];
   const entries = metadataEntries(activity)
-    .filter(([key]) => !["rate_limit_info", "uuid", "pid", "session_id", "request_id"].includes(key));
+    // Run totals are on every activity of a run; the raw view still shows them.
+    .filter(([key]) => !["rate_limit_info", "uuid", "pid", "session_id", "request_id", "run_command_count", "run_file_edit_count"].includes(key));
 
   return entries
     .sort(([left], [right]) => {

@@ -598,6 +598,8 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             current_input_tokens integer not null default 0,
             output_tokens integer not null default 0,
             cost_micros integer not null default 0,
+            command_count integer not null default 0,
+            file_edit_count integer not null default 0,
             started_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
             stopped_at text
         )
@@ -924,6 +926,20 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         pool,
         "agent_runs",
         "current_input_tokens",
+        "integer not null default 0",
+    )
+    .await?;
+    ensure_integer_column(
+        pool,
+        "agent_runs",
+        "command_count",
+        "integer not null default 0",
+    )
+    .await?;
+    ensure_integer_column(
+        pool,
+        "agent_runs",
+        "file_edit_count",
         "integer not null default 0",
     )
     .await?;

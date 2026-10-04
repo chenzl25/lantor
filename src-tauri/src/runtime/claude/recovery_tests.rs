@@ -362,3 +362,38 @@ async fn finished_turn_persists_context_size_for_the_next_spawn() {
     assert_eq!(context_tokens, 121_003);
     f.close().await;
 }
+
+#[tokio::test]
+async fn parallel_tool_calls_each_count_toward_the_run_totals() {
+    let f = Fixture::new().await;
+    let tool = |index: u64, name: &str| json!({"type":"stream_event","event":{"type":"content_block_start","index":index,"content_block":{"type":"tool_use","id":format!("t{index}"),"name":name,"input":{}}}});
+    // One assistant message starting two Bash calls and an edit in parallel.
+    f.send(tool(0, "Bash")).await;
+    f.send(tool(1, "Bash")).await;
+    f.send(tool(2, "Edit")).await;
+    f.send(tool(3, "Read")).await;
+    let totals: Vec<(String, i64, i64)> = sqlx::query_as(
+        r#"
+        select kind,
+            json_extract(metadata, '$.run_command_count'),
+            json_extract(metadata, '$.run_file_edit_count')
+        from agent_activities
+        where run_id = $1
+        order by rowid
+        "#,
+    )
+    .bind(f.run)
+    .fetch_all(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        totals,
+        vec![
+            ("command".to_owned(), 1, 0),
+            ("command".to_owned(), 2, 0),
+            ("file_edit".to_owned(), 2, 1),
+            ("tools".to_owned(), 2, 1),
+        ]
+    );
+    f.close().await;
+}

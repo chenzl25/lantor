@@ -4508,6 +4508,28 @@ mark {
   margin-left: auto;
 }
 
+.activity-progress-tool-calls {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  color: var(--activity-progress-muted-ink);
+  font-size: var(--type-size-caption);
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.activity-progress-tool-calls > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.activity-progress-tool-calls svg {
+  align-self: center;
+  flex: 0 0 auto;
+}
+
 .activity-progress-updated[data-quiet="true"] {
   color: var(--status-warning);
   font-weight: var(--type-weight-semibold);

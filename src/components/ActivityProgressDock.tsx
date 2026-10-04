@@ -108,7 +108,11 @@ export type ActiveAgentProgress = {
   lastUpdateAt: number | null;
   /** The run's streaming reply, whose text deltas also count as updates. */
   streamMessageId: string | null;
+  /** Commands and file edits the run has started, or null before the server reports them. */
+  toolCalls: RunToolCalls | null;
 };
+
+export type RunToolCalls = { commands: number; edits: number };
 
 type ProgressCandidate = {
   message: Message | null;
@@ -282,6 +286,28 @@ function compactProgressActivities(activities: AgentActivity[]) {
   });
 }
 
+function metadataCount(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/**
+ * The server stamps every run activity with the run's running totals, so the
+ * newest activity this client holds is exact even after a reload trims history.
+ */
+export function runToolCalls(activities: AgentActivity[]): RunToolCalls | null {
+  let reported = false;
+  const totals: RunToolCalls = { commands: 0, edits: 0 };
+  for (const activity of activities) {
+    const commands = metadataCount(activity.metadata?.run_command_count);
+    const edits = metadataCount(activity.metadata?.run_file_edit_count);
+    if (commands === null || edits === null) continue;
+    reported = true;
+    totals.commands = Math.max(totals.commands, commands);
+    totals.edits = Math.max(totals.edits, edits);
+  }
+  return reported ? totals : null;
+}
+
 function timestamp(value: string) {
   const parsed = new Date(value).getTime();
   return Number.isFinite(parsed) ? parsed : 0;
@@ -452,6 +478,7 @@ export function activeProgressByAgent(
       timestamp(streamMessage?.updated_at ?? ""),
       startedAt ?? 0,
     ) || null;
+    const toolCalls = runToolCalls(runActivities);
     const existing = progressByAgent.get(key);
     // A newer run for the same agent supplies the summary's step and clock.
     const newer = existing && existing.latestAt > latestAt ? existing : null;
@@ -474,6 +501,7 @@ export function activeProgressByAgent(
       startedAt: newer ? newer.startedAt : startedAt,
       lastUpdateAt: newer ? newer.lastUpdateAt : lastUpdateAt,
       streamMessageId: newer ? newer.streamMessageId : streamMessage?.id ?? null,
+      toolCalls: newer ? newer.toolCalls : toolCalls,
     });
   });
 
@@ -505,6 +533,7 @@ export function activeProgressByAgent(
         startedAt: existing?.startedAt ?? null,
         lastUpdateAt: existing?.lastUpdateAt ?? null,
         streamMessageId: existing?.streamMessageId ?? null,
+        toolCalls: existing?.toolCalls ?? null,
       });
     });
 
@@ -587,6 +616,35 @@ function ProgressLastUpdate({ lastUpdateAt, streamMessageId }: {
     <time className="activity-progress-updated" data-quiet={quiet ? "true" : "false"}>
       {quiet ? `No update for ${formatProgressDuration(quietMs)}` : `${formatProgressDuration(quietMs)} ago`}
     </time>
+  );
+}
+
+function plural(count: number, one: string, many: string) {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+/** Shows only nonzero totals, so a plain answer adds nothing to the heading. */
+function ProgressToolCalls({ toolCalls }: { toolCalls: RunToolCalls }) {
+  if (toolCalls.commands === 0 && toolCalls.edits === 0) return null;
+  const label = [
+    toolCalls.commands > 0 ? plural(toolCalls.commands, "command", "commands") : "",
+    toolCalls.edits > 0 ? plural(toolCalls.edits, "file edit", "file edits") : "",
+  ].filter(Boolean).join(", ");
+  return (
+    <span className="activity-progress-tool-calls" role="img" aria-label={label} title={label}>
+      {toolCalls.commands > 0 && (
+        <span data-tool-call="command">
+          <Terminal size={12} aria-hidden="true" />
+          {toolCalls.commands}
+        </span>
+      )}
+      {toolCalls.edits > 0 && (
+        <span data-tool-call="edit">
+          <Pencil size={12} aria-hidden="true" />
+          {toolCalls.edits}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -693,6 +751,7 @@ function ActivityProgressDockContent({ progress, onOpenWorkItem, onLoadActivityH
             <span className="activity-progress-heading">
               <strong>{title}</strong>
               {latestWorking && latest.startedAt !== null && <ProgressElapsed startedAt={latest.startedAt} />}
+              {latestWorking && latest.toolCalls && <ProgressToolCalls toolCalls={latest.toolCalls} />}
             </span>
             <small>
               <KindIcon className="activity-progress-kind-icon" size={13} aria-hidden="true" />

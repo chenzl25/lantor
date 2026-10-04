@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { retainEqual } from "../src/render-identity";
-import { activeProgressByAgent, formatProgressDuration, indexProgress } from "../src/components/ActivityProgressDock";
+import { activeProgressByAgent, formatProgressDuration, indexProgress, runToolCalls } from "../src/components/ActivityProgressDock";
 import type { Agent, AgentActivity, AgentRun, AgentWorkItem, Message } from "../src/types";
 
 test("bootstrap structural sharing retains equal rows and nested attachments without ignoring edits", () => {
@@ -79,6 +79,24 @@ test("progress carries the run clock: start, last activity and the streaming rep
   const [queued] = activeProgressByAgent([], indexProgress([], [], [work("q", null, null, "queued")], []), "channel", null);
   assert.equal(queued.startedAt, null);
   assert.equal(queued.lastUpdateAt, null);
+});
+
+test("progress takes the run's tool-call totals from the newest stamped activity", () => {
+  const runId = "00000000-0000-4000-8000-000000000004";
+  const run = { id: runId, agent_id: "agent", status: "running", started_at: "2026-09-06T12:00:00Z", stopped_at: null } as AgentRun;
+  const stamped = (id: string, minute: number, commands: unknown, edits: unknown) => ({
+    ...activity(id, runId, `Step ${id}`, minute),
+    metadata: { run_command_count: commands, run_file_edit_count: edits },
+  });
+  // A reload keeps only the newest rows; their stamps are already the run's totals.
+  const steps = [stamped("a", 1, 3, 0), stamped("b", 2, 14, 2), stamped("c", 3, 14, 2)];
+  const [live] = activeProgressByAgent([], indexProgress(steps, [run], [work("w", "root", runId)], []), "channel", "root");
+  assert.deepEqual(live.toolCalls, { commands: 14, edits: 2 });
+  assert.deepEqual(runToolCalls([stamped("x", 1, 5, 1), stamped("y", 2, 4, 1)]), { commands: 5, edits: 1 }, "totals never go backwards");
+
+  const unstamped = [activity("old", runId, "Reading", 1), stamped("bad", 2, "7", null)];
+  const [legacy] = activeProgressByAgent([], indexProgress(unstamped, [run], [work("w", "root", runId)], []), "channel", "root");
+  assert.equal(legacy.toolCalls, null, "runs from before the server stamped totals show none");
 });
 
 test("progress durations read as seconds, then minutes, then hours", () => {

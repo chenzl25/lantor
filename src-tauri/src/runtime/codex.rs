@@ -16,7 +16,9 @@ use uuid::Uuid;
 
 use crate::agent_environment::apply_agent_environment_variables;
 use crate::agent_memory::append_run_log;
-use crate::events::activity::{record_agent_activity, record_agent_activity_throttled};
+use crate::events::activity::{
+    record_agent_activity, record_agent_activity_throttled, record_run_tool_call, RunToolCall,
+};
 use crate::freshness::advance_agent_target_watermark_for_work_item;
 use crate::prompts::{
     build_codex_streaming_prompt, codex_developer_instructions, prepend_memory_context,
@@ -1552,15 +1554,22 @@ async fn handle_codex_warm_stdout_line(
                 return Ok(());
             };
             let (kind, title, detail) = codex_item_started_activity(&value);
-            record_agent_activity_throttled(
-                pool,
-                Some(agent_id),
-                Some(run_id),
-                kind,
-                title,
-                detail,
-            )
-            .await?;
+            match RunToolCall::from_activity_kind(kind) {
+                Some(call) => {
+                    record_run_tool_call(pool, agent_id, run_id, call, title, detail).await?
+                }
+                None => {
+                    record_agent_activity_throttled(
+                        pool,
+                        Some(agent_id),
+                        Some(run_id),
+                        kind,
+                        title,
+                        detail,
+                    )
+                    .await?
+                }
+            }
         }
         Some("item/reasoning/textDelta") | Some("item/reasoning/summaryTextDelta") => {
             let Some(run_id) = active_run_id else {
@@ -1769,6 +1778,80 @@ mod tests {
             pid: None,
             environment_variables: String::new(),
         }))
+    }
+
+    #[tokio::test]
+    async fn warm_codex_counts_each_started_command_and_file_change() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let agent_id = insert_test_agent(&pool, "codex-counter").await.unwrap();
+        let channel_id = insert_test_channel(&pool, "codex-counter").await.unwrap();
+        let work_item_id: uuid::Uuid = sqlx::query_scalar(
+            "insert into agent_work_items (agent_id, channel_id, title, status) values ($1, $2, 'count calls', 'running') returning id",
+        )
+        .bind(agent_id)
+        .bind(channel_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let run_id: uuid::Uuid = sqlx::query_scalar(
+            "insert into agent_runs (agent_id, work_item_id, command, status) values ($1, $2, 'codex', 'running') returning id",
+        )
+        .bind(agent_id)
+        .bind(work_item_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let runtime =
+            test_runtime_with_active_turn(run_id, work_item_id, channel_id, "codex-counter".into())
+                .await
+                .unwrap();
+        let item = |method: &str, item: serde_json::Value| {
+            serde_json::json!({"method": method, "params": {"threadId": "test-codex-thread", "item": item}})
+                .to_string()
+        };
+        let command =
+            serde_json::json!({"type": "commandExecution", "id": "c", "command": "cargo test"});
+        // Rerunning the same command right away is still a second call.
+        for line in [
+            item("item/started", command.clone()),
+            item("item/completed", command.clone()),
+            item("item/started", command),
+            item(
+                "item/started",
+                serde_json::json!({"type": "fileChange", "id": "f", "changes": [{"path": "src/main.rs"}]}),
+            ),
+        ] {
+            super::handle_codex_warm_stdout_line(&pool, agent_id, &runtime, &line)
+                .await
+                .unwrap();
+        }
+        let totals: Vec<(String, i64, i64)> = sqlx::query_as(
+            r#"
+            select title,
+                json_extract(metadata, '$.run_command_count'),
+                json_extract(metadata, '$.run_file_edit_count')
+            from agent_activities
+            where run_id = $1
+            order by rowid
+            "#,
+        )
+        .bind(run_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            totals,
+            vec![
+                ("Running command".to_owned(), 1, 0),
+                ("Command finished".to_owned(), 1, 0),
+                ("Running command".to_owned(), 2, 0),
+                ("Editing file".to_owned(), 2, 1),
+            ]
+        );
+        drop(runtime);
+        drop_test_schema(pool, schema).await;
     }
 
     #[tokio::test]

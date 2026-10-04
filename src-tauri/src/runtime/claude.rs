@@ -12,7 +12,9 @@ use uuid::Uuid;
 use crate::agent_environment::apply_agent_environment_variables;
 use crate::agent_memory::append_run_log;
 use crate::app::{to_string, CommandResult};
-use crate::events::activity::{record_agent_activity, record_agent_activity_throttled};
+use crate::events::activity::{
+    record_agent_activity, record_agent_activity_throttled, record_run_tool_call, RunToolCall,
+};
 use crate::freshness::advance_agent_target_watermark_for_work_item;
 use crate::prompts::{build_claude_streaming_prompt, claude_system_prompt, prepend_memory_context};
 use crate::runtime::{
@@ -819,15 +821,22 @@ async fn handle_claude_warm_stdout_line(
 
     if let Some((kind, title, detail)) = claude_stream_event_activity(&value) {
         if let Some(run_id) = active_run_id {
-            record_agent_activity_throttled(
-                pool,
-                Some(agent_id),
-                Some(run_id),
-                kind,
-                title,
-                detail,
-            )
-            .await?;
+            match RunToolCall::from_activity_kind(kind) {
+                Some(call) => {
+                    record_run_tool_call(pool, agent_id, run_id, call, title, detail).await?
+                }
+                None => {
+                    record_agent_activity_throttled(
+                        pool,
+                        Some(agent_id),
+                        Some(run_id),
+                        kind,
+                        title,
+                        detail,
+                    )
+                    .await?
+                }
+            }
         }
     }
 

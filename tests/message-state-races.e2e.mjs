@@ -304,7 +304,7 @@ try {
         status: "running", run_id: runId, created_at: minutesAgo(5), updated_at: minutesAgo(5), completed_at: null };
       const step = { id: id(++seq), agent_id: agentId, agent_handle: agent.handle, run_id: runId,
         kind: "command", phase: "command", status: "active", title: "Running command", summary: "Running command",
-        detail: "cargo test", metadata: {}, created_at: minutesAgo(3) };
+        detail: "cargo test", metadata: { run_command_count: 14, run_file_edit_count: 2 }, created_at: minutesAgo(3) };
       // The first visible text arrives as an upsert; later text only as deltas.
       const reply = message("Partial", { sender_agent_id: agentId, sender_name: agent.display_name, sender_role: "agent",
         delivery_state: "streaming", stream_key: `${runId}:response`, thread_root_id: root.id,
@@ -322,6 +322,11 @@ try {
       assert.match(await elapsed.innerText(), /^5m 0\ds$/);
       assert.equal(await updated.getAttribute("data-quiet"), "true");
       assert.match(await summary.innerText(), /Running command/);
+      // The server stamps run totals on every activity, so one row is enough.
+      const toolCalls = summary.locator(".activity-progress-tool-calls");
+      assert.equal(await toolCalls.getAttribute("aria-label"), "14 commands, 2 file edits");
+      assert.equal(await toolCalls.locator('[data-tool-call="command"]').innerText(), "14");
+      assert.equal(await toolCalls.locator('[data-tool-call="edit"]').innerText(), "2");
       const quietBorder = await summary.evaluate(element => getComputedStyle(element).borderTopColor);
       if (process.env.LANTOR_UI_SCREENSHOTS) {
         await page.locator(".thread .activity-progress-dock").screenshot({ path: join(process.env.LANTOR_UI_SCREENSHOTS, `run-clock-quiet-${mobile ? "mobile" : "desktop"}.png`) });
@@ -339,13 +344,16 @@ try {
       if (process.env.LANTOR_UI_SCREENSHOTS) {
         await page.locator(".thread .activity-progress-dock").screenshot({ path: join(process.env.LANTOR_UI_SCREENSHOTS, `run-clock-live-${mobile ? "mobile" : "desktop"}.png`) });
       }
+      publish({ type: "activity_upsert", activity: { ...step, id: id(++seq), detail: "cargo clippy",
+        metadata: { run_command_count: 15, run_file_edit_count: 2 }, created_at: new Date().toISOString() } });
+      await summary.locator('.activity-progress-tool-calls[aria-label="15 commands, 2 file edits"]').waitFor();
       agent.status = "idle";
       Object.assign(liveRun, { status: "exited", stopped_at: new Date().toISOString() });
       publish({ type: "agent_run_upsert", reason: "run_finished", run: liveRun });
       item.status = "done"; item.updated_at = new Date().toISOString();
       publish({ type: "work_item_upsert", work_item: item });
       await page.waitForFunction(() => !document.querySelector(".thread .activity-progress-dock"), null, { polling: 20 });
-      console.log("PASS: run clock shows elapsed time, flags a quiet run, and counts streamed text as an update");
+      console.log("PASS: run clock shows elapsed time, tool-call totals, flags a quiet run, and counts streamed text as an update");
     }
 
     // An old run may fall outside the bootstrap's 30-row history. Idle profiles
