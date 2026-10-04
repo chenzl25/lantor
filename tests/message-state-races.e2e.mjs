@@ -293,7 +293,8 @@ try {
     }
 
     // The summary states facts rather than an ETA: how long the run has been
-    // going and how long since it last did anything, streamed text included.
+    // going, and a warning only once it has gone quiet. Streamed text counts as
+    // activity; a healthy run shows no per-step "ago" clock.
     {
       const runId = id(++seq);
       const minutesAgo = minutes => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -320,7 +321,6 @@ try {
       const updated = summary.locator(".activity-progress-updated");
       await updated.filter({ hasText: /^No update for 3m 0\ds$/ }).waitFor();
       assert.match(await elapsed.innerText(), /^5m 0\ds$/);
-      assert.equal(await updated.getAttribute("data-quiet"), "true");
       assert.match(await summary.innerText(), /Running command/);
       // The server stamps run totals on every activity, so one row is enough.
       const toolCalls = summary.locator(".activity-progress-tool-calls");
@@ -338,8 +338,7 @@ try {
       reply.body += " reply";
       publish({ type: "message_delta", message_id: reply.id, append: " reply", body_length: reply.body.length, delivery_state: "streaming" });
       await page.locator(".thread").getByText(reply.body, { exact: true }).waitFor();
-      await updated.filter({ hasText: /^\ds ago$/ }).waitFor();
-      assert.equal(await updated.getAttribute("data-quiet"), "false");
+      await updated.waitFor({ state: "detached" });
       assert.notEqual(await summary.evaluate(element => getComputedStyle(element).borderTopColor), quietBorder);
       if (process.env.LANTOR_UI_SCREENSHOTS) {
         await page.locator(".thread .activity-progress-dock").screenshot({ path: join(process.env.LANTOR_UI_SCREENSHOTS, `run-clock-live-${mobile ? "mobile" : "desktop"}.png`) });
@@ -347,13 +346,14 @@ try {
       publish({ type: "activity_upsert", activity: { ...step, id: id(++seq), detail: "cargo clippy",
         metadata: { run_command_count: 15, run_file_edit_count: 2 }, created_at: new Date().toISOString() } });
       await summary.locator('.activity-progress-tool-calls[aria-label="15 commands, 2 file edits"]').waitFor();
+      assert.equal(await updated.count(), 0, "a fresh activity keeps the quiet warning hidden");
       agent.status = "idle";
       Object.assign(liveRun, { status: "exited", stopped_at: new Date().toISOString() });
       publish({ type: "agent_run_upsert", reason: "run_finished", run: liveRun });
       item.status = "done"; item.updated_at = new Date().toISOString();
       publish({ type: "work_item_upsert", work_item: item });
       await page.waitForFunction(() => !document.querySelector(".thread .activity-progress-dock"), null, { polling: 20 });
-      console.log("PASS: run clock shows elapsed time, tool-call totals, flags a quiet run, and counts streamed text as an update");
+      console.log("PASS: run clock shows elapsed time and tool-call totals, warns only on a quiet run, and counts streamed text as an update");
     }
 
     // An old run may fall outside the bootstrap's 30-row history. Idle profiles

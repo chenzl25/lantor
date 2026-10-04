@@ -4504,8 +4504,11 @@ mark {
   white-space: nowrap;
 }
 
+/* Rendered only once a run has gone quiet, so it is always a warning. */
 .activity-progress-updated {
   margin-left: auto;
+  color: var(--status-warning);
+  font-weight: var(--type-weight-semibold);
 }
 
 .activity-progress-tool-calls {
@@ -4530,12 +4533,7 @@ mark {
   flex: 0 0 auto;
 }
 
-.activity-progress-updated[data-quiet="true"] {
-  color: var(--status-warning);
-  font-weight: var(--type-weight-semibold);
-}
-
-.activity-progress-summary:has(.activity-progress-updated[data-quiet="true"]) {
+.activity-progress-summary:has(.activity-progress-updated) {
   border-color: var(--status-warning-border);
 }
 

@@ -593,9 +593,11 @@ function ProgressElapsed({ startedAt }: { startedAt: number }) {
 }
 
 /**
- * Time since the run last showed a sign of life: its start, an activity, or
- * streamed reply text. Text deltas bypass the message list and carry no
- * timestamp, so the dock notes when they arrive while it is on screen.
+ * Warns once the run has shown no sign of life (its start, an activity, or
+ * streamed reply text) for QUIET_AFTER_MS. A healthy run shows nothing here:
+ * a ticking "ago" label restarts with every command and only adds noise.
+ * Text deltas bypass the message list and carry no timestamp, so the dock
+ * notes when they arrive while it is on screen.
  */
 function ProgressLastUpdate({ lastUpdateAt, streamMessageId }: {
   lastUpdateAt: number;
@@ -611,10 +613,10 @@ function ProgressLastUpdate({ lastUpdateAt, streamMessageId }: {
     });
   }, [streamMessageId]);
   const quietMs = Math.max(0, now - Math.max(lastUpdateAt, textAtRef.current));
-  const quiet = quietMs >= QUIET_AFTER_MS;
+  if (quietMs < QUIET_AFTER_MS) return null;
   return (
-    <time className="activity-progress-updated" data-quiet={quiet ? "true" : "false"}>
-      {quiet ? `No update for ${formatProgressDuration(quietMs)}` : `${formatProgressDuration(quietMs)} ago`}
+    <time className="activity-progress-updated">
+      No update for {formatProgressDuration(quietMs)}
     </time>
   );
 }
