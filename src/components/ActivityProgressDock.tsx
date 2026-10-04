@@ -19,15 +19,18 @@ import {
   Wrench,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ACTIVE_RUN_STATUSES } from "../types";
 import type { Agent, AgentActivity, AgentRun, AgentWorkItem, Message } from "../types";
 import { messageHasVisibleContent, messageRunId } from "../message-grouping";
 import { formatClockTime } from "../ui-utils";
+import { streamingMessages } from "../streaming-message-store";
 import { useEventCallback } from "../hooks/useEventCallback";
 import { AgentAvatar } from "./AgentAvatar";
 
 const MISSING_HISTORY_GRACE_MS = 4_000;
+/** Past turns: 4% go two minutes without any activity, so this marks an unusual pause. */
+const QUIET_AFTER_MS = 120_000;
 
 type ActivityProgressDockProps = {
   progress: ActiveAgentProgress[];
@@ -99,6 +102,12 @@ export type ActiveAgentProgress = {
   latestActivity: AgentActivity | null;
   history: AgentActivity[];
   latestAt: number;
+  /** When the live run started, or null while only queued. */
+  startedAt: number | null;
+  /** Run start, latest run activity or reply write; text deltas are tracked by the dock. */
+  lastUpdateAt: number | null;
+  /** The run's streaming reply, whose text deltas also count as updates. */
+  streamMessageId: string | null;
 };
 
 type ProgressCandidate = {
@@ -358,6 +367,13 @@ export function activeProgressByAgent(
       && message.delivery_state === "streaming"
       && !messageHasVisibleContent(message));
 
+  // Visible streaming replies; empty placeholders are not in the row lists.
+  const streamMessageByRun = new Map<string, Message>();
+  messages.forEach((message) => {
+    const runId = message.delivery_state === "streaming" ? messageRunId(message) : null;
+    if (runId) streamMessageByRun.set(runId, message);
+  });
+
   const { activitiesByRun, runsById, latestRunsByAgent, workItemsByRun, agentsById, agentsByHandle } = index;
   const surfaceWorkItems = channelId
     ? index.workItemsByChannel.get(channelId)?.get(threadRootId) ?? []
@@ -429,7 +445,16 @@ export function activeProgressByAgent(
     }
     const key = agent?.handle || handle || candidate.message?.sender_name || runId;
     const latestAt = Math.max(timestamp(latestActivity?.created_at ?? ""), candidate.latestAt);
+    const startedAt = timestamp(run?.started_at ?? "") || timestamp(candidate.message?.created_at ?? "") || null;
+    const streamMessage = streamMessageByRun.get(runId) ?? null;
+    const lastUpdateAt = Math.max(
+      timestamp(latestActivity?.created_at ?? ""),
+      timestamp(streamMessage?.updated_at ?? ""),
+      startedAt ?? 0,
+    ) || null;
     const existing = progressByAgent.get(key);
+    // A newer run for the same agent supplies the summary's step and clock.
+    const newer = existing && existing.latestAt > latestAt ? existing : null;
     const history = [...runActivities, ...(existing?.history ?? [])]
       .sort((left, right) => timestamp(right.created_at) - timestamp(left.created_at));
     const compactHistory = compactProgressActivities(history).slice(0, MAX_PROGRESS_HISTORY_ITEMS);
@@ -443,9 +468,12 @@ export function activeProgressByAgent(
       workItem: workItem ?? existing?.workItem ?? null,
       queuedItems: existing?.queuedItems ?? [],
       state: existing?.state === "working" || candidate.state === "working" ? "working" : "queued",
-      latestActivity: existing && existing.latestAt > latestAt ? existing.latestActivity : latestActivity,
+      latestActivity: newer ? newer.latestActivity : latestActivity,
       history: compactHistory,
       latestAt: Math.max(existing?.latestAt ?? 0, latestAt),
+      startedAt: newer ? newer.startedAt : startedAt,
+      lastUpdateAt: newer ? newer.lastUpdateAt : lastUpdateAt,
+      streamMessageId: newer ? newer.streamMessageId : streamMessage?.id ?? null,
     });
   });
 
@@ -474,11 +502,92 @@ export function activeProgressByAgent(
         latestActivity: existing?.latestActivity ?? null,
         history: existing?.history ?? [],
         latestAt: Math.max(existing?.latestAt ?? 0, timestamp(workItem.updated_at)),
+        startedAt: existing?.startedAt ?? null,
+        lastUpdateAt: existing?.lastUpdateAt ?? null,
+        streamMessageId: existing?.streamMessageId ?? null,
       });
     });
 
   return Array.from(progressByAgent.values())
     .sort((left, right) => right.latestAt - left.latestAt);
+}
+
+// One shared one-second clock for every visible dock, running only while one
+// is mounted, so the summary ticks without re-rendering the dock each second.
+const clockListeners = new Set<() => void>();
+let clockNow = Date.now();
+let clockTimer: number | null = null;
+
+function subscribeClock(listener: () => void) {
+  clockListeners.add(listener);
+  if (clockTimer === null) {
+    clockNow = Date.now();
+    clockTimer = window.setInterval(() => {
+      clockNow = Date.now();
+      clockListeners.forEach((notify) => notify());
+    }, 1_000);
+  }
+  return () => {
+    clockListeners.delete(listener);
+    if (clockListeners.size === 0 && clockTimer !== null) {
+      window.clearInterval(clockTimer);
+      clockTimer = null;
+    }
+  };
+}
+
+function useSecondClock() {
+  return useSyncExternalStore(subscribeClock, () => clockNow, () => clockNow);
+}
+
+export function formatProgressDuration(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1_000));
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+  if (minutes > 0) return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  return `${seconds}s`;
+}
+
+function ProgressElapsed({ startedAt }: { startedAt: number }) {
+  const now = useSecondClock();
+  return (
+    <time
+      className="activity-progress-elapsed"
+      dateTime={new Date(startedAt).toISOString()}
+      title={`Started ${formatClockTime(new Date(startedAt).toISOString())}`}
+    >
+      {formatProgressDuration(now - startedAt)}
+    </time>
+  );
+}
+
+/**
+ * Time since the run last showed a sign of life: its start, an activity, or
+ * streamed reply text. Text deltas bypass the message list and carry no
+ * timestamp, so the dock notes when they arrive while it is on screen.
+ */
+function ProgressLastUpdate({ lastUpdateAt, streamMessageId }: {
+  lastUpdateAt: number;
+  streamMessageId: string | null;
+}) {
+  const now = useSecondClock();
+  const textAtRef = useRef(0);
+  useEffect(() => {
+    textAtRef.current = 0;
+    if (!streamMessageId) return undefined;
+    return streamingMessages.subscribe(streamMessageId, () => {
+      textAtRef.current = Date.now();
+    });
+  }, [streamMessageId]);
+  const quietMs = Math.max(0, now - Math.max(lastUpdateAt, textAtRef.current));
+  const quiet = quietMs >= QUIET_AFTER_MS;
+  return (
+    <time className="activity-progress-updated" data-quiet={quiet ? "true" : "false"}>
+      {quiet ? `No update for ${formatProgressDuration(quietMs)}` : `${formatProgressDuration(quietMs)} ago`}
+    </time>
+  );
 }
 
 function progressAgentIds(progress: ActiveAgentProgress[]) {
@@ -581,7 +690,10 @@ function ActivityProgressDockContent({ progress, onOpenWorkItem, onLoadActivityH
             ))}
           </span>
           <span className="activity-progress-copy">
-            <strong>{title}</strong>
+            <span className="activity-progress-heading">
+              <strong>{title}</strong>
+              {latestWorking && latest.startedAt !== null && <ProgressElapsed startedAt={latest.startedAt} />}
+            </span>
             <small>
               <KindIcon className="activity-progress-kind-icon" size={13} aria-hidden="true" />
               <span className="activity-progress-kind-label">{latestKindMeta.label}</span>
@@ -589,6 +701,9 @@ function ActivityProgressDockContent({ progress, onOpenWorkItem, onLoadActivityH
               <span>{latestTitle}</span>
               {latestDetail && <em>{compact(latestDetail, 80)}</em>}
               {queuedCount > 0 && <em>{queuedCount} queued on this surface</em>}
+              {latestWorking && !providerRetrying && latest.lastUpdateAt !== null && (
+                <ProgressLastUpdate lastUpdateAt={latest.lastUpdateAt} streamMessageId={latest.streamMessageId} />
+              )}
             </small>
           </span>
           {jumpable && (

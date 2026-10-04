@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { chromium, webkit } from "playwright";
 
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -290,6 +290,62 @@ try {
       publish({ type: "work_item_upsert", work_item: item });
       await page.waitForFunction(() => !document.querySelector(".thread .activity-progress-dock"), null, { polling: 20 });
       console.log("PASS: live run without local activity shows the toggle and loads history once");
+    }
+
+    // The summary states facts rather than an ETA: how long the run has been
+    // going and how long since it last did anything, streamed text included.
+    {
+      const runId = id(++seq);
+      const minutesAgo = minutes => new Date(Date.now() - minutes * 60_000).toISOString();
+      const liveRun = run("running", { id: runId, started_at: minutesAgo(5) });
+      const item = { id: id(++seq), agent_id: agentId, agent_handle: agent.handle, channel_id: channelId,
+        channel_name: "race-test", thread_root_id: root.id, source_message_id: root.id,
+        task_id: null, task_number: null, source_kind: "mention", title: "Run clock fixture", context: "",
+        status: "running", run_id: runId, created_at: minutesAgo(5), updated_at: minutesAgo(5), completed_at: null };
+      const step = { id: id(++seq), agent_id: agentId, agent_handle: agent.handle, run_id: runId,
+        kind: "command", phase: "command", status: "active", title: "Running command", summary: "Running command",
+        detail: "cargo test", metadata: {}, created_at: minutesAgo(3) };
+      // The first visible text arrives as an upsert; later text only as deltas.
+      const reply = message("Partial", { sender_agent_id: agentId, sender_name: agent.display_name, sender_role: "agent",
+        delivery_state: "streaming", stream_key: `${runId}:response`, thread_root_id: root.id,
+        created_at: minutesAgo(4), updated_at: minutesAgo(4) });
+      agent.status = "running";
+      state.agent_runs.push(liveRun); state.agent_work_items.push(item); state.messages.push(reply);
+      publish({ type: "agent_run_upsert", reason: "run_running", run: liveRun });
+      publish({ type: "work_item_upsert", work_item: item });
+      publish({ type: "activity_upsert", activity: step });
+      publish({ type: "message_upsert", message: reply });
+      const summary = page.locator(`.thread .activity-progress-summary[data-state="working"]`);
+      const elapsed = summary.locator(".activity-progress-elapsed");
+      const updated = summary.locator(".activity-progress-updated");
+      await updated.filter({ hasText: /^No update for 3m 0\ds$/ }).waitFor();
+      assert.match(await elapsed.innerText(), /^5m 0\ds$/);
+      assert.equal(await updated.getAttribute("data-quiet"), "true");
+      assert.match(await summary.innerText(), /Running command/);
+      const quietBorder = await summary.evaluate(element => getComputedStyle(element).borderTopColor);
+      if (process.env.LANTOR_UI_SCREENSHOTS) {
+        await page.locator(".thread .activity-progress-dock").screenshot({ path: join(process.env.LANTOR_UI_SCREENSHOTS, `run-clock-quiet-${mobile ? "mobile" : "desktop"}.png`) });
+      }
+      const firstElapsed = await elapsed.innerText();
+      await page.waitForFunction(([selector, before]) => document.querySelector(selector)?.textContent !== before,
+        [".thread .activity-progress-elapsed", firstElapsed]);
+      // Text deltas carry no timestamp; the dock still counts them as an update.
+      reply.body += " reply";
+      publish({ type: "message_delta", message_id: reply.id, append: " reply", body_length: reply.body.length, delivery_state: "streaming" });
+      await page.locator(".thread").getByText(reply.body, { exact: true }).waitFor();
+      await updated.filter({ hasText: /^\ds ago$/ }).waitFor();
+      assert.equal(await updated.getAttribute("data-quiet"), "false");
+      assert.notEqual(await summary.evaluate(element => getComputedStyle(element).borderTopColor), quietBorder);
+      if (process.env.LANTOR_UI_SCREENSHOTS) {
+        await page.locator(".thread .activity-progress-dock").screenshot({ path: join(process.env.LANTOR_UI_SCREENSHOTS, `run-clock-live-${mobile ? "mobile" : "desktop"}.png`) });
+      }
+      agent.status = "idle";
+      Object.assign(liveRun, { status: "exited", stopped_at: new Date().toISOString() });
+      publish({ type: "agent_run_upsert", reason: "run_finished", run: liveRun });
+      item.status = "done"; item.updated_at = new Date().toISOString();
+      publish({ type: "work_item_upsert", work_item: item });
+      await page.waitForFunction(() => !document.querySelector(".thread .activity-progress-dock"), null, { polling: 20 });
+      console.log("PASS: run clock shows elapsed time, flags a quiet run, and counts streamed text as an update");
     }
 
     // An old run may fall outside the bootstrap's 30-row history. Idle profiles

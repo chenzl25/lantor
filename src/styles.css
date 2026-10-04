@@ -4482,6 +4482,41 @@ mark {
   gap: 2px;
 }
 
+.activity-progress-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.activity-progress-heading strong {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.activity-progress-elapsed,
+.activity-progress-updated {
+  flex: 0 0 auto;
+  color: var(--activity-progress-muted-ink);
+  font-size: var(--type-size-caption);
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.activity-progress-updated {
+  margin-left: auto;
+}
+
+.activity-progress-updated[data-quiet="true"] {
+  color: var(--status-warning);
+  font-weight: var(--type-weight-semibold);
+}
+
+.activity-progress-summary:has(.activity-progress-updated[data-quiet="true"]) {
+  border-color: var(--status-warning-border);
+}
+
 .activity-progress-copy strong {
   overflow: hidden;
   color: var(--activity-progress-title-ink);
@@ -4535,7 +4570,8 @@ mark {
 }
 
 @container activity-progress-dock (max-width: 360px) {
-  .activity-progress-copy small em {
+  .activity-progress-copy small em,
+  .activity-progress-kind-label {
     display: none;
   }
   .activity-progress-copy small span {

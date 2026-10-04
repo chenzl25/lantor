@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { retainEqual } from "../src/render-identity";
-import { activeProgressByAgent, indexProgress } from "../src/components/ActivityProgressDock";
+import { activeProgressByAgent, formatProgressDuration, indexProgress } from "../src/components/ActivityProgressDock";
 import type { Agent, AgentActivity, AgentRun, AgentWorkItem, Message } from "../src/types";
 
 test("bootstrap structural sharing retains equal rows and nested attachments without ignoring edits", () => {
@@ -60,6 +60,32 @@ test("terminal progress clears running candidates while empty streams and queued
   const run = { id: runId, status: "running", started_at: "2026-09-06T12:00:00Z", stopped_at: null } as AgentRun;
   assert.equal(activeProgressByAgent([], indexProgress([], [run], [{ ...item, status: "done" }], []), "channel", "root").length, 1, "active run wins over a settled work item");
   assert.deepEqual(activeProgressByAgent([], indexProgress([], [], [{ ...item, status: "done", updated_at: "2000-01-01T00:00:00Z" }], []), "channel", "root"), [], "expired completion does not stay active");
+});
+
+test("progress carries the run clock: start, last activity and the streaming reply", () => {
+  const runId = "00000000-0000-4000-8000-000000000003";
+  const run = { id: runId, agent_id: "agent", status: "running", started_at: "2026-09-06T12:00:00Z", stopped_at: null } as AgentRun;
+  const steps = [activity("first", runId, "Reading", 1), activity("latest", runId, "Running command", 4)];
+  const reply = { id: "reply", sender_name: "Hancock", sender_role: "agent", delivery_state: "streaming", body: "Partial reply", attachments: [], artifacts: [], stream_key: `${runId}:response`, created_at: "2026-09-06T12:00:01Z", updated_at: "2026-09-06T12:00:01Z" } as unknown as Message;
+  const [live] = activeProgressByAgent([reply], indexProgress(steps, [run], [work("w", "root", runId)], []), "channel", "root");
+  assert.equal(live.startedAt, Date.parse("2026-09-06T12:00:00Z"));
+  assert.equal(live.lastUpdateAt, Date.parse("2026-09-06T12:04:00Z"));
+  const [written] = activeProgressByAgent([{ ...reply, updated_at: "2026-09-06T12:05:00Z" }], indexProgress(steps, [run], [work("w", "root", runId)], []), "channel", "root");
+  assert.equal(written.lastUpdateAt, Date.parse("2026-09-06T12:05:00Z"), "a later reply write is an update");
+  assert.equal(live.streamMessageId, reply.id);
+
+  const [fresh] = activeProgressByAgent([], indexProgress([], [run], [work("w", "root", runId)], []), "channel", "root");
+  assert.equal(fresh.lastUpdateAt, fresh.startedAt, "a run with no activity yet was last updated when it started");
+  const [queued] = activeProgressByAgent([], indexProgress([], [], [work("q", null, null, "queued")], []), "channel", null);
+  assert.equal(queued.startedAt, null);
+  assert.equal(queued.lastUpdateAt, null);
+});
+
+test("progress durations read as seconds, then minutes, then hours", () => {
+  assert.equal(formatProgressDuration(-5_000), "0s");
+  assert.equal(formatProgressDuration(42_900), "42s");
+  assert.equal(formatProgressDuration(192_000), "3m 12s");
+  assert.equal(formatProgressDuration(3_845_000), "1h 04m");
 });
 
 const progressRunId = "00000000-0000-4000-8000-000000000002";
