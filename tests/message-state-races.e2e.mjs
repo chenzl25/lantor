@@ -322,11 +322,18 @@ try {
       await updated.filter({ hasText: /^No update for 3m 0\ds$/ }).waitFor();
       assert.match(await elapsed.innerText(), /^5m 0\ds$/);
       assert.match(await summary.innerText(), /Running command/);
+      // A phone-width dock keeps the agent's name and drops " is working".
+      const name = summary.locator(".activity-progress-heading strong");
+      assert.equal(await name.innerText(), mobile ? agent.display_name : `${agent.display_name} is working`);
+      assert.ok(await name.evaluate(element => element.scrollWidth <= element.clientWidth), "the agent's name is never truncated");
       // The server stamps run totals on every activity, so one row is enough.
+      // Totals read as words in the elapsed time's line, on one baseline.
       const toolCalls = summary.locator(".activity-progress-tool-calls");
-      assert.equal(await toolCalls.getAttribute("aria-label"), "14 commands, 2 file edits");
-      assert.equal(await toolCalls.locator('[data-tool-call="command"]').innerText(), "14");
-      assert.equal(await toolCalls.locator('[data-tool-call="edit"]').innerText(), "2");
+      assert.equal(await toolCalls.innerText(), "14 commands · 2 edits");
+      assert.match(await summary.locator(".activity-progress-meta").innerText(), /^5m 0\ds · 14 commands · 2 edits$/);
+      const baselines = await summary.evaluate(element => [".activity-progress-elapsed", ".activity-progress-tool-calls"]
+        .map(selector => element.querySelector(selector).getBoundingClientRect().bottom));
+      assert.ok(Math.abs(baselines[0] - baselines[1]) < 0.5, `elapsed and totals share a line box: ${baselines}`);
       const quietBorder = await summary.evaluate(element => getComputedStyle(element).borderTopColor);
       if (process.env.LANTOR_UI_SCREENSHOTS) {
         await page.locator(".thread .activity-progress-dock").screenshot({ path: join(process.env.LANTOR_UI_SCREENSHOTS, `run-clock-quiet-${mobile ? "mobile" : "desktop"}.png`) });
@@ -345,7 +352,7 @@ try {
       }
       publish({ type: "activity_upsert", activity: { ...step, id: id(++seq), detail: "cargo clippy",
         metadata: { run_command_count: 15, run_file_edit_count: 2 }, created_at: new Date().toISOString() } });
-      await summary.locator('.activity-progress-tool-calls[aria-label="15 commands, 2 file edits"]').waitFor();
+      await toolCalls.filter({ hasText: /^15 commands · 2 edits$/ }).waitFor();
       assert.equal(await updated.count(), 0, "a fresh activity keeps the quiet warning hidden");
       agent.status = "idle";
       Object.assign(liveRun, { status: "exited", stopped_at: new Date().toISOString() });

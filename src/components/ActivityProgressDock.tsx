@@ -625,29 +625,17 @@ function plural(count: number, one: string, many: string) {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-/** Shows only nonzero totals, so a plain answer adds nothing to the heading. */
-function ProgressToolCalls({ toolCalls }: { toolCalls: RunToolCalls }) {
-  if (toolCalls.commands === 0 && toolCalls.edits === 0) return null;
-  const label = [
+/**
+ * Totals in plain words ("12 commands · 2 edits"), set in the elapsed time's
+ * type so they read at a glance and share its baseline. Zero totals are
+ * omitted, so a plain answer adds nothing to the heading.
+ */
+function toolCallsLabel(toolCalls: RunToolCalls | null) {
+  if (!toolCalls) return "";
+  return [
     toolCalls.commands > 0 ? plural(toolCalls.commands, "command", "commands") : "",
-    toolCalls.edits > 0 ? plural(toolCalls.edits, "file edit", "file edits") : "",
-  ].filter(Boolean).join(", ");
-  return (
-    <span className="activity-progress-tool-calls" role="img" aria-label={label} title={label}>
-      {toolCalls.commands > 0 && (
-        <span data-tool-call="command">
-          <Terminal size={12} aria-hidden="true" />
-          {toolCalls.commands}
-        </span>
-      )}
-      {toolCalls.edits > 0 && (
-        <span data-tool-call="edit">
-          <Pencil size={12} aria-hidden="true" />
-          {toolCalls.edits}
-        </span>
-      )}
-    </span>
-  );
+    toolCalls.edits > 0 ? plural(toolCalls.edits, "edit", "edits") : "",
+  ].filter(Boolean).join(" · ");
 }
 
 function progressAgentIds(progress: ActiveAgentProgress[]) {
@@ -708,8 +696,12 @@ function ActivityProgressDockContent({ progress, onOpenWorkItem, onLoadActivityH
     : workingCount > 0
       ? `${workingCount} ${workingCount === 1 ? "agent is" : "agents are"} working`
       : `${progress.length} agents have queued work`;
+  // A narrow dock drops " is working" so the agent's name survives next to
+  // the elapsed time and totals; the dock itself already says it is working.
+  const soloWorking = progress.length === 1 && latestWorking && !providerRetrying;
   const latestTitle = latestActivity ? userFacingActivityTitle(latestActivity) : latestWorking ? "Working" : "Queued";
   const latestDetail = latestActivity ? activityDetail(latestActivity) : "";
+  const toolCallsText = toolCallsLabel(latest.toolCalls);
   const history = progress
     .flatMap((item) =>
       item.history.map((activity) => ({
@@ -751,9 +743,21 @@ function ActivityProgressDockContent({ progress, onOpenWorkItem, onLoadActivityH
           </span>
           <span className="activity-progress-copy">
             <span className="activity-progress-heading">
-              <strong>{title}</strong>
-              {latestWorking && latest.startedAt !== null && <ProgressElapsed startedAt={latest.startedAt} />}
-              {latestWorking && latest.toolCalls && <ProgressToolCalls toolCalls={latest.toolCalls} />}
+              <strong>
+                {soloWorking ? (
+                  <>
+                    {latest.agent.display_name}
+                    <span className="activity-progress-title-suffix"> is working</span>
+                  </>
+                ) : title}
+              </strong>
+              {latestWorking && (latest.startedAt !== null || toolCallsText) && (
+                <span className="activity-progress-meta">
+                  {latest.startedAt !== null && <ProgressElapsed startedAt={latest.startedAt} />}
+                  {latest.startedAt !== null && toolCallsText && " · "}
+                  {toolCallsText && <span className="activity-progress-tool-calls">{toolCallsText}</span>}
+                </span>
+              )}
             </span>
             <small>
               <KindIcon className="activity-progress-kind-icon" size={13} aria-hidden="true" />

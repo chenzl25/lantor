@@ -4482,19 +4482,23 @@ mark {
   gap: 2px;
 }
 
+/* The name keeps its full width; when it and the time/totals cannot share a
+   line, the totals wrap below it instead of truncating the name. */
 .activity-progress-heading {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  column-gap: 8px;
   min-width: 0;
 }
 
 .activity-progress-heading strong {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
+  max-width: 100%;
   min-width: 0;
 }
 
-.activity-progress-elapsed,
+.activity-progress-meta,
 .activity-progress-updated {
   flex: 0 0 auto;
   color: var(--activity-progress-muted-ink);
@@ -4509,28 +4513,6 @@ mark {
   margin-left: auto;
   color: var(--status-warning);
   font-weight: var(--type-weight-semibold);
-}
-
-.activity-progress-tool-calls {
-  display: inline-flex;
-  flex: 0 0 auto;
-  gap: 8px;
-  color: var(--activity-progress-muted-ink);
-  font-size: var(--type-size-caption);
-  font-variant-numeric: tabular-nums;
-  line-height: 18px;
-  white-space: nowrap;
-}
-
-.activity-progress-tool-calls > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.activity-progress-tool-calls svg {
-  align-self: center;
-  flex: 0 0 auto;
 }
 
 .activity-progress-summary:has(.activity-progress-updated) {
@@ -4587,6 +4569,12 @@ mark {
   min-width: 0;
   color: var(--activity-progress-muted-ink);
   font-style: normal;
+}
+
+@container activity-progress-dock (max-width: 440px) {
+  .activity-progress-title-suffix {
+    display: none;
+  }
 }
 
 @container activity-progress-dock (max-width: 360px) {
