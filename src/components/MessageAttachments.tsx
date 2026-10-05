@@ -4,6 +4,7 @@ import { type MouseEvent, type PointerEvent, useEffect, useState } from "react";
 import { Download, FileText, Image, X, ZoomIn, ZoomOut } from "lucide-react";
 import { attachmentAssetUrl, downloadAttachment, isTauriRuntime, openExternalUrl } from "../apiClient";
 import { openAttachmentSheet, triggerBrowserDownload, usesAttachmentSheet } from "../attachment-sheet";
+import { useSentImagePreview } from "../sent-image-previews";
 import { MessageAttachment } from "../types";
 import { formatByteSize } from "../ui-utils";
 
@@ -89,6 +90,13 @@ function isolateAttachmentEvent(event: MouseEvent<HTMLElement> | PointerEvent<HT
   event.stopPropagation();
 }
 
+function ImageThumbnail({ attachment }: { attachment: MessageAttachment }) {
+  // A just-sent image keeps its local copy until the server image has loaded.
+  const sentPreview = useSentImagePreview(attachment.id);
+  const src = attachment.local_url ?? sentPreview ?? attachmentAssetUrl(attachment.storage_path, attachment.id, true);
+  return <img src={src} alt="" loading="lazy" decoding="async" />;
+}
+
 export function MessageAttachments({ attachments, showImageThumbnails }: MessageAttachmentsProps) {
   const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
   const [imagePreviewZoomed, setImagePreviewZoomed] = useState(false);
@@ -142,13 +150,16 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
   return (
     <>
       <div className="message-attachments">
-        {attachments.map((attachment) => {
+        {/* Keyed by position: when a send settles, its local attachments are
+            replaced by persisted ones with new ids, and a stable key keeps the
+            tile (and its painted image) mounted instead of reloading it. */}
+        {attachments.map((attachment, index) => {
           const src = attachment.local_url ?? attachmentAssetUrl(attachment.storage_path, attachment.id);
           const isImage = attachment.mime_type.startsWith("image/");
           if (isImage) {
             return (
               <div
-                key={attachment.id}
+                key={index}
                 className={`message-attachment image ${showImageThumbnails ? "" : "compact-image"} ${attachment.local_url ? "pending" : ""}`}
                 data-attachment-name={attachment.original_name}
                 onPointerDown={isolateAttachmentEvent}
@@ -163,7 +174,7 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
                   }}
                 >
                   {showImageThumbnails ? (
-                    <img src={attachment.local_url ?? attachmentAssetUrl(attachment.storage_path, attachment.id, true)} alt="" loading="lazy" decoding="async" />
+                    <ImageThumbnail attachment={attachment} />
                   ) : (
                     <>
                       <span className="attachment-icon"><Image size={18} /></span>
@@ -192,7 +203,7 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
           }
           return (
             <div
-              key={attachment.id}
+              key={index}
               className={`message-attachment ${attachment.local_url ? "pending" : ""}`}
               data-attachment-name={attachment.original_name}
               onPointerDown={isolateAttachmentEvent}

@@ -71,6 +71,7 @@ import { UnreadBadge } from "./components/UnreadBadge";
 import { isProgressOnlyMessage, messageHasVisibleContent } from "./message-grouping";
 import { messageReferenceLocation, type MessageReferenceKind } from "./message-references";
 import { shouldDismissOnEscape } from "./escape-dismiss";
+import { handOffSentImagePreviews } from "./sent-image-previews";
 import {
   ACTIVE_RUN_STATUSES,
   Agent,
@@ -980,7 +981,8 @@ function App() {
   // the deletion can't resurrect the channel in the sidebar. Entries self-evict
   // once an authoritative bootstrap no longer returns the channel.
   const optimisticRemovedChannelsRef = useRef<Set<string>>(new Set());
-  const optimisticAttachmentUrlsRef = useRef<Map<string, string[]>>(new Map());
+  // Local blob-URL attachments of in-flight sends, keyed by message id.
+  const optimisticAttachmentsRef = useRef<Map<string, MessageAttachment[]>>(new Map());
   // Per-message latest-intent sequence for save/unsave, so a late-failing
   // request cannot roll back over a newer toggle for the same message.
   const savedToggleSeqRef = useRef<Map<string, number>>(new Map());
@@ -1043,10 +1045,10 @@ function App() {
 
   useEffect(() => {
     return () => {
-      optimisticAttachmentUrlsRef.current.forEach((objectUrls) => {
-        objectUrls.forEach((url) => URL.revokeObjectURL(url));
+      optimisticAttachmentsRef.current.forEach((attachments) => {
+        attachments.forEach((attachment) => attachment.local_url && URL.revokeObjectURL(attachment.local_url));
       });
-      optimisticAttachmentUrlsRef.current.clear();
+      optimisticAttachmentsRef.current.clear();
       optimisticMessagesRef.current.clear();
       optimisticChannelsRef.current.clear();
       optimisticRemovedChannelsRef.current.clear();
@@ -4112,10 +4114,8 @@ function App() {
   }
 
   function optimisticMessageAttachments(messageId: string, attachments: DraftAttachment[]): MessageAttachment[] {
-    const objectUrls: string[] = [];
     const messageAttachments = attachments.map((attachment) => {
       const localUrl = URL.createObjectURL(attachment.file);
-      objectUrls.push(localUrl);
       return {
         id: `local-${attachment.id}`,
         message_id: messageId,
@@ -4127,16 +4127,18 @@ function App() {
         created_at: new Date().toISOString(),
       };
     });
-    if (objectUrls.length > 0) {
-      optimisticAttachmentUrlsRef.current.set(messageId, objectUrls);
+    if (messageAttachments.length > 0) {
+      optimisticAttachmentsRef.current.set(messageId, messageAttachments);
     }
     return messageAttachments;
   }
 
-  function releaseOptimisticAttachmentUrls(messageId: string) {
-    const objectUrls = optimisticAttachmentUrlsRef.current.get(messageId) ?? [];
-    objectUrls.forEach((url) => URL.revokeObjectURL(url));
-    optimisticAttachmentUrlsRef.current.delete(messageId);
+  // On a settled send, sent images keep their local copy on screen until the
+  // server image loads; on a failed send, every local URL is revoked.
+  function releaseOptimisticAttachmentUrls(messageId: string, persistedMessage?: Message) {
+    const attachments = optimisticAttachmentsRef.current.get(messageId) ?? [];
+    optimisticAttachmentsRef.current.delete(messageId);
+    handOffSentImagePreviews(attachments, persistedMessage?.attachments ?? []);
   }
 
   function addOptimisticOwnerMessage(
@@ -4184,7 +4186,7 @@ function App() {
 
   function acknowledgeOptimisticMessage(message: Message) {
     if (message.seq > 0 && optimisticMessagesRef.current.delete(message.id)) {
-      releaseOptimisticAttachmentUrls(message.id);
+      releaseOptimisticAttachmentUrls(message.id, message);
     }
   }
 
@@ -4206,7 +4208,7 @@ function App() {
 
   function settleOptimisticMessage(messageId: string, persistedMessage: Message) {
     optimisticMessagesRef.current.delete(messageId);
-    releaseOptimisticAttachmentUrls(messageId);
+    releaseOptimisticAttachmentUrls(messageId, persistedMessage);
     knownMessageIdsRef.current?.delete(messageId);
     knownMessageIdsRef.current?.add(persistedMessage.id);
     invalidatePendingRefreshResult();
