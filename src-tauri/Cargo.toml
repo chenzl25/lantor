@@ -31,3 +31,10 @@ uuid = { version = "1.16.0", features = ["serde", "v4"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+
+# The desktop app (and the :8787 server it hosts) runs as a dev build under
+# `tauri dev`. Unoptimized dependencies make image decoding and thumbnail
+# encoding 10x+ slower, so optimize dependencies only; Lantor's own crate stays
+# at opt-level 0 and keeps fast incremental rebuilds.
+[profile.dev.package."*"]
+opt-level = 3
