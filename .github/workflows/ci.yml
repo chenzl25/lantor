@@ -47,11 +47,14 @@ jobs:
       - name: Format Tauri backend
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
+      # Cargo.toml optimizes dependencies in dev builds for the desktop app.
+      # CI has no build cache and only checks and tests, so it overrides that
+      # back to unoptimized dependencies, which compile much faster.
       - name: Check Tauri backend
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+        run: cargo check --manifest-path src-tauri/Cargo.toml --config 'profile.dev.package."*".opt-level=0'
 
       - name: Lint Tauri backend
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --config 'profile.dev.package."*".opt-level=0' --all-targets -- -D warnings
 
       - name: Test Tauri backend
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --manifest-path src-tauri/Cargo.toml --config 'profile.dev.package."*".opt-level=0'
