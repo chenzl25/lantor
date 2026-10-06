@@ -101,6 +101,31 @@ try {
       }
       await page.locator(`[data-message-id="${latest.id}"]`).getByRole("button", { name: "View 1 reply in thread", exact: true }).click();
       await page.getByText("Lazy full reply", { exact: true }).waitFor();
+      // Image panning must never start the app's edge-back navigation. A
+      // lightbox belongs to its thread; navigating back would unmount it.
+      await page.locator(".thread").getByRole("button", { name: "Preview fixture.png", exact: true }).click();
+      await page.getByRole("button", { name: "View image at full size", exact: true }).click();
+      await page.waitForTimeout(250);
+      const edgeMoveListeners = await page.evaluate(() => {
+        const target = document.querySelector(".attachment-lightbox-content");
+        const send = (type, x) => {
+          const event = new Event(type, { bubbles: true, cancelable: true });
+          Object.defineProperty(event, "touches", { value: type === "touchend" ? [] : [{ clientX: x, clientY: 300 }] });
+          target.dispatchEvent(event);
+        };
+        send("touchstart", 5);
+        const listeners = window.__moves.size;
+        send("touchmove", 260);
+        send("touchend", 260);
+        return listeners;
+      });
+      await page.waitForTimeout(250);
+      const stillOpen = await page.getByRole("dialog", { name: "Image preview" }).count();
+      console.log(`${engine.name()}: preview edge pan listeners=${edgeMoveListeners}, preview remaining=${stillOpen}`);
+      assert.equal(edgeMoveListeners, 0, "image panning must not start edge-back navigation");
+      assert.equal(stillOpen, 1, "image panning must keep the preview and its thread open");
+      assert.equal(await page.getByText("Lazy full reply", { exact: true }).count(), 1);
+      await page.getByRole("button", { name: "Close image preview", exact: true }).click();
       await page.getByRole("button", { name: "Back to channel", exact: true }).click();
       await page.waitForTimeout(700);
       const mark = requests.length;

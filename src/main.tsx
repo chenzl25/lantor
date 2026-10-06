@@ -2848,7 +2848,9 @@ function App() {
     }
 
     function onTouchStart(event: TouchEvent) {
-      if (event.touches.length !== 1 || isTextInput(event.target) || isActionControl(event.target)) {
+      // Portalled dialogs (including image previews) own their gestures. An
+      // edge pan inside one must not navigate away from its owning thread/DM.
+      if (activeDialog() || event.touches.length !== 1 || isTextInput(event.target) || isActionControl(event.target)) {
         resetSwipe();
         return;
       }
@@ -2869,6 +2871,10 @@ function App() {
     }
 
     function onTouchMove(event: TouchEvent) {
+      if (activeDialog()) {
+        resetSwipe();
+        return;
+      }
       if (!tracking || startX === null || startY === null || event.touches.length !== 1) return;
       const touch = event.touches[0];
       const deltaX = touch.clientX - startX;
@@ -2888,7 +2894,7 @@ function App() {
     }
 
     function onTouchEnd(event: TouchEvent) {
-      if (!tracking || startX === null) {
+      if (activeDialog() || !tracking || startX === null) {
         resetSwipe();
         return;
       }
