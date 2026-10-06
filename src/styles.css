@@ -2504,6 +2504,26 @@ button,
   line-height: 16px;
 }
 
+.message-unread-divider {
+  display: grid;
+  grid-template-columns: minmax(24px, 1fr) auto minmax(24px, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin: 10px 22px 6px;
+  color: var(--accent);
+}
+
+.message-unread-divider span {
+  height: 1px;
+  background: var(--accent-soft-border);
+}
+
+.message-unread-divider b {
+  font-size: var(--type-size-caption);
+  font-weight: var(--type-weight-semibold);
+  line-height: 16px;
+}
+
 .thread-reply-summary {
   position: relative;
   display: inline-flex;
@@ -7798,6 +7818,25 @@ body.resizing-column * {
 }
 
 .message-list[data-restoring] .message-list-content { visibility: hidden; }
+/* Overlay the top of the list without shifting it: share its grid cell. */
+.message-list-shell > .message-list,
+.message-list-syncing { grid-area: 2 / 1; }
+.message-list-syncing {
+  z-index: 3;
+  align-self: start;
+  padding: 3px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-panel-strong);
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--type-size-caption);
+  line-height: 16px;
+  pointer-events: none;
+  /* Quick catch-ups finish before this appears. */
+  opacity: 0;
+  animation: message-list-syncing-in 160ms ease-out 400ms forwards;
+}
+@keyframes message-list-syncing-in { to { opacity: 1; } }
 .message-list-restoring {
   position: absolute;
   inset: 24px 0 auto;

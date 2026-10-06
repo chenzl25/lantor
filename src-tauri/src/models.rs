@@ -97,6 +97,7 @@ pub(crate) struct Channel {
     pub(crate) dm_agent_id: Option<Uuid>,
     pub(crate) unread_count: i32,
     pub(crate) agent_unread_count: i32,
+    pub(crate) first_unread_root_seq: Option<i64>,
     pub(crate) github_unread_count: i32,
     pub(crate) github_review_synced_at: Option<String>,
     pub(crate) latest_message_at: Option<String>,

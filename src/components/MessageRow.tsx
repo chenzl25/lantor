@@ -35,6 +35,8 @@ type MessageRowProps = {
   variant: "channel" | "thread-root" | "reply";
   compact?: boolean;
   dateDivider?: boolean;
+  /** Marks this message as the first unread one when the channel opened. */
+  unreadDivider?: boolean;
   saved: boolean;
   expanded: boolean;
   focused?: boolean;
@@ -50,7 +52,7 @@ type MessageRowProps = {
 const INTERACTIVE_TARGETS = "a,button,input,select,textarea,summary,[contenteditable='true'],[role='button'],[role='link'],.message-artifacts,.message-attachments,.decision-card";
 
 export const MessageRow = memo(function MessageRow({
-  data, actions, variant, compact = false, dateDivider = false, saved, expanded,
+  data, actions, variant, compact = false, dateDivider = false, unreadDivider = false, saved, expanded,
   focused = false, jumpFocused, tapFocused = false, showImageThumbnails,
   replyCount = 0, unreadReplyCount = 0, taskNumber, taskStatus,
 }: MessageRowProps) {
@@ -122,6 +124,7 @@ export const MessageRow = memo(function MessageRow({
   </>;
   return <>
     {dateDivider && <div className="message-date-divider" role="separator"><span /><time dateTime={message.created_at}>{formatDateDivider(message.created_at)}</time><span /></div>}
+    {unreadDivider && <div className="message-unread-divider" role="separator"><span /><b>New messages</b><span /></div>}
     <article ref={setNode} data-message-id={message.id} data-message-seq={message.seq}
       className={["message-render-boundary", channel && !system ? "message-card" : root ? "thread-root" : "", system ? "system-message" : "", compact ? "compact" : "", focused ? "focused" : "", saved ? "saved" : "", tapFocused ? "tap-focused" : ""].filter(Boolean).join(" ")}
       data-jump-focused={jumpFocused ? "true" : "false"}

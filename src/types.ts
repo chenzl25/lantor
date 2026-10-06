@@ -74,6 +74,8 @@ export type Channel = {
   dm_agent_id: string | null;
   unread_count: number;
   agent_unread_count?: number;
+  /** Seq of the first unread top-level message; thread replies do not count. */
+  first_unread_root_seq?: number | null;
   github_unread_count: number;
   github_review_synced_at: string | null;
   latest_message_at?: string | null;

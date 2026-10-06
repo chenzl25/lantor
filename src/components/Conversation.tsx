@@ -104,6 +104,8 @@ type ConversationProps = {
   isLoadingOlderRootMessages: boolean;
   onLoadOlderRootMessages: () => Promise<boolean | void>;
   isChannelReady?: boolean;
+  /** True while the app catches up after returning from the background. */
+  syncing?: boolean;
   onReadLocation?: (location: ChannelReadLocation) => void;
   onToggleMessageSaved: (message: Message, saved: boolean) => void;
 };
@@ -177,6 +179,7 @@ export function Conversation({
   isLoadingOlderRootMessages,
   onLoadOlderRootMessages,
   isChannelReady = true,
+  syncing = false,
   onReadLocation,
   onToggleMessageSaved,
 }: ConversationProps) {
@@ -196,6 +199,7 @@ export function Conversation({
     channelId, active: activeTab === "chat", ready: isChannelReady,
     roots: rootMessages, focusedMessageId, hasMore: hasMoreRootMessages,
     loading: isLoadingOlderRootMessages, historyBeforeSeq, loadOlder: onLoadOlderRootMessages, onReadLocation,
+    firstUnreadSeq: channel?.first_unread_root_seq ?? null, syncing,
   });
   const progressIndex = useMemo(() => indexProgress(agentActivities, agentRuns, agentWorkItems, agents),
     [agentActivities, agentRuns, agentWorkItems, agents]);
@@ -572,8 +576,9 @@ export function Conversation({
               const task = taskForMessage(message.id);
               return <MessageRow
                 key={message.id} data={rows[message.id]} actions={rowActions} variant="channel"
-                compact={isCompactFollowupMessage(message, rootMessages[index - 1])}
+                compact={message.id !== messageScroll.unreadDividerId && isCompactFollowupMessage(message, rootMessages[index - 1])}
                 dateDivider={index === 0 || !isSameCalendarDay(message.created_at, rootMessages[index - 1]?.created_at ?? "")}
+                unreadDivider={message.id === messageScroll.unreadDividerId}
                 saved={savedMessageIds.has(message.id)} expanded={expandedChannelMessageIds.has(message.id)}
                 focused={message.id === activeRoot?.id} jumpFocused={focusedMessageId === message.id}
                 showImageThumbnails={showImageThumbnails}
@@ -584,11 +589,14 @@ export function Conversation({
             <div className="message-list-bottom-anchor" aria-hidden="true" />
           </div>
           </div>
+          {channel && syncing && <div className="message-list-syncing" role="status">Updating…</div>}
           {channel && messageScroll.restoring && <div className="message-list-restoring" role="status">Restoring reading position…</div>}
           {channel && messageScroll.showBackToBottom && (
             <button type="button" className="message-list-back-to-bottom" onClick={messageScroll.toBottom}>
               <ArrowDown size={15} />
-              Back to bottom
+              {messageScroll.unseenCount > 0
+                ? `${messageScroll.unseenCount} new message${messageScroll.unseenCount === 1 ? "" : "s"}`
+                : "Back to bottom"}
             </button>
           )}
           {messageMenu && (

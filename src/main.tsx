@@ -221,6 +221,8 @@ const MOBILE_BREAKPOINT = 760;
 const UI_REFRESH_DEBOUNCE_MS = 80;
 const UI_STATE_REFRESH_MIN_INTERVAL_MS = 500;
 const UI_RECONCILE_INTERVAL_MS = 60_000;
+// Never leave "Updating…" up indefinitely when a catch-up request hangs.
+const RESUME_SYNC_MAX_MS = 20_000;
 const EPHEMERAL_FLUSH_FALLBACK_MS = 80;
 const CHANNEL_PREVIEW_HYDRATION_DELAY_MS = 200;
 const MIN_BOOT_SPLASH_MS = 600;
@@ -929,6 +931,8 @@ function App() {
   const [locallyUnfollowedThreadIds, setLocallyUnfollowedThreadIds] = useState<Set<string>>(() => new Set());
   const [loadingOlderChannelIds, setLoadingOlderChannelIds] = useState<Set<string>>(() => new Set());
   const [exhaustedOlderChannelIds, setExhaustedOlderChannelIds] = useState<Set<string>>(() => new Set());
+  // Returning from the background: catching up on what changed meanwhile.
+  const [resumeSyncing, setResumeSyncing] = useState(false);
   const knownMessageIdsRef = useRef<Set<string> | null>(null);
   const hydratedMessageIdsRef = useRef<Set<string>>(new Set());
   const hydratedMessageBodiesRef = useRef<Map<string, string>>(new Map());
@@ -2273,6 +2277,11 @@ function App() {
     let generation = 0;
     let connecting = false;
     let foregroundTimer: number | null = null;
+    // Catch-up after returning from the background, shown as "Updating…".
+    let hidden = document.visibilityState === "hidden";
+    let resumePending = false;
+    let resumeGeneration = 0;
+    let resumeCapTimer: number | null = null;
 
     async function connect() {
       if (disposed || connecting || backendSubscriptionRef.current) return;
@@ -2306,11 +2315,47 @@ function App() {
       if (uiStateScopesRef.current.size > 0) await flushUiState();
     }
 
+    // A replay gap schedules a full snapshot refresh; the catch-up includes it.
+    async function waitForPendingRefresh() {
+      for (let attempt = 0; attempt < 3 && !disposed; attempt += 1) {
+        if (refreshTimerRef.current !== null) {
+          await new Promise((resolve) => window.setTimeout(resolve, UI_REFRESH_DEBOUNCE_MS + 20));
+        }
+        const pending = refreshPromiseRef.current;
+        if (pending) await pending.catch(() => undefined);
+        else if (refreshTimerRef.current === null) return;
+      }
+    }
+
+    function endResumeSync(resume: number) {
+      if (disposed || resume !== resumeGeneration) return;
+      if (resumeCapTimer !== null) window.clearTimeout(resumeCapTimer);
+      resumeCapTimer = null;
+      setResumeSyncing(false);
+    }
+
     function onForeground() {
-      if (document.visibilityState !== "visible" || foregroundTimer !== null) return;
+      if (document.visibilityState !== "visible") {
+        hidden = true;
+        return;
+      }
+      if (hidden) {
+        hidden = false;
+        resumePending = true;
+        const resume = ++resumeGeneration;
+        setResumeSyncing(true);
+        if (resumeCapTimer !== null) window.clearTimeout(resumeCapTimer);
+        resumeCapTimer = window.setTimeout(() => endResumeSync(resume), RESUME_SYNC_MAX_MS);
+      }
+      if (foregroundTimer !== null) return;
       foregroundTimer = window.setTimeout(() => {
         foregroundTimer = null;
-        void reconcile().catch((err) => console.error("Failed to reconcile foreground state", err));
+        const resume = resumePending ? resumeGeneration : null;
+        resumePending = false;
+        void reconcile()
+          .then(() => resume === null ? undefined : waitForPendingRefresh())
+          .catch((err) => console.error("Failed to reconcile foreground state", err))
+          .finally(() => { if (resume !== null) endResumeSync(resume); });
       }, 100);
     }
 
@@ -2332,6 +2377,8 @@ function App() {
       window.removeEventListener("online", onForeground);
       document.removeEventListener("visibilitychange", onForeground);
       if (foregroundTimer !== null) window.clearTimeout(foregroundTimer);
+      if (resumeCapTimer !== null) window.clearTimeout(resumeCapTimer);
+      setResumeSyncing(false);
       if (uiStateTimerRef.current !== null) window.clearTimeout(uiStateTimerRef.current);
       if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current);
       if (messageDeltaFlushTimerRef.current !== null) window.clearTimeout(messageDeltaFlushTimerRef.current);
@@ -5273,6 +5320,7 @@ function App() {
         focusedMessageId={focusedMessageId}
         showImageThumbnails={showImageThumbnails}
         isChannelReady={isChannelReady}
+        syncing={resumeSyncing}
         onReadLocation={setChannelReadLocation}
         hasMoreRootMessages={hasMoreRootMessages}
         historyBeforeSeq={channel ? olderChannelBeforeSeqRef.current.get(channel.id) : undefined}

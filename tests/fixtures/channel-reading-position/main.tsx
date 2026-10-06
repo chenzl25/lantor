@@ -3,28 +3,31 @@ import { createRoot } from "react-dom/client";
 import { Conversation } from "../../../src/components/Conversation";
 import { useVisibleChannelRead } from "../../../src/hooks/useVisibleChannelRead";
 import type { ChannelReadLocation } from "../../../src/hooks/useChannelMessageScroll";
-import { CHANNEL_READING_POSITION_KEY, captureMessageAnchor } from "../../../src/channel-reading-position";
+import { captureMessageAnchor } from "../../../src/channel-reading-position";
 import { streamingMessages } from "../../../src/streaming-message-store";
-import type { Message } from "../../../src/types";
+import type { Channel, Message } from "../../../src/types";
 import "../../../src/styles.css";
 
 const params = new URLSearchParams(location.search);
 const id = (channel: number, seq: number) => `${channel}-${seq}`;
-const message = (seq: number, channel = 0): Message => ({ id: id(channel, seq), seq,
+const message = (seq: number, channel = 0, long = false): Message => ({ id: id(channel, seq), seq,
   channel_id: `channel-${channel}`, thread_root_id: null, sender_agent_id: null, sender_name: "Agent", sender_role: "agent",
-  body: `Message ${seq}\n\n` + "A paragraph of reading context.\n\n".repeat(seq % 4 + 1),
+  body: `Message ${seq}\n\n` + "A paragraph of reading context.\n\n".repeat(long ? 12 : seq % 4 + 1),
   is_task: false, thread_followed: false, delivery_state: "complete", stream_key: "", task_number: null, task_status: null,
   attachments: [], artifacts: [], created_at: seq <= 40 ? "2026-06-05T08:00:00Z" : "2026-09-08T00:00:00Z", updated_at: "2026-09-08T00:00:00Z" });
-const channels = ["reading-test", "other"].map((name, n) => ({ id: `channel-${n}`, name, description: "Synthetic reading-position regression", kind: "channel" as const,
+const baseChannels = ["reading-test", "other"].map((name, n) => ({ id: `channel-${n}`, name, description: "Synthetic reading-position regression", kind: "channel" as const,
   dm_agent_id: null, unread_count: 1, github_unread_count: 0, github_review_synced_at: null }));
-if (params.has("reset")) localStorage.removeItem(CHANNEL_READING_POSITION_KEY);
-if (params.has("seed")) localStorage.setItem(CHANNEL_READING_POSITION_KEY, JSON.stringify([[channels[0].id,
-  { anchor: { messageId: id(0, 5), seq: 5, offset: -12 }, atBottom: false, latestRootId: id(0, 120) }]]));
+// Model document visibility so tests can send the page to the background.
+let visibility: DocumentVisibilityState = "visible";
+Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
+function setVisibility(next: DocumentVisibilityState) { visibility = next; document.dispatchEvent(new Event("visibilitychange")); }
 const receipts: {channelId: string; throughSeq: number}[] = [];
+let onReceipt: (receipt: {channelId: string; throughSeq: number}) => void = () => {};
 let streamBody = "Streaming start";
 window.fetch = async (input, init) => {
   if (!String(input).endsWith("/api/mark_channel_read")) throw Error(`Unexpected fixture request: ${input}`);
-  receipts.push(JSON.parse(String(init?.body)));
+  const receipt = JSON.parse(String(init?.body));
+  receipts.push(receipt); onReceipt(receipt);
   return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } });
 };
 const noop = () => {};
@@ -32,6 +35,9 @@ function Fixture() {
   const [channel, setChannel] = useState(0);
   const [ready, setReady] = useState(params.has("ready"));
   const [roots, setRoots] = useState([[...(params.has("context") ? [message(5)] : []), ...Array.from({ length: 80 }, (_, i) => message(i + 41))], Array.from({ length: 80 }, (_, i) => message(i + 1, 1))]);
+  // The server's read marker for channel 0; every seq up to the newest exists.
+  const [lastRead, setLastRead] = useState(params.has("unread") ? Number(params.get("unread")) - 1 : 120);
+  const [syncing, setSyncing] = useState(false);
   const [loading, setLoading] = useState(false), [pages, setPages] = useState(0);
   const [location, setLocation] = useState<ChannelReadLocation | null>(null);
   const [tab, setTab] = useState<"chat" | "tasks" | "github" | "wiki">("chat");
@@ -39,19 +45,30 @@ function Fixture() {
   const [debug, setDebug] = useState("");
   const shown = channel === 0 && !ready ? [message(41)] : roots[channel];
   const hydrated = channel !== 0 || ready;
+  const newest = roots[0].at(-1)!.seq;
+  const channels: Channel[] = baseChannels.map((item, n) => n !== 0 ? item
+    : { ...item, first_unread_root_seq: lastRead < newest ? lastRead + 1 : null });
+  useEffect(() => {
+    onReceipt = (receipt) => { if (receipt.channelId === "channel-0") setLastRead(seq => Math.max(seq, receipt.throughSeq)); };
+  }, []);
   useVisibleChannelRead({ channelId: channels[channel].id, latestRootId: shown.at(-1)?.id ?? null,
     throughSeq: shown.at(-1)?.seq ?? 0, unreadCount: 1, ready: hydrated, active: tab === "chat", location });
   useEffect(() => {
     const timer = setInterval(() => {
       const list = document.querySelector<HTMLDivElement>(".message-list");
+      const divider = document.querySelector<HTMLElement>(".message-unread-divider");
+      const dividerRow = divider?.nextElementSibling as HTMLElement | null;
       setDebug(JSON.stringify({ channel, ready: hydrated, pages, loading, receipts, location,
         anchor: list && captureMessageAnchor(list), restoring: list?.getAttribute("aria-busy"),
         distance: list ? list.scrollHeight - list.clientHeight - list.scrollTop : null,
-        top: list?.scrollTop, rowCount: shown.length,
-        saved: JSON.parse(localStorage.getItem(CHANNEL_READING_POSITION_KEY) || "[]") }, null, 2));
+        top: list?.scrollTop, rowCount: shown.length, firstUnread: channels[0].first_unread_root_seq,
+        divider: dividerRow?.dataset.messageId ?? null,
+        dividerTop: divider && list ? divider.getBoundingClientRect().top - list.getBoundingClientRect().top : null,
+        backToBottom: document.querySelector(".message-list-back-to-bottom")?.textContent ?? null,
+        syncingShown: Boolean(document.querySelector(".message-list-syncing")) }, null, 2));
     }, 100);
     return () => clearInterval(timer);
-  }, [channel, hydrated, shown, location, pages, loading]);
+  }, [channel, hydrated, shown, location, pages, loading, lastRead]);
   async function older() {
     const targetChannel = channel;
     setPages(n => n + 1); setLoading(true);
@@ -68,7 +85,10 @@ function Fixture() {
     list.dispatchEvent(new WheelEvent("wheel", { deltaY: -500, bubbles: true }));
     list.scrollTop = toTop ? 0 : list.scrollTop - 600;
   }
-  function append(c = channel) { setRoots(before => before.map((items, index) => index === c ? [...items, message(items.at(-1)!.seq + 1, c)] : items)); }
+  function append(c = channel, count = 1, long = false) {
+    setRoots(before => before.map((items, index) => index !== c ? items
+      : [...items, ...Array.from({ length: count }, (_, i) => message(items.at(-1)!.seq + i + 1, c, long))]));
+  }
   function readLocationChanged(next: ChannelReadLocation) {
     setLocation(next);
     // Model a parent reconciling buffered message snapshots when the viewport
@@ -87,7 +107,7 @@ function Fixture() {
       openTask={noop} createGithubReviewTask={async () => {throw Error("unused");}} createGithubIssueTask={async () => {throw Error("unused");}}
       setDraft={setDraft} addDraftAttachments={noop} removeDraftAttachment={noop} sendRootMessage={() => append()} hasMoreRootMessages={channel === 0 && roots[0][0].seq > 1}
       historyBeforeSeq={channel === 0 ? (roots[0].some(row => row.seq === 1) ? 1 : 41) : undefined}
-      isLoadingOlderRootMessages={loading} onLoadOlderRootMessages={older} isChannelReady={hydrated} onReadLocation={readLocationChanged} />
+      isLoadingOlderRootMessages={loading} onLoadOlderRootMessages={older} isChannelReady={hydrated} syncing={syncing} onReadLocation={readLocationChanged} />
     <aside style={{overflow: "auto", padding: 12, fontSize: 12}}>
       <h2>Reading regression controls</h2>
       <button onClick={() => setReady(true)}>Hydrate channel</button>
@@ -98,6 +118,11 @@ function Fixture() {
       <button onClick={() => scrollUp(true)}>Read older history</button>
       <button onClick={() => append()}>Add new root</button>
       <button onClick={() => append(0)}>Add to channel while away</button>
+      <button onClick={() => append(0, 6, true)}>Add long messages to channel</button>
+      <button onClick={() => setLastRead(roots[0].at(-1)!.seq)}>Read on another device</button>
+      <button onClick={() => setVisibility("hidden")}>Go to background</button>
+      <button onClick={() => {setSyncing(true); setVisibility("visible");}}>Return and sync</button>
+      <button onClick={() => setSyncing(false)}>Finish sync</button>
       <button onClick={() => setRoots(before => before.map((items, c) => c === channel ? items.map((row, i) => i === 0 ? {...row, body: row.body + "Extra height above.\n\n".repeat(20)} : row) : items))}>Grow earlier row</button>
       <button onClick={() => {streamBody = "Streaming start"; setRoots(before => before.map((items, c) => c === channel ? [...items,
         {...message(items.at(-1)!.seq + 1, c), body: streamBody, delivery_state: "streaming"}] : items));}}>Start stream</button>

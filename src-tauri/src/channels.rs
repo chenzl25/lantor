@@ -67,7 +67,7 @@ pub(crate) async fn load_channels(pool: &SqlitePool) -> CommandResult<Vec<Channe
     let rows = sqlx::query(
         r#"
         with unread_messages as (
-            select c.id as channel_id, m.sender_role
+            select c.id as channel_id, m.sender_role, m.seq, m.thread_root_id
             from channels c
             left join channel_read_state r on r.channel_id = c.id
             join messages m on m.channel_id = c.id
@@ -93,7 +93,10 @@ pub(crate) async fn load_channels(pool: &SqlitePool) -> CommandResult<Vec<Channe
               )
         ), unread_counts as (
             select channel_id, count(*) as unread_count,
-                   sum(case when sender_role not in ('owner', 'system') then 1 else 0 end) as agent_unread_count
+                   sum(case when sender_role not in ('owner', 'system') then 1 else 0 end) as agent_unread_count,
+                   -- Clients open a channel at its first unread top-level
+                   -- message; unread thread replies do not move that point.
+                   min(case when thread_root_id is null then seq end) as first_unread_root_seq
             from unread_messages
             group by channel_id
         )
@@ -106,6 +109,7 @@ pub(crate) async fn load_channels(pool: &SqlitePool) -> CommandResult<Vec<Channe
             (select created_at from messages m where m.channel_id = c.id order by m.seq desc limit 1) as latest_message_at,
             coalesce(unread_counts.unread_count, 0) as unread_count,
             coalesce(unread_counts.agent_unread_count, 0) as agent_unread_count,
+            unread_counts.first_unread_root_seq,
             cast((
                 select count(*)
                 from github_review_request_cache review_attention
@@ -143,6 +147,7 @@ pub(crate) async fn load_channels(pool: &SqlitePool) -> CommandResult<Vec<Channe
             dm_agent_id: row.get("dm_agent_id"),
             unread_count: row.get("unread_count"),
             agent_unread_count: row.get("agent_unread_count"),
+            first_unread_root_seq: row.get("first_unread_root_seq"),
             github_unread_count: row.get("github_unread_count"),
             github_review_synced_at: row.get("github_review_synced_at"),
             latest_message_at: row.get("latest_message_at"),
@@ -872,6 +877,76 @@ mod tests {
                     "newer in absolute time",
                 ]
             );
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn channel_reports_first_unread_root_but_not_thread_replies_or_owner_roots() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let channel_id = insert_test_channel(&pool, "first-unread-root").await?;
+            async fn insert(
+                pool: &SqlitePool,
+                channel_id: Uuid,
+                role: &str,
+                thread_root_id: Option<Uuid>,
+            ) -> Result<(Uuid, i64), String> {
+                let id: Uuid = sqlx::query_scalar(
+                    r#"
+                    insert into messages (channel_id, thread_root_id, sender_name, sender_role, body)
+                    values ($1, $2, 'Sender', $3, 'body')
+                    returning id
+                    "#,
+                )
+                .bind(channel_id)
+                .bind(thread_root_id)
+                .bind(role)
+                .fetch_one(pool)
+                .await
+                .map_err(|err| err.to_string())?;
+                // The seq is assigned by an after-insert trigger.
+                let seq = sqlx::query_scalar("select seq from messages where id = $1")
+                    .bind(id)
+                    .fetch_one(pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+                Ok((id, seq))
+            }
+            async fn first_unread(pool: &SqlitePool, channel_id: Uuid) -> Result<Option<i64>, String> {
+                Ok(load_channels(pool)
+                    .await?
+                    .into_iter()
+                    .find(|channel| channel.id == channel_id)
+                    .ok_or_else(|| "missing test channel".to_owned())?
+                    .first_unread_root_seq)
+            }
+
+            let (read_root, read_root_seq) = insert(&pool, channel_id, "agent", None).await?;
+            assert_eq!(first_unread(&pool, channel_id).await?, Some(read_root_seq));
+            crate::owner_inbox::mark_channel_read_through_in_pool(&pool, channel_id, None).await?;
+            assert_eq!(first_unread(&pool, channel_id).await?, None);
+
+            insert(&pool, channel_id, "owner", None).await?;
+            insert(&pool, channel_id, "agent", Some(read_root)).await?;
+            assert_eq!(
+                first_unread(&pool, channel_id).await?,
+                None,
+                "an unread thread reply leaves the channel at its latest message"
+            );
+
+            let (_, first_root_seq) = insert(&pool, channel_id, "agent", None).await?;
+            insert(&pool, channel_id, "system", None).await?;
+            assert_eq!(first_unread(&pool, channel_id).await?, Some(first_root_seq));
+            crate::owner_inbox::mark_channel_read_through_in_pool(&pool, channel_id, Some(first_root_seq))
+                .await?;
+            assert!(first_unread(&pool, channel_id).await?.is_some_and(|seq| seq > first_root_seq));
+
             Ok(())
         }
         .await;
