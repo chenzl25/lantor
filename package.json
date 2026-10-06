@@ -7,6 +7,7 @@
   "scripts": {
     "test": "tsx --test tests/*.test.ts",
     "test:dialogs": "node tests/dialogs.e2e.mjs",
+    "test:image-lightbox": "node tests/image-lightbox.e2e.mjs",
     "test:attachment-sheet": "node tests/attachment-sheet.e2e.mjs",
     "test:ui-panels": "node tests/ui-panels.e2e.mjs",
     "test:activity": "node tests/activity-feed.e2e.mjs",

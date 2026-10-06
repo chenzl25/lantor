@@ -1,6 +1,6 @@
-import { DialogSurface } from "./DialogSurface";
+import { ImageLightbox } from "./ImageLightbox";
 import { type MouseEvent, type PointerEvent, useEffect, useState } from "react";
-import { FileText, X, ZoomIn, ZoomOut } from "lucide-react";
+import { FileText, X } from "lucide-react";
 import { DraftAttachment } from "../types";
 
 type DraftAttachmentsPreviewProps = {
@@ -89,35 +89,6 @@ function DraftAttachmentPreviewItem({ attachment, onRemove, onOpenImage }: Draft
 
 export function DraftAttachmentsPreview({ attachments, onRemove }: DraftAttachmentsPreviewProps) {
   const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
-  const [imagePreviewZoomed, setImagePreviewZoomed] = useState(false);
-
-  function closeImagePreview() {
-    setImagePreview(null);
-    setImagePreviewZoomed(false);
-  }
-
-  function openImagePreview(preview: ImagePreview) {
-    setImagePreview(preview);
-    setImagePreviewZoomed(false);
-  }
-
-  function toggleImagePreviewZoom(event: MouseEvent<HTMLElement>) {
-    event.preventDefault();
-    event.stopPropagation();
-    setImagePreviewZoomed((zoomed) => !zoomed);
-  }
-
-  useEffect(() => {
-    if (!imagePreview) return;
-    function handleHistoryNavigation() {
-      setImagePreview(null);
-      setImagePreviewZoomed(false);
-    }
-    window.addEventListener("popstate", handleHistoryNavigation);
-    return () => {
-      window.removeEventListener("popstate", handleHistoryNavigation);
-    };
-  }, [imagePreview]);
 
   if (attachments.length === 0) return null;
 
@@ -129,44 +100,13 @@ export function DraftAttachmentsPreview({ attachments, onRemove }: DraftAttachme
             key={attachment.id}
             attachment={attachment}
             onRemove={onRemove}
-            onOpenImage={openImagePreview}
+            onOpenImage={setImagePreview}
           />
         ))}
       </div>
       {imagePreview && (
-        <DialogSurface label="Image preview" backdropClassName="attachment-lightbox"
-          className="attachment-lightbox-panel" onClose={closeImagePreview}>
-          <button
-            type="button"
-            className="attachment-lightbox-close"
-            aria-label="Close image preview"
-            onPointerDown={isolateDraftAttachmentEvent}
-            onClick={closeImagePreview}
-          >
-            <X size={18} />
-          </button>
-          <button
-            type="button"
-            className="attachment-lightbox-zoom"
-            aria-label={imagePreviewZoomed ? "Fit image to screen" : "View image at full size"}
-            aria-pressed={imagePreviewZoomed}
-            onPointerDown={isolateDraftAttachmentEvent}
-            onClick={toggleImagePreviewZoom}
-          >
-            {imagePreviewZoomed ? <ZoomOut size={18} /> : <ZoomIn size={18} />}
-          </button>
-          <div className={`attachment-lightbox-content ${imagePreviewZoomed ? "zoomed" : ""}`}>
-            <button
-              type="button"
-              className="attachment-lightbox-image-button"
-              aria-label={imagePreviewZoomed ? "Fit image to screen" : "View image at full size"}
-              onPointerDown={isolateDraftAttachmentEvent}
-              onClick={toggleImagePreviewZoom}
-            >
-              <img src={imagePreview.src} alt={imagePreview.alt} />
-            </button>
-          </div>
-        </DialogSurface>
+        <ImageLightbox key={imagePreview.src} src={imagePreview.src} alt={imagePreview.alt}
+          onClose={() => setImagePreview(null)} />
       )}
     </>
   );

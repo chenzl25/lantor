@@ -1,7 +1,7 @@
-import { DialogSurface } from "./DialogSurface";
 import { AppToast } from "./AppToast";
+import { ImageLightbox } from "./ImageLightbox";
 import { type MouseEvent, type PointerEvent, useEffect, useState } from "react";
-import { Download, FileText, Image, X, ZoomIn, ZoomOut } from "lucide-react";
+import { Download, FileText, Image } from "lucide-react";
 import { attachmentAssetUrl, downloadAttachment, isTauriRuntime, openExternalUrl } from "../apiClient";
 import { openAttachmentSheet, triggerBrowserDownload, usesAttachmentSheet } from "../attachment-sheet";
 import { useSentImagePreview } from "../sent-image-previews";
@@ -99,7 +99,6 @@ function ImageThumbnail({ attachment }: { attachment: MessageAttachment }) {
 
 export function MessageAttachments({ attachments, showImageThumbnails }: MessageAttachmentsProps) {
   const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
-  const [imagePreviewZoomed, setImagePreviewZoomed] = useState(false);
   const [downloadNotice, setDownloadNotice] = useState<DownloadNotice | null>(null);
 
   function showDownloadNotice(notice: Omit<DownloadNotice, "id">) {
@@ -108,34 +107,6 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
       id: Date.now(),
     });
   }
-
-  function closeImagePreview() {
-    setImagePreview(null);
-    setImagePreviewZoomed(false);
-  }
-
-  function openImagePreview(preview: ImagePreview) {
-    setImagePreview(preview);
-    setImagePreviewZoomed(false);
-  }
-
-  function toggleImagePreviewZoom(event: MouseEvent<HTMLElement>) {
-    event.preventDefault();
-    event.stopPropagation();
-    setImagePreviewZoomed((zoomed) => !zoomed);
-  }
-
-  useEffect(() => {
-    if (!imagePreview) return;
-    function handleHistoryNavigation() {
-      setImagePreview(null);
-      setImagePreviewZoomed(false);
-    }
-    window.addEventListener("popstate", handleHistoryNavigation);
-    return () => {
-      window.removeEventListener("popstate", handleHistoryNavigation);
-    };
-  }, [imagePreview]);
 
   useEffect(() => {
     if (!downloadNotice) return;
@@ -170,7 +141,7 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
                   aria-label={`Preview ${attachment.original_name}`}
                   onClick={(event) => {
                     event.stopPropagation();
-                    openImagePreview({ src, alt: attachment.original_name, attachment });
+                    setImagePreview({ src, alt: attachment.original_name, attachment });
                   }}
                 >
                   {showImageThumbnails ? (
@@ -243,51 +214,21 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
         })}
       </div>
       {imagePreview && (
-        <DialogSurface label="Image preview" backdropClassName="attachment-lightbox"
-          className="attachment-lightbox-panel" onClose={closeImagePreview}>
-          <button
-            type="button"
-            className="attachment-lightbox-close"
-            aria-label="Close image preview"
-            onPointerDown={isolateAttachmentEvent}
-            onClick={closeImagePreview}
-          >
-            <X size={18} />
-          </button>
-          <button
-            type="button"
-            className="attachment-lightbox-zoom"
-            aria-label={imagePreviewZoomed ? "Fit image to screen" : "View image at full size"}
-            aria-pressed={imagePreviewZoomed}
-            onPointerDown={isolateAttachmentEvent}
-            onClick={toggleImagePreviewZoom}
-          >
-            {imagePreviewZoomed ? <ZoomOut size={18} /> : <ZoomIn size={18} />}
-          </button>
-          <button
-            type="button"
-            className="attachment-lightbox-download"
-            aria-label={`Download ${imagePreview.alt}`}
-            title={`Download ${imagePreview.alt}`}
-            onPointerDown={isolateAttachmentEvent}
-            onClick={(event) => {
-              void downloadStoredAttachment(event, imagePreview.attachment, showDownloadNotice);
-            }}
-          >
-            <Download size={18} />
-          </button>
-          <div className={`attachment-lightbox-content ${imagePreviewZoomed ? "zoomed" : ""}`}>
+        <ImageLightbox key={imagePreview.src} src={imagePreview.src} alt={imagePreview.alt}
+          onClose={() => setImagePreview(null)}
+          actions={(
             <button
               type="button"
-              className="attachment-lightbox-image-button"
-              aria-label={imagePreviewZoomed ? "Fit image to screen" : "View image at full size"}
-              onPointerDown={isolateAttachmentEvent}
-              onClick={toggleImagePreviewZoom}
+              className="attachment-lightbox-download"
+              aria-label={`Download ${imagePreview.alt}`}
+              title={`Download ${imagePreview.alt}`}
+              onClick={(event) => {
+                void downloadStoredAttachment(event, imagePreview.attachment, showDownloadNotice);
+              }}
             >
-              <img src={imagePreview.src} alt={imagePreview.alt} />
+              <Download size={18} />
             </button>
-          </div>
-        </DialogSurface>
+          )} />
       )}
       {downloadNotice && <AppToast message={downloadNotice.message} kind={downloadNotice.kind}
         className="attachment-download-toast" onDismiss={() => setDownloadNotice(null)} />}
