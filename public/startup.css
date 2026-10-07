@@ -1,0 +1,200 @@
+/* Shared by the desktop startup window and the React loading/error screen. */
+.boot {
+  --boot-surface: #f0f3f7;
+  --boot-ink: #20242b;
+  --boot-muted: #68717d;
+  --boot-glow: rgba(92, 139, 251, 0.1);
+  --boot-glow-violet: rgba(113, 93, 247, 0.07);
+  --boot-shadow: rgba(29, 37, 64, 0.13);
+  --boot-danger: #b42318;
+  --boot-danger-border: rgba(185, 28, 28, 0.16);
+  --boot-accent: #0a84ff;
+  --boot-accent-ink: #fff;
+  box-sizing: border-box;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  place-items: center;
+  overflow: auto;
+  background: var(--boot-surface);
+  color: var(--boot-ink);
+  font-family: "Space Grotesk Variable", "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+:root[data-theme="dark"] .boot {
+  --boot-surface: #222a35;
+  --boot-ink: #f4f6fa;
+  --boot-muted: #b3bdcc;
+  --boot-glow: rgba(102, 154, 255, 0.09);
+  --boot-glow-violet: rgba(146, 109, 255, 0.06);
+  --boot-shadow: rgba(0, 0, 0, 0.24);
+  --boot-danger: #ffb4ab;
+  --boot-danger-border: rgba(255, 69, 58, 0.24);
+  --boot-accent: #69aafc;
+  --boot-accent-ink: #07111f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .boot {
+    --boot-surface: #222a35;
+    --boot-ink: #f4f6fa;
+    --boot-muted: #b3bdcc;
+    --boot-glow: rgba(102, 154, 255, 0.09);
+    --boot-glow-violet: rgba(146, 109, 255, 0.06);
+    --boot-shadow: rgba(0, 0, 0, 0.24);
+    --boot-danger: #ffb4ab;
+    --boot-danger-border: rgba(255, 69, 58, 0.24);
+    --boot-accent: #69aafc;
+    --boot-accent-ink: #07111f;
+  }
+}
+
+.boot-panel {
+  display: grid;
+  width: min(440px, 100%);
+  justify-items: center;
+  align-content: center;
+  gap: 24px;
+  padding: 36px 24px;
+  text-align: center;
+  transform: translateY(-8px);
+}
+
+.boot-symbol {
+  position: relative;
+  display: grid;
+  width: 176px;
+  height: 156px;
+  place-items: center;
+  isolation: isolate;
+}
+
+.boot-symbol::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  width: 240px;
+  height: 240px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--boot-glow), var(--boot-glow-violet) 38%, transparent 70%);
+}
+
+.boot-logo {
+  display: block;
+  width: 124px;
+  height: 124px;
+  border-radius: 28px;
+  box-shadow: 0 14px 42px var(--boot-shadow);
+  animation: bootArrival 320ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.boot-copy {
+  display: grid;
+  width: 100%;
+  justify-items: center;
+  gap: 15px;
+}
+
+.boot-copy strong {
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: -1.1px;
+  line-height: 1.2;
+  animation: bootCopyIn 300ms 80ms both;
+}
+
+.boot-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: var(--boot-muted);
+  font-size: 13px;
+  line-height: 1.6;
+  animation: bootCopyIn 260ms 140ms both;
+}
+
+.boot-pips {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.boot-pips i {
+  display: block;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--boot-muted);
+  opacity: 0.32;
+  animation: bootLoading 1600ms infinite;
+}
+
+.boot-pips i:nth-child(2) { animation-delay: 160ms; }
+.boot-pips i:nth-child(3) { animation-delay: 320ms; }
+
+.boot-offline {
+  color: var(--boot-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.boot-error {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  max-width: 360px;
+  padding: 12px;
+  border: 1px solid var(--boot-danger-border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--boot-danger) 8%, var(--boot-surface));
+}
+
+.boot-error p {
+  margin: 0;
+  color: var(--boot-danger);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.boot-error button {
+  justify-self: center;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--boot-accent);
+  color: var(--boot-accent-ink);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+@keyframes bootArrival {
+  from { opacity: 0; transform: translateY(9px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes bootCopyIn {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes bootLoading {
+  0%, 70%, 100% { opacity: 0.32; }
+  30% { opacity: 0.9; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-logo,
+  .boot-copy strong,
+  .boot-status,
+  .boot-pips i {
+    animation: none;
+  }
+}

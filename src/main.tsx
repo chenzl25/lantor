@@ -35,6 +35,8 @@ import { streamingMessages, type StreamingMessageSnapshot } from "./streaming-me
 import { mergeHydratedRows, mergeThreadActivities } from "./bootstrap-hydration";
 import type { EventSubscription } from "./web-event-stream";
 import { APP_DISPLAY_NAME } from "./branding";
+import startupLogo from "../public/lantor-icon.png";
+import "../public/startup.css";
 import {
   resolveAppModalHistoryPop,
   shouldPopAppModalHistory,
@@ -225,7 +227,6 @@ const UI_RECONCILE_INTERVAL_MS = 60_000;
 const RESUME_SYNC_MAX_MS = 20_000;
 const EPHEMERAL_FLUSH_FALLBACK_MS = 80;
 const CHANNEL_PREVIEW_HYDRATION_DELAY_MS = 200;
-const MIN_BOOT_SPLASH_MS = 600;
 const MAX_ATTACHMENT_MIB = 64;
 const MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_MIB * 1024 * 1024;
 const OLDER_CHANNEL_MESSAGES_PAGE_SIZE = 40;
@@ -406,33 +407,21 @@ function errorMessage(err: unknown, fallback: string) {
 
 function BootSplash({ appError, onRetry }: { appError: string | null; onRetry: () => void }) {
   const online = useWebOnline();
-  const statuses = [
-    "Waking agents...",
-    "Restoring workspace...",
-    "Syncing threads...",
-  ];
 
   return (
-    <div className={`boot ${online ? "" : "offline"}`} aria-live="polite">
+    <div className={`boot ${online ? "" : "offline"}`} aria-label="Starting Lantor">
       <div className="boot-panel">
-        <div className="boot-constellation" aria-hidden="true">
-          <div className="boot-orbit">
-            <span className="boot-link link-one" />
-            <span className="boot-link link-two" />
-            <span className="boot-link link-three" />
-            <span className="boot-link link-four" />
-          </div>
-          <div className="boot-core">
-            <span className="boot-core-mark">L</span>
-          </div>
+        <div className="boot-symbol" aria-hidden="true">
+          <img className="boot-logo" src={startupLogo} width="124" height="124" alt="" />
         </div>
         <div className="boot-copy">
           <strong>{APP_DISPLAY_NAME}</strong>
-          {!online ? <div className="boot-offline">Connect to the internet to load your workspace.</div> : <div className="boot-status" aria-label={statuses.join(" ")}>
-            {statuses.map((status, index) => (
-              <span key={status} style={{ "--status-index": index } as CSSProperties}>{status}</span>
-            ))}
-          </div>}
+          {!online ? <div className="boot-offline" role="status">Connect to the internet to load your workspace.</div> : !appError ? (
+            <div className="boot-status" role="status">
+              <span>Opening your workspace</span>
+              <span className="boot-pips" aria-hidden="true"><i /><i /><i /></span>
+            </div>
+          ) : null}
         </div>
         {appError && online ? (
           <div className="boot-error" role="alert">
@@ -767,7 +756,6 @@ function buildAgentPerformance(activities: AgentActivity[], runs: AgentRun[]): A
 }
 
 function App() {
-  const [bootStartedAt] = useState(() => performance.now());
   const [bootReady, setBootReady] = useState(false);
   const [backendEventStartCursor, setBackendEventStartCursor] = useState<number | null>(null);
   const startupSplashCompletedRef = useRef(false);
@@ -2106,11 +2094,8 @@ function App() {
 
   useEffect(() => {
     if ((!data && !appError) || bootReady) return;
-    const elapsed = performance.now() - bootStartedAt;
-    const delay = Math.max(0, MIN_BOOT_SPLASH_MS - elapsed);
-    const timer = window.setTimeout(() => setBootReady(true), delay);
-    return () => window.clearTimeout(timer);
-  }, [appError, bootReady, bootStartedAt, data]);
+    setBootReady(true);
+  }, [appError, bootReady, data]);
 
   useEffect(() => {
     if (!bootReady || (!data && !appError) || startupSplashCompletedRef.current) return;
