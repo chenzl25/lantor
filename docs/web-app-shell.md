@@ -11,6 +11,12 @@ instead of the logo. Keep `crossorigin="use-credentials"` on the manifest link
 so the manifest itself can use the site's login cookie. Startup and in-app
 images remain local, and the bundled startup logo is available offline.
 
+Installation PNGs use a full-bleed opaque square background, allowing the
+platform to apply its own corner mask without a baked-in rim. Their versioned
+filenames avoid reusing the prior icon URL after an artwork update. The source
+is `docs/assets/lantor-install-master-v2.png`; derive the 180/192/512px files
+directly from that master with high-quality downsampling.
+
 Registration requires HTTPS (including a Tailscale HTTPS origin) or localhost.
 Plain HTTP on a LAN/Tailscale IP cannot install a service worker. Vite development
 and Tauri never register it. See the browser's [secure-context registration
