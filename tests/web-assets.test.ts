@@ -35,11 +35,11 @@ test("web build sidecars round-trip, preserve originals and skip binary files", 
   assert.equal(await compressWebAssets(directory), 4, "reruns do not compress sidecars again");
 });
 
-test("PWA and page icons are local PNG assets with the declared dimensions", async () => {
+test("installation icons use public PNGs so Access cookies are not required", async () => {
   const root = new URL("../", import.meta.url);
   const html = await readFile(new URL("index.html", root), "utf8");
   const manifest = JSON.parse(await readFile(new URL("public/manifest.webmanifest", root), "utf8"));
-  assert.ok(!html.includes("raw.githubusercontent.com"));
+  assert.match(html, /rel="manifest"[^>]+crossorigin="use-credentials"/);
   const icons = [
     ...manifest.icons,
     ...Array.from(html.matchAll(/<link\s+[^>]*rel="(?:icon|apple-touch-icon)"[^>]*>/g), ([tag]) => ({
@@ -49,8 +49,11 @@ test("PWA and page icons are local PNG assets with the declared dimensions", asy
   ];
   assert.equal(icons.length, 4);
   for (const icon of icons) {
-    assert.match(icon.src, /^\/(?!\/)[^?#]+\.png$/);
-    const png = await readFile(new URL(`public${icon.src}`, root));
+    const prefix = "https://raw.githubusercontent.com/chenzl25/lantor/main/public/";
+    assert.ok(icon.src.startsWith(prefix), "install icons must be accessible without the app's login cookie");
+    const filename = icon.src.slice(prefix.length);
+    assert.match(filename, /^[\w-]+\.png$/);
+    const png = await readFile(new URL(`public/${filename}`, root));
     assert.equal(png.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
     assert.equal(`${png.readUInt32BE(16)}x${png.readUInt32BE(20)}`, icon.sizes);
   }

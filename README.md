@@ -75,8 +75,10 @@ development app alone does not rebuild the browser bundle.
 `npm run build` also generates gzip/Brotli sidecars for text assets. The web
 server negotiates them via `Accept-Encoding` and keeps the original files for
 other clients; API/SSE routes are not affected. Serve the complete `dist/`
-directory, including the sidecars and local PWA icons. This removes the icon
-dependency on external hosts; full offline app support requires a service worker.
+directory, including the sidecars and local icon assets. Installation metadata
+uses the public GitHub copies of the icons so Home Screen setup can fetch them
+without the site's Cloudflare Access cookie; startup and in-app images stay
+local. See [`docs/web-app-shell.md`](docs/web-app-shell.md) for cache behavior.
 
 Math rendering is loaded on demand, including KaTeX CSS/fonts. Messages use the
 existing `$$...$$` / `math` fenced-code syntax; single-dollar prices stay plain

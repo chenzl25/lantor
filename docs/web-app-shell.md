@@ -4,7 +4,12 @@ Production Web builds generate `/sw.js` and a version marker in `index.html`.
 The worker precaches the HTML plus Vite's emitted hashed JavaScript, CSS, fonts
 and images after the initial page load. This uses a small build plugin instead
 of a general runtime caching library, so the allowlist is explicit and testable.
-The existing PWA manifest and local installation icons remain unchanged.
+Installation icons in the manifest and HTML use the public GitHub copies of
+the checked-in PNGs. Home Screen icon fetches may not carry a Cloudflare Access
+cookie; pointing them at a protected application origin can produce a monogram
+instead of the logo. Keep `crossorigin="use-credentials"` on the manifest link
+so the manifest itself can use the site's login cookie. Startup and in-app
+images remain local, and the bundled startup logo is available offline.
 
 Registration requires HTTPS (including a Tailscale HTTPS origin) or localhost.
 Plain HTTP on a LAN/Tailscale IP cannot install a service worker. Vite development
