@@ -99,3 +99,22 @@ notification. Tapping a notification opens the conversation.
   `mailto:` or `https:` contact if you want one other than the project URL.
 - Items already waiting when the web process starts, or older than ten
   minutes, are not announced, so a restart never floods the phone.
+
+## Expired proxy sessions
+
+When Cloudflare Access expires a browser session, Lantor shows **Sign in again**
+and pauses API calls and event-stream retries. Sign in in the new tab, then
+return to the original tab: Lantor checks the session and resumes synchronization
+without discarding unsent text or attachments. Failed mutations are not
+automatically resubmitted. Keep the original tab open until you have sent or
+saved its drafts.
+
+The sign-in navigation uses `/?lantor-auth=1`, which bypasses the app-shell
+service worker cache so the request reaches Access. API requests send
+`X-Requested-With: XMLHttpRequest` so Access returns an explicit `401` on
+expiry instead of a background login redirect. Event-stream failures trigger a
+throttled check of `/api/health`; this endpoint must be protected by the same
+Access policy as the rest of the application. Network failures, `403` policy
+denials, and server errors are not treated as session expiry.
+
+See [Cloudflare Access session management](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/#ajax).
