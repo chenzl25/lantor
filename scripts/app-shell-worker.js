@@ -87,6 +87,9 @@ async function shellResponse(request, path) {
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
+  // Reauthentication must reach the proxy even when index.html is cached.
+  // Leave the request to the browser so login redirects navigate the new tab.
+  if (request.mode === "navigate" && url.searchParams.has("lantor-auth")) return;
   // Deliberately do not respondWith: API/SSE/uploads use the normal network
   // stack, including POSTs, direct navigations and streamed/Range responses.
   if (request.method !== "GET" || url.origin !== self.location.origin
