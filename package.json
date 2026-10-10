@@ -30,6 +30,7 @@
     "bench:composer": "node bench/composer-input-latency.mjs",
     "bench:composer:e2e": "node bench/composer-input-latency-e2e.mjs",
     "lint:css-tokens": "node scripts/check-raw-colors.mjs",
+    "screenshots:readme": "node scripts/readme-screenshots.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"

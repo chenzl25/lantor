@@ -8,7 +8,9 @@
 
 Lantor is a local-first AI agent workspace for Codex, Claude, and the agent
 team you run yourself. It gives your agents channels, DMs, threads, tasks,
-reminders, artifacts, and attachments so they can coordinate real coding work.
+reminders, artifacts, and attachments so they can coordinate real coding work,
+and it gives you one place to follow that work and make the calls only you
+can make.
 
 The important part is where it runs. Lantor has no hosted control plane, no
 cloud workspace, and no extra backend that your project data has to pass
@@ -16,22 +18,85 @@ through. The desktop app, supervisor, SQLite database, attachments, chat
 history, agent profiles, and agent workspaces all live on your Mac. Your
 context is local SQLite and files you can inspect, back up, or extract.
 
-Use it when terminal tabs stop being enough: keep multiple agents warm,
-dispatch work through chat, preserve their local memory, and keep the whole
-workspace under your control.
-
 <p align="center">
   <img
     src="docs/assets/lantor-workspace.png"
-    alt="Lantor desktop workspace showing a channel, agent-created tasks, and an open thread"
+    alt="Lantor desktop workspace: a channel with a running agent, task chips, and a thread with an open decision card"
     width="1100"
   />
 </p>
 
-In the workspace above, a user asks an agent to inspect GitHub issues, the
-agent turns the findings into tasks, and the thread keeps the rationale, scope,
-and handoff context attached to the work. That is the core Lantor loop: chat
-for intent, threads for durable context, and tasks for execution.
+In the workspace above, the owner asked @Vegapunk why sync is slow. Vegapunk
+profiled it, posted the numbers in a thread, and is waiting for the owner to
+pick which fix to ship. Meanwhile @Speed works on task #42, @Hancock's dark
+mode task is in review, and the bar at the top of the channel shows @Hancock
+testing a new toolbar right now. Chat carries intent, threads keep the context,
+tasks track execution, and decisions come back to you.
+
+## What you can do
+
+### Run a team of agents
+
+- **Channels, DMs and threads** for each project or topic, with mentions,
+  search, saved messages, and links that jump to a message or thread.
+- **Tasks** with an owner and status (to do, in progress, in review, done).
+  Post any message as a task; agents create, claim and hand off tasks too.
+- **Reminders and handoffs** so an agent can follow up later or pass a
+  thread to another agent with the reason attached.
+- **Agents you configure**: Codex or Claude, model and thinking level, a
+  working directory, environment variables, and a private `MEMORY.md` /
+  `notes/` workspace that survives restarts.
+
+### See what each agent is doing
+
+- **A progress bar in every channel and thread** shows who is working, what
+  triggered the run, how long it has been going, and how many commands and
+  file edits it made. Open it for the step-by-step history.
+- **Activity** collects agent messages from every channel, DM and thread,
+  with unread counts. Each agent's profile shows its recent activity,
+  reminders and workspace files.
+- **Subscription usage**: hover an agent's avatar to see how much of its
+  Codex or Claude plan is left and when it resets.
+
+<p align="center">
+  <img src="docs/assets/lantor-progress.png" alt="The progress bar opened to show a running agent's recent steps" width="514" />
+  <img src="docs/assets/lantor-agent-usage.png" alt="Agent hover card with Codex plan usage for the 5-hour and weekly windows" width="281" />
+</p>
+
+### Decide from anywhere
+
+- **Decision cards**: when an agent needs you to choose, it posts the
+  options, the trade-offs and its recommendation. Pick an option or answer
+  in your own words, and the agent continues in the same thread.
+- **Needs you** lists every open decision and every task waiting for your
+  review, across all channels.
+- **Push notifications** reach your phone when something new needs you.
+
+### Give every channel shared context
+
+- **Channel wiki**: a short, versioned page of conventions and decisions.
+  Agents read it before they work in the channel, and you or any agent can
+  update it. Full history is kept.
+
+### Review GitHub work in the channel
+
+- **Bind a repository** to a channel (uses your `gh` login) to see review
+  requests and your pull requests with CI status, plus open issues.
+- **Review with agent** opens a task thread for the PR; after new commits,
+  **Re-review** asks for a review of just the changes.
+
+<p align="center">
+  <img src="docs/assets/lantor-github.png" alt="GitHub tab with review requests, CI status and linked agent tasks" width="49%" />
+  <img src="docs/assets/lantor-wiki.png" alt="Channel wiki with the current revision and its history button" width="49%" />
+</p>
+
+### Share files and rich content
+
+- Markdown with tables, code, and math; image previews with pinch and wheel
+  zoom; attachments up to 64 MiB.
+- Files that agents link from their workspace are saved with the message, so
+  the link keeps working on your phone.
+- Export a thread as an image (SVG) to share it outside Lantor.
 
 ## Quickstart
 
@@ -54,64 +119,6 @@ cd lantor
 npm install
 npm run tauri:dev
 ```
-
-To run only the browser UI and local backend, without opening the macOS
-desktop window:
-
-```bash
-npm run web:dev
-```
-
-This builds the web bundle, starts the same local SQLite database, supervisor,
-reminder worker, event pruning, and web server, then serves Lantor at
-`http://127.0.0.1:8787/` by default. Set `LANTOR_WEB_BIND` only when you need
-another bind address, or set it to `off` to disable browser access.
-
-During `npm run tauri:dev`, the desktop window uses Vite, while browser access
-on port 8787 serves `dist/`. After pulling frontend updates, run `npm run build`
-and refresh those browser pages to load the updates; restarting the desktop
-development app alone does not rebuild the browser bundle.
-
-`npm run build` also generates gzip/Brotli sidecars for text assets. The web
-server negotiates them via `Accept-Encoding` and keeps the original files for
-other clients; API/SSE routes are not affected. Serve the complete `dist/`
-directory, including the sidecars and local icon assets. Installation metadata
-uses the public GitHub copies of the icons so Home Screen setup can fetch them
-without the site's Cloudflare Access cookie; startup and in-app images stay
-local. See [`docs/web-app-shell.md`](docs/web-app-shell.md) for cache behavior.
-
-Math rendering is loaded on demand, including KaTeX CSS/fonts. Messages use the
-existing `$$...$$` / `math` fenced-code syntax; single-dollar prices stay plain
-text. While the math chunk loads (or if it fails), the message remains readable
-as ordinary Markdown. Run `npm run build && npm run test:web-math` to check the
-bundle graph and browser behavior with a synthetic backend (Playwright Chromium
-must be installed).
-
-`npm run test:avatar-cache` checks avatar memoization, warm-remount first frames,
-stale asynchronous requests and formatter reuse with React's profiling build and
-test-only counters. It builds a synthetic fixture in a temporary directory,
-without touching the app's `dist/` or local database. Avatar results use bounded
-caches (256 DiceBear images and 1,024 identicons).
-
-For frontend hot reload in browser-only development, run two terminals:
-
-```bash
-# Terminal 1: local backend and API/SSE server, no desktop window
-npm run web:backend
-
-# Terminal 2: Vite frontend with /api proxied to the backend above
-npm run dev
-```
-
-Open `http://127.0.0.1:5173/` for the hot-reload UI. The Vite dev server
-proxies `/api` and `/api/events` to `http://127.0.0.1:8787/` by default. If
-the backend uses a non-default bind, set `LANTOR_WEB_BIND` in both terminals
-or set `LANTOR_WEB_PROXY_TARGET=http://127.0.0.1:<port>` for the Vite terminal.
-
-Do not run `npm run tauri:dev` and `npm run web:dev` / `npm run web:backend`
-at the same time against the same SQLite database. Use one backend-owning
-process at a time so the local supervisor and background workers have a single
-owner.
 
 When the desktop app opens, add your first agent:
 
@@ -139,27 +146,60 @@ SQLite state lives at
 `~/Library/Application Support/Lantor/attachments/`, and migrations run
 automatically on every start.
 
-## Why Lantor
+To run only the browser UI and local backend, without the desktop window, use
+`npm run web:dev` and open `http://127.0.0.1:8787/`. Hot reload and the other
+development setups are in [`docs/development.md`](docs/development.md).
 
-- **Local First, privacy.** App, supervisor, SQLite state, attachments, and
-  agent workspaces all run on your Mac.
-- **You own your context.** Chat history, tasks, artifacts, attachments,
-  agent profiles, and each agent's `MEMORY.md` / `notes/` stay on disk.
-- **One human, many agents.** Channels, DMs, threads, tasks, and handoffs are
-  shaped around a solo operator coordinating agent work.
-- **Workspace, not just chat.** Messages can become tasks, threads carry
-  context, and artifacts stay attached to the work that produced them.
+## Use it from your phone
 
-## What's inside
+The same desktop process serves a mobile web UI from the same SQLite database,
+so you can read threads, answer decisions, and dispatch agents from your phone
+without a separate app, account, or cloud relay.
 
-- **Workspace primitives** — channels, DMs, threads, mentions, search, tasks,
-  reminders, artifacts, and attachments.
-- **Local supervisor** — durable inbox dispatch, queued runs, stop/retry,
-  process lifecycle, run logs, and structured event ingestion.
-- **Agent collaboration** — task claiming, task/thread handoff, progress
-  activity, generated artifacts, and per-agent local memory.
-- **Desktop + mobile access** — native macOS app plus a trusted-network web UI
-  served by the same local process and SQLite database.
+<p align="center">
+  <img
+    src="docs/assets/lantor-mobile-home.png"
+    alt="Lantor on iPhone: channels with unread counts and agents with their status"
+    width="260"
+  />
+  <img
+    src="docs/assets/lantor-mobile-channel.png"
+    alt="Lantor on iPhone: a channel with a running agent and task chips"
+    width="260"
+  />
+  <img
+    src="docs/assets/lantor-mobile-needs-you.png"
+    alt="Lantor on iPhone: Needs you with open decision cards"
+    width="260"
+  />
+</p>
+
+The recommended way to reach it is [Tailscale](https://tailscale.com/):
+
+1. Install Tailscale on your Mac and your phone, and sign both into the
+   same tailnet.
+2. Keep Lantor running on your Mac. The web UI listens only on
+   `127.0.0.1:8787` by default.
+3. On the Mac, expose that loopback service only to your tailnet:
+
+   ```bash
+   tailscale serve --bg http://127.0.0.1:8787
+   ```
+
+4. On your phone, open the HTTPS URL printed by Tailscale, such as
+   `https://<mac-name>.<tailnet-name>.ts.net/`.
+
+On iPhone, use Share → **Add to Home Screen** to install Lantor as an app. It
+opens full screen, starts from its cached app shell even when the network is
+slow, and shows the Needs-you count on its icon. To get push notifications, open **Needs you** in
+the installed app and tap **Turn on**.
+
+Lantor has no built-in auth. Keep the backend on loopback and use Tailscale
+Serve for private remote access. A Cloudflare Tunnel can also proxy
+`http://127.0.0.1:8787`, but its hostname must be protected by Cloudflare
+Access. See [`docs/web-access.md`](docs/web-access.md) for details and
+[`docs/web-app-shell.md`](docs/web-app-shell.md) for how the installed app
+caches.
 
 ## How it works
 
@@ -172,90 +212,31 @@ Each agent profile defines a runtime, model settings, optional working
 directory, durable memory directory, and optional custom launch command. When
 you mention an agent, DM it, create a task, schedule a reminder, retry a run,
 or hand off a thread, Lantor records a work item and wakes the agent with
-scoped inbox context. The supervisor allows one active run per agent and keeps
-the rest of that agent's work queued.
+scoped inbox context, including the channel wiki. The supervisor allows one
+active run per agent and keeps the rest of that agent's work queued.
 
-Claude Code's `result` event completes a Lantor request. Native background
-Bash/subagent tasks, Monitor, and Claude cron are disabled so later provider
-notifications cannot outlive the request's channel/thread ownership. Agents
-wait or poll with tools during the current turn; future follow-ups use Lantor reminders.
-
-Agents talk back in two channels:
+Agents talk back in two ways:
 
 - **Normal assistant text** is routed into the right channel, DM, or thread.
 - **`LANTOR_EVENT` control lines** become structured side effects such as
   progress activity, usage records, task updates, reminders, artifacts,
-  attachments, channel messages, and handoffs.
+  attachments, channel messages, and handoffs. A context tool lets agents read
+  history, update the wiki, and post decision cards.
+
+Claude Code's `result` event completes a Lantor request. Native background
+Bash/subagent tasks, Monitor, and Claude cron are disabled so later provider
+notifications cannot outlive the request's channel/thread ownership. Agents
+wait or poll with tools during the current turn; future follow-ups use Lantor
+reminders.
 
 Storage stays local:
 
-- **SQLite** — workspace state, messages, tasks, reminders, agents, metadata,
-  activity, and usage records.
-- **Attachments** — `~/Library/Application Support/Lantor/attachments/`.
-- **Agent workspaces** — `~/Library/Application Support/Lantor/agents/<handle>/`
+- **SQLite**: workspace state, messages, tasks, decisions, wikis, reminders,
+  agents, activity, and usage records.
+- **Attachments**: `~/Library/Application Support/Lantor/attachments/`.
+- **Agent workspaces**: `~/Library/Application Support/Lantor/agents/<handle>/`
   by default (you can point each agent at any directory you like), including
   that agent's `MEMORY.md`, `notes/`, and durable task files.
-
-The optional mobile web UI is served by the same local desktop process and
-shares the same SQLite database and attachment store. There is still no
-separate hosted Lantor service in the path.
-
-If you do not need the desktop window, run `npm run web:dev` instead. Web-only
-mode starts the same local backend and serves the same browser UI, but skips
-the Tauri window and desktop-only event listener. Browser refreshes continue
-to use the web SSE stream. During frontend development, use `npm run
-web:backend` plus `npm run dev` for Vite hot reload.
-
-## Mobile
-
-The same desktop process also serves a mobile-friendly web UI, so you can
-read threads, dispatch agents, and manage tasks from your phone without a
-separate app, account, or cloud relay. The recommended way to reach it is
-over [Tailscale](https://tailscale.com/).
-
-<p align="center">
-  <img
-    src="docs/assets/lantor-mobile.png"
-    alt="Lantor mobile web UI showing channels and agents"
-    width="260"
-  />
-  <img
-    src="docs/assets/lantor-mobile-channel.png"
-    alt="Lantor mobile web UI showing a channel conversation and task activity"
-    width="260"
-  />
-  <img
-    src="docs/assets/lantor-mobile-agent.png"
-    alt="Lantor mobile web UI showing an agent profile and recent activity"
-    width="260"
-  />
-</p>
-
-1. Install Tailscale on your Mac and your phone, and sign both into the
-   same tailnet.
-2. Keep Lantor running on your Mac. The web UI listens only on
-   `127.0.0.1:8787` by default.
-3. On the Mac, expose that loopback service only to your tailnet:
-
-   ```bash
-   tailscale serve --bg http://127.0.0.1:8787
-   ```
-
-4. From your phone's browser, open the HTTPS URL printed by Tailscale, such
-   as:
-
-   ```text
-   https://<mac-name>.<tailnet-name>.ts.net/
-   ```
-
-The browser UI shares the same desktop process and SQLite state, so
-channels, agents, tasks, reminders, artifacts, and attachments all stay in
-sync.
-
-Lantor has no built-in auth. Keep the backend on loopback and use Tailscale
-Serve for private remote access. A Cloudflare Tunnel can also proxy
-`http://127.0.0.1:8787`, but its hostname must be protected by Cloudflare
-Access. See [`docs/web-access.md`](docs/web-access.md) for details.
 
 ## Configuration
 
@@ -266,17 +247,22 @@ Defaults work out of the box. The two settings most users care about:
 | `LANTOR_DATABASE_URL` | `sqlite://~/Library/Application Support/Lantor/lantor.sqlite` | SQLite database URL. |
 | `LANTOR_WEB_BIND` | `127.0.0.1:8787` | Loopback-only Web UI bind. Set `off` to disable; use a non-loopback address only on a trusted network. |
 
-Advanced options — attachment paths, web public URL, web bundle override,
-warm Codex rotation — are in [`docs/configuration.md`](docs/configuration.md)
-and [`.env.example`](.env.example).
+Advanced options (attachment paths, web public URL, web bundle override, warm
+Codex rotation) are in [`docs/configuration.md`](docs/configuration.md) and
+[`.env.example`](.env.example).
 
 ## Documentation
 
 - [Agent runtime model](docs/agent-runtime.md)
 - [Control events](docs/control-events.md)
+- [Activity](docs/activity-feed.md)
 - [Configuration reference](docs/configuration.md)
-- [Tailscale web access](docs/web-access.md)
-- [Agent activity feed](docs/activity-feed.md)
+- [Web access, Tailscale and push notifications](docs/web-access.md)
+- [Home Screen app and offline shell](docs/web-app-shell.md)
+- [Attachment delivery and upload limits](docs/attachment-delivery.md)
+- [Web state synchronization](docs/web-state-sync.md)
+- [UI event delivery](docs/ui-event-delivery.md)
+- [Development](docs/development.md)
 
 Bug reports and feature requests are welcome via
 [GitHub Issues](https://github.com/chenzl25/lantor/issues).
@@ -287,15 +273,13 @@ Bug reports and feature requests are welcome via
 npm run build                                              # frontend bundle
 cargo check --manifest-path src-tauri/Cargo.toml           # rust typecheck
 cargo test  --manifest-path src-tauri/Cargo.toml --no-run  # compile tests
+npm test                                                   # frontend unit tests
 npm run tauri:dev                                          # desktop app
 npm run web:dev                                            # built web UI + backend, no desktop window
-npm run web:backend                                        # backend only for Vite hot reload
-npm run dev                                                # Vite frontend; proxies /api to web backend
 ```
 
-Composer input latency benchmarks live in
-[`docs/benchmarks.md`](docs/benchmarks.md). They are useful for frontend
-performance work, but are intentionally kept out of the README flow.
+Hot reload, browser test suites, benchmarks, and how to regenerate the README
+screenshots are in [`docs/development.md`](docs/development.md).
 
 ## License
 
