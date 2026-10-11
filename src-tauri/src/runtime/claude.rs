@@ -22,7 +22,7 @@ use crate::runtime::{
     process::{
         classify_agent_output_activity, cleanup_failed_warm_start,
         configure_agent_context_tool_env, configure_agent_identity_env, terminate_process_group,
-        upsert_runtime_thread_id, WarmStartFailure,
+        truncate_activity_detail, upsert_runtime_thread_id, WarmStartFailure,
     },
     runtime_environment_changed,
     streaming::{
@@ -51,11 +51,12 @@ use text::ClaudeTextState;
 mod recovery_tests;
 
 use protocol::{
-    claude_context_tokens, claude_message_text_blocks, claude_result_error, claude_result_text,
-    claude_resume_session_missing, claude_session_id, claude_stream_event_activity,
-    claude_stream_key, claude_streaming_command_text, claude_surface_boundary_marker,
-    claude_text_delta, claude_user_input, claude_write_input, CLAUDE_DISABLE_BACKGROUND_TASKS_ENV,
-    CLAUDE_DISABLE_CRON_ENV, CLAUDE_MAX_RETRIES_ENV, DEFAULT_CLAUDE_MAX_RETRIES,
+    claude_context_tokens, claude_main_tool_use_started, claude_message_text_blocks,
+    claude_result_error, claude_result_text, claude_resume_session_missing, claude_session_id,
+    claude_stream_event_activity, claude_stream_key, claude_streaming_command_text,
+    claude_surface_boundary_marker, claude_text_delta, claude_user_input, claude_write_input,
+    CLAUDE_DISABLE_BACKGROUND_TASKS_ENV, CLAUDE_DISABLE_CRON_ENV, CLAUDE_MAX_RETRIES_ENV,
+    DEFAULT_CLAUDE_MAX_RETRIES,
 };
 use reaper::claude_warm_idle_reaper;
 use session::{
@@ -165,7 +166,7 @@ async fn reconcile_final_text(
                 channel_id,
                 thread_root_id,
                 &stream_key,
-                &text.blocks(),
+                &text.visible_blocks(),
             )
             .await?;
             record_agent_activity(
@@ -185,6 +186,42 @@ async fn reconcile_final_text(
         }
     }
     Ok(())
+}
+
+/// Rewrite the finished reply without progress notes written between tool
+/// calls. Their controls were already delivered live and replay idempotently.
+async fn drop_interim_progress_text(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    runtime: &Arc<WarmClaudeRuntime>,
+) -> CommandResult<()> {
+    let (blocks, channel_id, thread_root_id, stream_key) = {
+        let state = runtime.state.lock().await;
+        let Some(active) = state.active.as_ref() else {
+            return Ok(());
+        };
+        if !active.text.has_interim_prose() {
+            return Ok(());
+        }
+        (
+            active.text.visible_blocks(),
+            active.channel_id,
+            active.thread_root_id,
+            active.stream_key.clone(),
+        )
+    };
+    let Some(channel_id) = channel_id else {
+        return Ok(());
+    };
+    reconcile_streaming_agent_message(
+        pool,
+        agent_id,
+        channel_id,
+        thread_root_id,
+        &stream_key,
+        &blocks,
+    )
+    .await
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -923,9 +960,43 @@ async fn handle_claude_warm_stdout_line(
 
     reconcile_final_text(pool, agent_id, runtime, &value).await?;
 
+    // After reconciling, so text completed by this same `assistant` line counts
+    // as preceding the tool call.
+    if claude_main_tool_use_started(&value) {
+        let notes = runtime
+            .state
+            .lock()
+            .await
+            .active
+            .as_mut()
+            .map(|active| active.text.mark_tool_use())
+            .unwrap_or_default();
+        if let Some(run_id) = active_run_id {
+            for note in notes {
+                let title: String = note
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(120)
+                    .collect();
+                record_agent_activity(
+                    pool,
+                    Some(agent_id),
+                    Some(run_id),
+                    "thinking",
+                    title,
+                    truncate_activity_detail(&note),
+                )
+                .await?;
+            }
+        }
+    }
+
     if let Some(error) = claude_result_error(&value) {
         finish_warm_claude_active_turn(pool, agent_id, runtime, false, Some(error)).await?;
     } else if value.get("type").and_then(Value::as_str) == Some("result") {
+        drop_interim_progress_text(pool, agent_id, runtime).await?;
         finish_warm_claude_active_turn(pool, agent_id, runtime, true, None).await?;
     }
 

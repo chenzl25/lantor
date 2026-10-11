@@ -36,6 +36,43 @@ pub(super) fn claude_text_delta(value: &Value) -> Option<&str> {
     value.pointer("/event/delta/text").and_then(Value::as_str)
 }
 
+/// Whether this line starts a tool call in the main conversation, either as a
+/// streamed content block or as a completed `assistant` message. Subagent
+/// lines carry a `parent_tool_use_id` and never split the main reply.
+pub(super) fn claude_main_tool_use_started(value: &Value) -> bool {
+    if value
+        .get("parent_tool_use_id")
+        .is_some_and(|parent| !parent.is_null())
+    {
+        return false;
+    }
+    let is_tool = |block_type: Option<&str>| {
+        matches!(
+            block_type,
+            Some("tool_use" | "server_tool_use" | "mcp_tool_use")
+        )
+    };
+    match value.get("type").and_then(Value::as_str) {
+        Some("stream_event") => {
+            value.pointer("/event/type").and_then(Value::as_str) == Some("content_block_start")
+                && is_tool(
+                    value
+                        .pointer("/event/content_block/type")
+                        .and_then(Value::as_str),
+                )
+        }
+        Some("assistant") => value
+            .pointer("/message/content")
+            .and_then(Value::as_array)
+            .is_some_and(|content| {
+                content
+                    .iter()
+                    .any(|block| is_tool(block.get("type").and_then(Value::as_str)))
+            }),
+        _ => false,
+    }
+}
+
 pub(super) fn claude_session_id(value: &Value) -> Option<&str> {
     value.get("session_id").and_then(Value::as_str)
 }

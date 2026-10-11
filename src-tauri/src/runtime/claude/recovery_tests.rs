@@ -397,3 +397,123 @@ async fn parallel_tool_calls_each_count_toward_the_run_totals() {
     );
     f.close().await;
 }
+
+fn tool_start(index: u64) -> Value {
+    json!({"type":"stream_event","event":{"type":"content_block_start","index":index,"content_block":{"type":"tool_use","id":format!("t{index}"),"name":"Bash","input":{}}}})
+}
+
+async fn activity_titles(f: &Fixture, kind: &str) -> Vec<String> {
+    sqlx::query_scalar(
+        "select title from agent_activities where run_id=$1 and kind=$2 order by rowid",
+    )
+    .bind(f.run)
+    .bind(kind)
+    .fetch_all(&f.pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn progress_notes_before_tool_calls_leave_only_the_final_reply() {
+    let f = Fixture::new().await;
+    f.stream("Now checking the build.").await;
+    f.assistant("m1", "Now checking the build.").await;
+    f.send(tool_start(1)).await;
+    f.stream("正在核对数字，接着画图。").await;
+    f.assistant("m2", "正在核对数字，接着画图。").await;
+    f.send(tool_start(1)).await;
+    // While the turn runs the notes stay visible as progress.
+    assert!(f.body().await.contains("Now checking the build."));
+    f.stream("The build is green.").await;
+    f.assistant("m3", "The build is green.").await;
+    f.result("The build is green.").await;
+    assert_eq!(f.body().await, "The build is green.");
+    assert_eq!(
+        activity_titles(&f, "thinking").await,
+        vec!["Now checking the build.", "正在核对数字，接着画图。"]
+    );
+    let state: String =
+        sqlx::query_scalar("select delivery_state from messages where stream_key=$1")
+            .bind(&f.key)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(state, "complete");
+    f.close().await;
+}
+
+#[tokio::test]
+async fn last_prose_is_kept_even_when_a_tool_call_follows_it() {
+    let f = Fixture::new().await;
+    f.stream("Closed the PR.").await;
+    f.assistant("m1", "Closed the PR.").await;
+    f.send(tool_start(1)).await;
+    let control =
+        "LANTOR_EVENT {\"type\":\"activity\",\"kind\":\"command\",\"title\":\"Notes saved\"}";
+    f.stream(control).await;
+    f.assistant("m2", control).await;
+    f.result(control).await;
+    assert_eq!(f.body().await, "Closed the PR.");
+    f.close().await;
+}
+
+#[tokio::test]
+async fn long_prose_before_a_tool_call_stays_in_the_reply() {
+    let f = Fixture::new().await;
+    let answer = "完整的结论。".repeat(80);
+    f.stream(&answer).await;
+    f.assistant("m1", &answer).await;
+    f.send(tool_start(1)).await;
+    f.stream("Saved to notes.").await;
+    f.assistant("m2", "Saved to notes.").await;
+    f.result("Saved to notes.").await;
+    assert_eq!(f.body().await, format!("{answer}\n\nSaved to notes."));
+    f.close().await;
+}
+
+#[tokio::test]
+async fn controls_inside_a_dropped_progress_note_still_apply_once() {
+    let f = Fixture::new().await;
+    let note = "Reading the parser.\nLANTOR_EVENT {\"type\":\"activity\",\"kind\":\"command\",\"title\":\"Parser read\"}";
+    f.stream(note).await;
+    f.assistant("m1", note).await;
+    f.send(tool_start(1)).await;
+    f.stream("Parser is fine.").await;
+    f.assistant("m2", "Parser is fine.").await;
+    f.result("Parser is fine.").await;
+    assert_eq!(f.body().await, "Parser is fine.");
+    let applied: i64 = sqlx::query_scalar(
+        "select count(*) from agent_activities where run_id=$1 and title='Parser read'",
+    )
+    .bind(f.run)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(applied, 1);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn subagent_tool_calls_do_not_split_the_main_reply() {
+    let f = Fixture::new().await;
+    f.stream("Short answer.").await;
+    f.assistant("m1", "Short answer.").await;
+    f.send(json!({"type":"assistant","parent_tool_use_id":"t0","message":{"id":"s1","content":[{"type":"tool_use","id":"s-t1","name":"Read","input":{}}]}})).await;
+    f.stream("More detail.").await;
+    f.assistant("m2", "More detail.").await;
+    f.result("More detail.").await;
+    assert_eq!(f.body().await, "Short answer.\n\nMore detail.");
+    f.close().await;
+}
+
+#[tokio::test]
+async fn assistant_line_with_text_and_tool_call_marks_the_note_without_stream_events() {
+    let f = Fixture::new().await;
+    f.send(json!({"type":"assistant","parent_tool_use_id":null,"uuid":"a1","message":{"id":"m1","content":[{"type":"text","text":"Now fix fig3."},{"type":"tool_use","id":"t1","name":"Edit","input":{}}]}})).await;
+    f.stream("Figure 3 is fixed.").await;
+    f.assistant("m2", "Figure 3 is fixed.").await;
+    f.result("Figure 3 is fixed.").await;
+    assert_eq!(f.body().await, "Figure 3 is fixed.");
+    assert_eq!(activity_titles(&f, "thinking").await, vec!["Now fix fig3."]);
+    f.close().await;
+}
