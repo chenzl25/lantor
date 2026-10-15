@@ -29,6 +29,8 @@ test("web attachment sends raw bytes as multipart form data", async () => {
 
     assert.equal(requestUrl, "/api/send_message");
     assert.equal(requestInit?.method, "POST");
+    assert.equal(new Headers(requestInit?.headers).get("X-Requested-With"), "XMLHttpRequest");
+    assert.equal(new Headers(requestInit?.headers).get("content-type"), null, "browser supplies the multipart boundary");
     assert.ok(requestInit?.body instanceof FormData);
     const formData = requestInit.body;
     assert.deepEqual(JSON.parse(String(formData.get("request"))), {
