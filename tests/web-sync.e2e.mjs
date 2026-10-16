@@ -20,7 +20,7 @@ const state = {
     unread_count: 1, github_unread_count: 0, github_review_synced_at: null }],
   messages: [root], channel_message_history: [{ channel_id: channelId, before_seq: null, has_more: false }],
   thread_activities: [], channel_members: [], agents: [], saved_messages: [], dismissed_inbox_items: {},
-  read_inbox_items: {}, artifacts: [], reminders: [], agent_schedules: [], agent_runs: [], agent_work_items: [], agent_activities: [],
+  read_inbox_items: {}, artifacts: [], reminders: [], agent_runs: [], agent_work_items: [], agent_activities: [],
   tasks: [{ id: id(900), number: 1, message_id: root.id, channel_id: channelId, title: "Sync task", status: "todo",
     version: 1, channel_name: "sync-test", assignee_id: null, assignee_name: null, created_at: now, updated_at: now }],
   supervisor: { pid: null, status: "stopped", updated_at: null },

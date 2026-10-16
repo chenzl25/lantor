@@ -95,7 +95,6 @@ use context_tool::run_agent_context_tool;
 use db::{db_connect_with_url, db_url, migrate};
 use domain::{
     reminders::{cancel_reminder, complete_reminder, create_reminder, snooze_reminder},
-    schedules::{create_agent_schedule, update_agent_schedule_status},
     spawn_reminder_worker,
 };
 use lifecycle_commands::{
@@ -308,7 +307,6 @@ pub fn run() {
             report_client_crash,
             complete_reminder,
             create_agent,
-            create_agent_schedule,
             create_channel,
             create_github_issue_task,
             create_github_review_task,
@@ -361,7 +359,6 @@ pub fn run() {
             stop_agent,
             uninstall_supervisor_service,
             update_agent,
-            update_agent_schedule_status,
             update_channel,
             update_message,
             update_owner_profile,

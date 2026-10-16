@@ -55,7 +55,7 @@ const bootstrap = {
     body, message_created_at: message.created_at, created_at: message.created_at,
   }],
   dismissed_inbox_items: {}, read_inbox_items: {}, artifacts: [], tasks: [], reminders: [],
-  agent_schedules: [], agent_runs: [], agent_work_items: [], agent_activities: [],
+  agent_runs: [], agent_work_items: [], agent_activities: [],
   supervisor: { pid: null, status: "stopped", updated_at: null },
   launch_agent: { label: "", plist_path: "", installed: false, loaded: false }, ui_event_cursor: 0,
 };

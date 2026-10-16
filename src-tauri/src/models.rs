@@ -292,26 +292,6 @@ pub(crate) struct Reminder {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct AgentSchedule {
-    pub(crate) id: Uuid,
-    pub(crate) agent_id: Uuid,
-    pub(crate) agent_handle: String,
-    pub(crate) channel_id: Uuid,
-    pub(crate) channel_name: String,
-    pub(crate) channel_kind: String,
-    pub(crate) thread_root_id: Option<Uuid>,
-    pub(crate) title: String,
-    pub(crate) prompt: String,
-    pub(crate) cadence: String,
-    pub(crate) status: String,
-    pub(crate) next_run_at: DateTime<Utc>,
-    pub(crate) last_run_at: Option<DateTime<Utc>>,
-    pub(crate) last_work_item_id: Option<Uuid>,
-    pub(crate) created_at: DateTime<Utc>,
-    pub(crate) updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize)]
 pub(crate) struct AgentRun {
     pub(crate) id: Uuid,
     pub(crate) agent_id: Uuid,
@@ -460,7 +440,6 @@ pub(crate) struct BootstrapPerfCounts {
     pub(crate) artifacts: usize,
     pub(crate) tasks: usize,
     pub(crate) reminders: usize,
-    pub(crate) agent_schedules: usize,
     pub(crate) agent_runs: usize,
     pub(crate) agent_work_items: usize,
     pub(crate) agent_activities: usize,
@@ -494,7 +473,6 @@ pub(crate) struct Bootstrap {
     pub(crate) tasks: Vec<Task>,
     pub(crate) decisions: Vec<Decision>,
     pub(crate) reminders: Vec<Reminder>,
-    pub(crate) agent_schedules: Vec<AgentSchedule>,
     pub(crate) agent_runs: Vec<AgentRun>,
     pub(crate) agent_work_items: Vec<AgentWorkItem>,
     pub(crate) agent_activities: Vec<AgentActivity>,

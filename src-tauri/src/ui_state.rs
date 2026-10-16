@@ -48,9 +48,6 @@ pub(crate) async fn load_ui_state_in_pool(
             "reminders" => {
                 serde_json::to_value(crate::domain::reminders::load_reminders(pool).await?)
             }
-            "agent_schedules" => {
-                serde_json::to_value(crate::domain::schedules::load_agent_schedules(pool).await?)
-            }
             "agent_runs" => {
                 serde_json::to_value(crate::activity_store::load_agent_run_summaries(pool).await?)
             }

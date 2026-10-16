@@ -451,25 +451,6 @@ export type Reminder = {
   updated_at: string;
 };
 
-export type AgentSchedule = {
-  id: string;
-  agent_id: string;
-  agent_handle: string;
-  channel_id: string;
-  channel_name: string;
-  channel_kind: "channel" | "dm" | string;
-  thread_root_id: string | null;
-  title: string;
-  prompt: string;
-  cadence: "hourly" | "daily" | "weekly" | string;
-  status: string;
-  next_run_at: string;
-  last_run_at: string | null;
-  last_work_item_id: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
 export type AgentRun = {
   id: string;
   agent_id: string;
@@ -562,7 +543,6 @@ export type Bootstrap = {
   /** Open decisions plus recently resolved ones. Absent in older fixtures. */
   decisions?: Decision[];
   reminders: Reminder[];
-  agent_schedules: AgentSchedule[];
   agent_runs: AgentRun[];
   agent_work_items: AgentWorkItem[];
   agent_activities: AgentActivity[];
@@ -600,7 +580,6 @@ export type BootstrapPerf = {
     artifacts: number;
     tasks: number;
     reminders: number;
-    agent_schedules: number;
     agent_runs: number;
     agent_work_items: number;
     agent_activities: number;

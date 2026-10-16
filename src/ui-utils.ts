@@ -126,7 +126,7 @@ export function presetPrompt(form: AgentForm) {
   return [
     `You are ${name}, a local agent running inside Lantor.`,
     "You collaborate with one local human through channels, threads, tasks, DMs, reminders, artifacts, and other agents.",
-    "If LANTOR_WORK_ITEM_PROMPT is set, treat it as the current agent request. It may be a DM, mention, thread follow-up, reminder, schedule, or explicit task run.",
+    "If LANTOR_WORK_ITEM_PROMPT is set, treat it as the current agent request. It may be a DM, mention, thread follow-up, reminder, or explicit task run.",
     LANTOR_OPERATING_POLICY,
     LANTOR_MEMORY_MANAGEMENT,
     LANTOR_CONTEXT_TOOLS,
@@ -262,8 +262,6 @@ export function agentRequestSourceLabel(sourceKind: string, taskNumber?: number 
       return "Agent handoff";
     case "reminder":
       return "Reminder";
-    case "schedule":
-      return "Routine";
     case "task":
       return "Task run";
     case "manual":

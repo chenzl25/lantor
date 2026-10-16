@@ -3617,7 +3617,7 @@ function App() {
     const fallbackChannelId = data?.channels.find((item) => item.id !== channelToDelete.id)?.id ?? "";
     setConfirmRequest({
       title: `Delete #${channelToDelete.name}?`,
-      body: "This removes the channel timeline, tasks, threads, agent memberships, schedules, and attachments for this channel. This cannot be undone.",
+      body: "This removes the channel timeline, tasks, threads, agent memberships, and attachments for this channel. This cannot be undone.",
       confirmLabel: "Delete channel",
       onConfirm: async () => {
         // Delete on the backend first, then update the UI optimistically instead
@@ -4497,7 +4497,7 @@ function App() {
     const fallbackChannelId = data?.channels.find((item) => item.id !== agentDm?.id)?.id ?? null;
     setConfirmRequest({
       title: `Delete @${agent.handle}?`,
-      body: "This removes the agent profile, DM, schedules, runtime sessions, runs, and pending requests. Existing channel messages keep their sender name.",
+      body: "This removes the agent profile, DM, runtime sessions, runs, and pending requests. Existing channel messages keep their sender name.",
       confirmLabel: "Delete agent",
       onConfirm: async () => {
         await mutate("delete_agent", { agentId: agent.id });

@@ -264,22 +264,10 @@ pub(crate) async fn load_dismissed_inbox_items(
 pub(crate) async fn load_read_inbox_items(
     pool: &SqlitePool,
 ) -> CommandResult<HashMap<String, DateTime<Utc>>> {
-    let rows = sqlx::query(
-        r#"
-        select item_id, max(read_until) as read_until
-        from (
-            select item_id, read_until
-            from owner_inbox_read_state
-            union all
-            select item_id, dismissed_until as read_until
-            from owner_inbox_dismissals
-        ) reads
-        group by item_id
-        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(to_string)?;
+    let rows = sqlx::query("select item_id, read_until from owner_inbox_read_state")
+        .fetch_all(pool)
+        .await
+        .map_err(to_string)?;
 
     Ok(rows
         .into_iter()

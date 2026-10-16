@@ -252,9 +252,6 @@ export function removeChannelsFromBootstrap(
     reminders: next.reminders.filter(
       (item) => !item.channel_id || !channelIds.has(item.channel_id),
     ),
-    agent_schedules: next.agent_schedules.filter(
-      (item) => !channelIds.has(item.channel_id),
-    ),
     agent_work_items: next.agent_work_items.filter(
       (item) => !item.channel_id || !channelIds.has(item.channel_id),
     ),

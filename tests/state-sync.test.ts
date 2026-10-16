@@ -112,7 +112,6 @@ function bootstrap(overrides: Partial<Bootstrap> = {}): Bootstrap {
     artifacts: [],
     tasks: [],
     reminders: [],
-    agent_schedules: [],
     agent_runs: [],
     agent_work_items: [],
     agent_activities: [],

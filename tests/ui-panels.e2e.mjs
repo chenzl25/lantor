@@ -24,7 +24,7 @@ const state = { db_url: "synthetic://ui-panels", web_base_url: null, owner_profi
   channels, messages: [root, reply, message(3, { channel_id: dmId, body: "Direct conversation" })],
   channel_message_history: channels.map(c => ({ channel_id: c.id, before_seq: null, has_more: false })),
   agents: [agent], tasks: structuredClone(initialTasks), channel_members: [{ channel_id: channelId, agent_id: agent.id }],
-  thread_activities: [], saved_messages: [], dismissed_inbox_items: {}, read_inbox_items: {}, artifacts: [], reminders: [], agent_schedules: [],
+  thread_activities: [], saved_messages: [], dismissed_inbox_items: {}, read_inbox_items: {}, artifacts: [], reminders: [],
   agent_runs: [], agent_work_items: [], agent_activities: [], supervisor: { pid: null, status: "stopped", updated_at: null },
   launch_agent: { label: "", plist_path: "", installed: false, loaded: false }, ui_event_cursor: 0 };
 let cursor = 0;

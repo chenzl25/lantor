@@ -9739,11 +9739,6 @@ body.resizing-column * {
   --source-kind-soft: rgba(201, 123, 20, 0.16);
 }
 
-[data-source-kind="schedule"] {
-  --source-kind-strong: #cf5c1e;
-  --source-kind-soft: rgba(207, 92, 30, 0.16);
-}
-
 [data-source-kind="handoff"] {
   --source-kind-strong: #c52b88;
   --source-kind-soft: rgba(197, 43, 136, 0.14);

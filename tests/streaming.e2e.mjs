@@ -19,7 +19,7 @@ const state = {
   channels: [{ id: channelId, name: "stream-test", description: "", kind: "channel", dm_agent_id: null, unread_count: 0, github_unread_count: 0, github_review_synced_at: null }],
   messages: [...Array.from({ length: 50 }, (_, i) => message(i + 1)), ...Array.from({ length: 20 }, (_, i) => message(i + 101, { thread_root_id: id(1) }))],
   channel_message_history: [{ channel_id: channelId, before_seq: null, has_more: false }],
-  thread_activities: [], channel_members: [], agents: [], saved_messages: [], dismissed_inbox_items: {}, read_inbox_items: {}, artifacts: [], tasks: [], reminders: [], agent_schedules: [], agent_runs: [], agent_work_items: [], agent_activities: [],
+  thread_activities: [], channel_members: [], agents: [], saved_messages: [], dismissed_inbox_items: {}, read_inbox_items: {}, artifacts: [], tasks: [], reminders: [], agent_runs: [], agent_work_items: [], agent_activities: [],
   supervisor: { pid: null, status: "stopped", updated_at: null }, launch_agent: { label: "", plist_path: "", installed: false, loaded: false }, ui_event_cursor: 0,
 };
 const clients = new Set(), events = [], requests = [];

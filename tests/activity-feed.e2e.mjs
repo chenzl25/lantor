@@ -48,7 +48,7 @@ const initialState = { db_url: "synthetic://activity", web_base_url: null, owner
   reminders: [{ id: id(901), title: "Synthetic due reminder card", note: "System reminder note", status: "fired",
     channel_id: channelId, thread_root_id: root.id, message_id: id(30), due_at: at(30), fired_at: at(30) }],
   thread_activities: initialActivities, saved_messages: [], dismissed_inbox_items: {}, read_inbox_items: {}, artifacts: [],
-  agent_schedules: [], agent_runs: [], agent_work_items: [], agent_activities: [], supervisor: { pid: null, status: "stopped", updated_at: null },
+  agent_runs: [], agent_work_items: [], agent_activities: [], supervisor: { pid: null, status: "stopped", updated_at: null },
   launch_agent: { label: "", plist_path: "", installed: false, loaded: false }, ui_event_cursor: 0 };
 let state, messages, cursor = 0;
 const clients = new Set(), requests = [];

@@ -268,6 +268,40 @@ async fn backfill_reminder_recurrence_anchors(pool: &SqlitePool) -> Result<(), s
     Ok(())
 }
 
+// Legacy dismissals only ever acted as read markers, and every read-state
+// writer keeps the max, so folding them in preserves the owner inbox read set.
+// BEGIN IMMEDIATE serializes the app and the supervisor migrating at once.
+async fn fold_legacy_owner_inbox_dismissals(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    const EXISTS: &str = "select exists(select 1 from sqlite_master where type = 'table' and name = 'owner_inbox_dismissals')";
+    // Skip the write lock on every later startup once the table is gone.
+    if !sqlx::query_scalar::<_, bool>(EXISTS)
+        .fetch_one(pool)
+        .await?
+    {
+        return Ok(());
+    }
+    let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let exists: bool = sqlx::query_scalar(EXISTS)
+        .fetch_one(&mut *transaction)
+        .await?;
+    if exists {
+        sqlx::query(
+            r#"
+            insert into owner_inbox_read_state (item_id, read_until, read_at)
+            select item_id, dismissed_until, dismissed_at from owner_inbox_dismissals where true
+            on conflict (item_id) do update set
+                read_until = max(owner_inbox_read_state.read_until, excluded.read_until)
+            "#,
+        )
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query("drop table owner_inbox_dismissals")
+            .execute(&mut *transaction)
+            .await?;
+    }
+    transaction.commit().await
+}
+
 pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     for statement in [
         r#"
@@ -585,23 +619,6 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         )
         "#,
         r#"
-        create table if not exists agent_schedules (
-            id blob primary key not null default (randomblob(16)),
-            agent_id blob not null references agents(id) on delete cascade,
-            channel_id blob not null references channels(id) on delete cascade,
-            thread_root_id blob references messages(id) on delete set null,
-            title text not null,
-            prompt text not null default '',
-            cadence text not null default 'daily',
-            status text not null default 'active',
-            next_run_at text not null,
-            last_run_at text,
-            last_work_item_id blob,
-            created_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
-            updated_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
-        )
-        "#,
-        r#"
         create table if not exists agent_runs (
             id blob primary key not null default (randomblob(16)),
             agent_id blob not null references agents(id) on delete cascade,
@@ -755,13 +772,6 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         create table if not exists channel_read_state (
             channel_id blob primary key references channels(id) on delete cascade,
             last_read_at text not null default '0001-01-01T00:00:00+00:00'
-        )
-        "#,
-        r#"
-        create table if not exists owner_inbox_dismissals (
-            item_id text primary key,
-            dismissed_until text not null,
-            dismissed_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
         )
         "#,
         r#"
@@ -1032,7 +1042,6 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         )
         "#,
         "create index if not exists reminders_due_idx on reminders(status, due_at)",
-        "create index if not exists agent_schedules_due_idx on agent_schedules(status, next_run_at)",
         "create index if not exists agent_inbox_items_agent_state_idx on agent_inbox_items(agent_id, state, priority desc, created_at)",
         "create unique index if not exists agent_inbox_items_source_unique on agent_inbox_items(agent_id, source_message_id, kind) where source_message_id is not null",
         "create unique index if not exists agent_target_watermarks_root_unique on agent_target_watermarks(agent_id, channel_id) where thread_root_id is null",
@@ -1056,6 +1065,8 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         // old created_at index was never used and is pruned by row id, so drop
         // it on existing databases to reclaim its space.
         "drop index if exists ui_events_created_idx",
+        // Agent schedules never had a caller; recurring reminders cover the use case.
+        "drop table if exists agent_schedules",
     ] {
         sqlx::query(statement).execute(pool).await?;
     }
@@ -1108,6 +1119,7 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
     backfill_agent_run_usage_from_logs(pool).await?;
+    fold_legacy_owner_inbox_dismissals(pool).await?;
     messages_fts::migrate(pool).await?;
 
     Ok(())
@@ -1116,7 +1128,8 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        acquire_supervisor_lock, backfill_reminder_recurrence_anchors, sqlite_database_file_path,
+        acquire_supervisor_lock, backfill_reminder_recurrence_anchors, migrate,
+        sqlite_database_file_path,
     };
     use crate::test_support::{drop_test_schema, insert_test_channel, test_pool};
 
@@ -1355,6 +1368,45 @@ mod tests {
                 .map_err(|err| err.to_string())?;
             assert!(first_seq > 0);
             assert!(second_seq > first_seq);
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_owner_inbox_dismissals_fold_into_read_state() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            for statement in [
+                "create table owner_inbox_dismissals (item_id text primary key, dismissed_until text not null, dismissed_at text not null default '')",
+                "insert into owner_inbox_dismissals (item_id, dismissed_until) values ('task:a', '2026-05-01T00:00:00+00:00'), ('task:b', '2026-05-03T00:00:00+00:00'), ('task:c', '2026-05-01T00:00:00+00:00')",
+                "insert into owner_inbox_read_state (item_id, read_until) values ('task:b', '2026-05-02T00:00:00+00:00'), ('task:c', '2026-05-04T00:00:00+00:00')",
+            ] {
+                sqlx::query(statement)
+                    .execute(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            }
+
+            migrate(&pool).await.map_err(|err| err.to_string())?;
+            migrate(&pool).await.map_err(|err| err.to_string())?;
+
+            let legacy_tables: i64 = sqlx::query_scalar(
+                "select count(*) from sqlite_master where name = 'owner_inbox_dismissals'",
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            assert_eq!(legacy_tables, 0);
+            let read = crate::owner_inbox::load_read_inbox_items(&pool).await?;
+            let read_until = |item: &str| read[item].to_rfc3339();
+            assert_eq!(read_until("task:a"), "2026-05-01T00:00:00+00:00");
+            assert_eq!(read_until("task:b"), "2026-05-03T00:00:00+00:00");
+            assert_eq!(read_until("task:c"), "2026-05-04T00:00:00+00:00");
             Ok(())
         }
         .await;

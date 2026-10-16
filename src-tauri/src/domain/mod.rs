@@ -7,7 +7,6 @@ use tokio::time::sleep;
 use crate::app::CommandResult;
 
 pub(crate) mod reminders;
-pub(crate) mod schedules;
 
 pub(crate) fn spawn_reminder_worker(pool: SqlitePool) {
     tauri::async_runtime::spawn(async move {
@@ -21,9 +20,6 @@ pub(crate) fn spawn_reminder_worker(pool: SqlitePool) {
             }
             if let Err(err) = reminders::process_due_reminders(&pool).await {
                 eprintln!("Lantor reminder worker failed: {err}");
-            }
-            if let Err(err) = schedules::process_due_agent_schedules(&pool).await {
-                eprintln!("Lantor schedule worker failed: {err}");
             }
             sleep(Duration::from_secs(15)).await;
         }

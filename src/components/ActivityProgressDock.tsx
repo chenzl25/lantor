@@ -3,7 +3,6 @@ import {
   ArrowRightLeft,
   AtSign,
   Bell,
-  CalendarClock,
   ChevronDown,
   CircleDashed,
   Cpu,
@@ -71,8 +70,6 @@ export function sourceKindMeta(workItem: AgentWorkItem | null): SourceKindMeta {
       return { icon: ListChecks, label: "Task run", tone: "task", jumpable: true };
     case "reminder":
       return { icon: Bell, label: "Reminder", tone: "reminder", jumpable: false };
-    case "schedule":
-      return { icon: CalendarClock, label: "Routine", tone: "schedule", jumpable: false };
     case "handoff":
     case "collaboration":
       return { icon: ArrowRightLeft, label: "Agent handoff", tone: "handoff", jumpable: true };
