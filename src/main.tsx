@@ -66,6 +66,7 @@ import { SettingsModal, type ChatTextSize, type FontPreset, type ThemePreference
 import { Sidebar } from "./components/Sidebar";
 import { ThreadPanel } from "./components/ThreadPanel";
 import { WebAppStatus } from "./components/WebAppStatus";
+import { isWebSessionExpired, subscribeWebSession } from "./web-session";
 import { useWebOnline } from "./hooks/useWebOnline";
 import { useVisibleChannelRead } from "./hooks/useVisibleChannelRead";
 import { useVisibleThreadRead } from "./hooks/useVisibleThreadRead";
@@ -2094,6 +2095,15 @@ function App() {
     window.addEventListener("online", retry);
     return () => window.removeEventListener("online", retry);
   }, [Boolean(data)]);
+
+  useEffect(() => {
+    if (isTauriRuntime()) return;
+    return subscribeWebSession(() => {
+      if (!isWebSessionExpired()) {
+        void refreshWithError(`Failed to recover ${APP_DISPLAY_NAME} state after sign-in`);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     if ((!data && !appError) || bootReady) return;
