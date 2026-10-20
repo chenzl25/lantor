@@ -73,6 +73,22 @@ fn decision_cards_are_taught_through_the_context_tool() {
 }
 
 #[test]
+fn pull_request_reviews_show_core_hunks_in_layers() {
+    for prompt in [
+        claude_system_prompt("tester"),
+        codex_developer_instructions("tester"),
+    ] {
+        assert!(prompt.contains("Pull request reviews:"));
+        assert!(prompt.contains("Open with the verdict"));
+        assert!(prompt.contains(
+            "```diff <language> path=<GitHub blob permalink at the reviewed head commit>"
+        ));
+        assert!(prompt.contains("Copy hunks verbatim from `git diff <base>...<head>`"));
+        assert!(prompt.contains("only what changed since the previously reviewed commit"));
+    }
+}
+
+#[test]
 fn memory_snapshot_is_turn_context() {
     let prompt = prepend_memory_context(
         "Current request".to_owned(),

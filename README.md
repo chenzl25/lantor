@@ -75,8 +75,9 @@ context, tasks track execution, and decisions come back to you.
 
 - **Bind a repository** to a channel (uses your `gh` login) to see review
   requests and your pull requests with CI status, plus open issues.
-- **Review with agent** opens a task thread for the PR; after new commits,
-  **Re-review** asks for a review of just the changes.
+- **Review with agent** opens a task thread for the PR. The review starts
+  with a verdict, then shows the key changes and each problem as diffs. After
+  new commits, **Re-review** asks for a review of just the changes.
 
 ### Share files and rich content
 

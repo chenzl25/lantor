@@ -1808,23 +1808,37 @@ fn task_title(binding: &GithubRepositoryBinding, pull_request: &GithubPullReques
     .collect()
 }
 
+/// Commits are abbreviated; git and GitHub permalinks both accept the prefix.
+/// Unknown commits are left out rather than shown as an empty code span.
+fn commit_line(label: &str, sha: &str) -> String {
+    let short: String = inline_code(sha).chars().take(12).collect();
+    if short.is_empty() {
+        String::new()
+    } else {
+        format!("\n- {label}: `{short}`")
+    }
+}
+
 fn task_body(pull_request: &GithubPullRequestDetail) -> String {
     format!(
         "Review this GitHub pull request:\n\n\
          - Title: {title}\n\
-         - Link: <{url}>",
+         - Link: <{url}>{head}",
         title = one_line(&pull_request.title),
         url = pull_request.url,
+        head = commit_line("Head commit", &pull_request.head_ref_oid),
     )
 }
 
-fn rereview_task_body(pull_request: &GithubPullRequestDetail) -> String {
+fn rereview_task_body(pull_request: &GithubPullRequestDetail, previous_head_sha: &str) -> String {
     format!(
         "Re-review this updated GitHub pull request:\n\n\
          - Title: {title}\n\
-         - Link: <{url}>",
+         - Link: <{url}>{previous}{head}",
         title = one_line(&pull_request.title),
         url = pull_request.url,
+        previous = commit_line("Previously reviewed commit", previous_head_sha),
+        head = commit_line("New head commit", &pull_request.head_ref_oid),
     )
 }
 
@@ -2187,7 +2201,7 @@ pub(crate) async fn rereview_github_review_task_record(
             .map_err(to_string)?
             .unwrap_or_else(|| DEFAULT_OWNER_DISPLAY_NAME.to_owned());
     let title = task_title(binding, pull_request);
-    let body = rereview_task_body(pull_request);
+    let body = rereview_task_body(pull_request, &previous_head_sha);
     let source_message_id: Uuid = sqlx::query_scalar(
         r#"
         insert into messages (
@@ -2406,10 +2420,10 @@ mod tests {
         create_github_review_task_record, load_cached_github_channel_overview, load_resource_links,
         mark_github_review_attention_read, merge_issue_snapshots, merge_pull_request_snapshots,
         parse_issues, parse_review_requests, replace_cached_issues, replace_cached_review_requests,
-        rereview_github_review_task_record, summarize_checks, GithubActorCli, GithubCheckSummary,
-        GithubIssueDetailCli, GithubIssueSnapshot, GithubLabel, GithubPullRequestCli,
-        GithubPullRequestDetail, GithubPullRequestSnapshot, GithubRepositoryBinding,
-        GithubStatusCheckCli, PULL_REQUEST_RESOURCE_KIND,
+        rereview_github_review_task_record, rereview_task_body, summarize_checks, task_body,
+        GithubActorCli, GithubCheckSummary, GithubIssueDetailCli, GithubIssueSnapshot, GithubLabel,
+        GithubPullRequestCli, GithubPullRequestDetail, GithubPullRequestSnapshot,
+        GithubRepositoryBinding, GithubStatusCheckCli, PULL_REQUEST_RESOURCE_KIND,
     };
     use crate::channels::load_channels;
     use crate::test_support::{
@@ -2488,6 +2502,43 @@ mod tests {
         assert_eq!(summary.failed, 2);
         assert_eq!(summary.pending, 1);
         assert_eq!(summary.failing_checks, vec!["Buildkite", "Lint"]);
+    }
+
+    #[test]
+    fn review_task_bodies_abbreviate_commits_and_skip_unknown_ones() {
+        let pull_request = GithubPullRequestDetail {
+            number: 7,
+            title: "Bound the queue".to_owned(),
+            url: "https://github.com/acme/stream/pull/7".to_owned(),
+            state: "OPEN".to_owned(),
+            head_ref_oid: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+        };
+        assert_eq!(
+            task_body(&pull_request),
+            "Review this GitHub pull request:\n\n\
+             - Title: Bound the queue\n\
+             - Link: <https://github.com/acme/stream/pull/7>\n\
+             - Head commit: `0123456789ab`"
+        );
+        assert_eq!(
+            rereview_task_body(&pull_request, "fedcba9876543210fedcba9876543210fedcba98"),
+            "Re-review this updated GitHub pull request:\n\n\
+             - Title: Bound the queue\n\
+             - Link: <https://github.com/acme/stream/pull/7>\n\
+             - Previously reviewed commit: `fedcba987654`\n\
+             - New head commit: `0123456789ab`"
+        );
+
+        let unknown_head = GithubPullRequestDetail {
+            head_ref_oid: String::new(),
+            ..pull_request
+        };
+        assert_eq!(
+            task_body(&unknown_head),
+            "Review this GitHub pull request:\n\n\
+             - Title: Bound the queue\n\
+             - Link: <https://github.com/acme/stream/pull/7>"
+        );
     }
 
     #[test]
@@ -2589,7 +2640,8 @@ mod tests {
                 message.get::<String, _>("body"),
                 "Review this GitHub pull request:\n\n\
                  - Title: Keep the queue bounded\n\
-                 - Link: <https://github.com/acme/stream/pull/42>"
+                 - Link: <https://github.com/acme/stream/pull/42>\n\
+                 - Head commit: `abc123`"
             );
             assert!(message.get::<bool, _>("is_task"));
             let link_count: i64 = sqlx::query_scalar(
@@ -2680,7 +2732,9 @@ mod tests {
                 followup_body,
                 "Re-review this updated GitHub pull request:\n\n\
                  - Title: Keep the queue bounded\n\
-                 - Link: <https://github.com/acme/stream/pull/42>"
+                 - Link: <https://github.com/acme/stream/pull/42>\n\
+                 - Previously reviewed commit: `abc123`\n\
+                 - New head commit: `def456`"
             );
 
             let task = sqlx::query("select status from tasks where id = $1")

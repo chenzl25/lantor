@@ -129,6 +129,17 @@ JSON
 - Cards go to your current conversation unless you pass --target "#channel[:thread]". The command prints the card msg id, or a validation error to fix before retrying."##
 }
 
+fn lantor_code_review_prompt() -> &'static str {
+    r#"Pull request reviews:
+- Use this shape whenever you review a pull request or diff for the owner, including re-reviews. It reveals the change in layers, so the owner can review from the reply without opening GitHub.
+- Open with the verdict in a few lines: what the change does in one sentence, whether it can merge, the findings by severity, and what you ran or did not run.
+- Then walk through the core changes in reading order (data model, core logic, callers, tests), usually 2-5 items. Each item is one sentence of intent followed by its key hunk in a ```diff <language> path=<GitHub blob permalink at the reviewed head commit> block. Copy hunks verbatim from `git diff <base>...<head>` with their real hunk headers, keep each block to about 20 lines, and split a long hunk instead of editing it. Name mechanical changes (renames, imports, formatting, generated files, lockfiles) in one line instead of showing them.
+- For each finding, give its severity, the hunk it is in, why it breaks, and the fix; show a short suggested diff when the fix is small.
+- For changes over about 400 lines or 10 files, put the file-by-file walkthrough in an artifact and link it instead of pasting it into chat.
+- On a re-review, show only what changed since the previously reviewed commit, and mark each earlier finding as fixed (with the hunk that fixes it) or still open.
+- Leave the rest for follow-ups: when the owner asks about a file or finding, answer with that hunk."#
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_work_item_prompt_inner(
     work_item_id: Uuid,
@@ -313,6 +324,8 @@ fn build_runtime_standing_prompt(handle: &str, transport_note: &str) -> String {
          \n\
          {}\n\
          \n\
+         {}\n\
+         \n\
          Keep user-visible replies concise and include concrete results or blockers. Non-message LANTOR_EVENT control lines are allowed as standalone lines. Do not print LANTOR_EVENT message lines unless explicitly asked to debug the stdout command path.",
         lantor_operating_policy_prompt(),
         lantor_turn_startup_sequence_prompt(),
@@ -320,6 +333,7 @@ fn build_runtime_standing_prompt(handle: &str, transport_note: &str) -> String {
         lantor_context_tools_prompt(),
         lantor_live_delivery_prompt(),
         lantor_decision_prompt(),
+        lantor_code_review_prompt(),
         lantor_control_api_prompt(),
     )
 }
