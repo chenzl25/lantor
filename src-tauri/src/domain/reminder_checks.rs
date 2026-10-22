@@ -174,6 +174,15 @@ async fn load_check_agent(
     }))
 }
 
+/// Agent runs use zsh; hosts without it (Linux CI) fall back to sh.
+fn check_shell() -> &'static str {
+    if std::path::Path::new("/bin/zsh").exists() {
+        "/bin/zsh"
+    } else {
+        "/bin/sh"
+    }
+}
+
 /// A check may run for one interval, between 30 seconds and 5 minutes.
 pub(crate) fn check_timeout(interval_seconds: i64) -> Duration {
     Duration::from_secs(interval_seconds.clamp(30, MAX_CHECK_TIMEOUT_SECONDS) as u64)
@@ -185,7 +194,7 @@ async fn run_check_command(job: &ReminderCheckJob, agent: &CheckAgent) -> Comman
     };
     // A login shell matches agent runs: Finder-launched apps do not inherit
     // Homebrew's PATH.
-    let mut command = Command::new("/bin/zsh");
+    let mut command = Command::new(check_shell());
     command.arg("-lc").arg(&job.check_command);
     if let Err(err) = apply_agent_environment_variables(&mut command, &agent.environment_variables)
     {

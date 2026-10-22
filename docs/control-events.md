@@ -53,10 +53,11 @@ nothing and leaves no message:
 - `interval_minutes` (1 minute to 7 days) sets `recurrence` to `interval`
   when it is omitted, and the first check runs right away unless `when` is
   given. Ticks stay on the original cadence and skip missed ones.
-- `check_command` runs in `/bin/zsh -lc` from the agent's working directory
-  with the agent's environment variables, `LANTOR_AGENT_ID`,
-  `LANTOR_AGENT_HANDLE`, `LANTOR_CONTEXT_TOOL`, and `LANTOR_REMINDER_ID`. The
-  command keeps its own state and prints only new items.
+- `check_command` runs in `/bin/zsh -lc` (`/bin/sh -lc` where zsh is
+  missing) from the agent's working directory with the agent's environment
+  variables, `LANTOR_AGENT_ID`, `LANTOR_AGENT_HANDLE`, `LANTOR_CONTEXT_TOOL`,
+  and `LANTOR_REMINDER_ID`. The command keeps its own state and prints only
+  new items.
 - Empty stdout with exit status 0 is a quiet tick. Other output goes to
   `check_action`:
   - `post` posts the output (up to 20,000 characters) into the reminder's
