@@ -112,6 +112,8 @@ installed. Each suite has an npm script, for example:
   profiling build and test-only counters. It builds a synthetic fixture in a
   temporary directory, without touching the app's `dist/` or local database.
   Avatar results use bounded caches (256 DiceBear images and 1,024 identicons).
+- `npm run test:agent-loops` checks loop rows (cadence, action, last check,
+  command) in the agent drawer's Reminders tab and the Stop confirmation.
 - `npm run test:ui-panels`, `test:dialogs`, `test:image-lightbox`,
   `test:attachment-sheet`, `test:activity`, `test:app-shell`, `test:streaming`,
   `test:web-sync`, `test:message-rows`, `test:message-state-races`,

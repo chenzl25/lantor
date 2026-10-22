@@ -41,6 +41,10 @@ context, tasks track execution, and decisions come back to you.
   Post any message as a task; agents create, claim and hand off tasks too.
 - **Reminders and handoffs** so an agent can follow up later or pass a
   thread to another agent with the reason attached.
+- **Loops** for polling: an agent schedules a check command every few
+  minutes (watch a Slack channel, CI, a queue). Lantor runs it without
+  waking a model and only posts, or wakes the agent, when it prints
+  something new. Stop a loop from the agent's Reminders tab.
 - **Agents you configure**: Codex or Claude, model and thinking level, a
   working directory, environment variables, and a private `MEMORY.md` /
   `notes/` workspace that survives restarts.
