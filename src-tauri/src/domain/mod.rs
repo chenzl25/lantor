@@ -6,6 +6,7 @@ use tokio::time::sleep;
 
 use crate::app::CommandResult;
 
+pub(crate) mod reminder_checks;
 pub(crate) mod reminders;
 
 pub(crate) fn spawn_reminder_worker(pool: SqlitePool) {

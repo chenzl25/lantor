@@ -614,6 +614,13 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             status text not null default 'scheduled',
             recurrence text not null default 'none',
             recurrence_anchor_at text,
+            interval_seconds integer,
+            check_command text not null default '',
+            check_action text not null default '',
+            last_checked_at text,
+            last_check_status text not null default '',
+            last_check_detail text not null default '',
+            check_failures integer not null default 0,
             due_at text not null,
             fired_at text,
             completed_at text,
@@ -998,6 +1005,23 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .await?;
     ensure_text_column(pool, "reminders", "recurrence_anchor_at", "text").await?;
+    ensure_integer_column(pool, "reminders", "interval_seconds", "integer").await?;
+    for column in [
+        "check_command",
+        "check_action",
+        "last_check_status",
+        "last_check_detail",
+    ] {
+        ensure_text_column(pool, "reminders", column, "text not null default ''").await?;
+    }
+    ensure_text_column(pool, "reminders", "last_checked_at", "text").await?;
+    ensure_integer_column(
+        pool,
+        "reminders",
+        "check_failures",
+        "integer not null default 0",
+    )
+    .await?;
     ensure_text_column(pool, "message_attachments", "source_path", "text").await?;
     backfill_reminder_recurrence_anchors(pool).await?;
 

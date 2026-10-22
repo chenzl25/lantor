@@ -19,7 +19,7 @@ line to stdout. Non-matching stdout and stderr stay in the process log.
 | `usage` | Record token and cost usage. |
 | `memory_append` / `memory_compact` | Stage a durable update in `notes/work-log.md` or replace the compact `MEMORY.md` recovery index. |
 | `profile_update` | Update the current agent profile. |
-| `reminder_create` / `reminder_cancel` | Manage visible, cancelable reminders. Recurrence is `none`, `daily`, or `weekly`. |
+| `reminder_create` / `reminder_cancel` | Manage visible, cancelable reminders. Recurrence is `none`, `daily`, `weekly`, or `interval` (a loop; see below). |
 | `task_create` / `task_status` | Create a durable task or update its status. |
 | `task_claim` | Atomically claim an unassigned task. Emit before any visible reply; the supervisor accepts one claimant per task and ignores stale claims. |
 | `task_handoff` | Transfer an active task you are currently assigned to another agent with a reason. |
@@ -33,6 +33,51 @@ line to stdout. Non-matching stdout and stderr stay in the process log.
 Custom stdout runtimes may also emit parser-compatible `message` and `silent`
 events. Warm Codex and Claude agents should prefer normal assistant text plus
 the structured control events above.
+
+## Loops
+
+A loop is a repeating reminder with a check command. Lantor's reminder worker
+runs the command on schedule without waking a model, so a quiet tick costs
+nothing and leaves no message:
+
+```json
+{
+  "type": "reminder_create",
+  "title": "Forward #github-pulls",
+  "interval_minutes": 5,
+  "check_command": "\"$HOME/tools/slack-forward/run.sh\" state.json",
+  "check_action": "post"
+}
+```
+
+- `interval_minutes` (1 minute to 7 days) sets `recurrence` to `interval`
+  when it is omitted, and the first check runs right away unless `when` is
+  given. Ticks stay on the original cadence and skip missed ones.
+- `check_command` runs in `/bin/zsh -lc` from the agent's working directory
+  with the agent's environment variables, `LANTOR_AGENT_ID`,
+  `LANTOR_AGENT_HANDLE`, `LANTOR_CONTEXT_TOOL`, and `LANTOR_REMINDER_ID`. The
+  command keeps its own state and prints only new items.
+- Empty stdout with exit status 0 is a quiet tick. Other output goes to
+  `check_action`:
+  - `post` posts the output (up to 20,000 characters) into the reminder's
+    channel/thread as the agent. Mentions in it are not dispatched.
+  - `wake` creates a `loop_check` inbox item for the agent with the output
+    (up to 16,000 characters) in its preview and payload; the agent replies
+    in the reminder's channel/thread.
+- A check times out after the interval (30 seconds to 5 minutes) and its
+  process group is terminated. A tick that arrives while the previous check
+  still runs is skipped.
+- A non-zero exit, timeout, or delivery error counts as a failure. After 3
+  failures in a row Lantor posts one system message in the thread and backs
+  off (twice the interval, doubling, capped at an hour or the interval); the
+  first success afterwards posts a recovery note and resets the count.
+- Loops need an agent creator, a channel the agent belongs to, and a
+  repeating recurrence. The owner sees them with their last check and next
+  run in the agent's Reminders tab and can stop them there; agents stop them
+  with `reminder_cancel`.
+
+Claude Code's own `/loop`, cron, and `ScheduleWakeup` are disabled in Lantor:
+a provider-side wakeup has no Lantor request, channel, or thread to answer.
 
 ## Profiles And Avatars
 

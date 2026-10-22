@@ -14200,3 +14200,54 @@ body.resizing-column * {
   font-weight: 600;
   cursor: pointer;
 }
+
+.agent-reminder-row.is-loop .agent-reminder-icon {
+  font-family: var(--font-mono);
+}
+
+.agent-reminder-row.check-failed {
+  border-color: var(--status-danger-border);
+}
+
+.agent-reminder-body .agent-reminder-loop-check.failed {
+  color: var(--status-danger);
+}
+
+.agent-reminder-command {
+  display: block;
+  overflow: hidden;
+  padding: 4px 7px;
+  border-radius: 8px;
+  background: var(--badge-phase-default-bg);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--type-size-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-reminder-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.agent-reminder-stop {
+  flex: none;
+  padding: 4px 9px;
+  border: 1px solid var(--border-control);
+  border-radius: 8px;
+  background: var(--surface-control);
+  color: var(--ink-on-control);
+  font-size: var(--type-size-caption);
+  font-weight: var(--type-weight-semibold);
+}
+
+.agent-reminder-stop:hover,
+.agent-reminder-stop:focus-visible {
+  border-color: var(--status-danger-border);
+  background: var(--status-danger-soft);
+  color: var(--status-danger);
+}

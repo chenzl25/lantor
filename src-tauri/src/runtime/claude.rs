@@ -68,8 +68,8 @@ use protocol::{
     claude_result_text, claude_resume_session_missing, claude_session_id,
     claude_stream_event_activity, claude_stream_key, claude_streaming_command_text,
     claude_surface_boundary_marker, claude_text_delta, claude_user_input, claude_write_input,
-    CLAUDE_DISABLE_BACKGROUND_TASKS_ENV, CLAUDE_DISABLE_CRON_ENV, CLAUDE_MAX_RETRIES_ENV,
-    DEFAULT_CLAUDE_MAX_RETRIES,
+    CLAUDE_DISABLE_BACKGROUND_TASKS_ENV, CLAUDE_DISABLE_CRON_ENV, CLAUDE_DISALLOWED_TOOLS,
+    CLAUDE_MAX_RETRIES_ENV, DEFAULT_CLAUDE_MAX_RETRIES,
 };
 use reaper::claude_warm_idle_reaper;
 use session::{
@@ -345,8 +345,10 @@ async fn spawn_warm_claude_runtime(
         .arg("--verbose")
         // Monitor has its own enablement gate in Claude Code, independent of
         // CLAUDE_CODE_DISABLE_BACKGROUND_TASKS. It can also emit unsolicited turns.
+        // ScheduleWakeup stays visible with cron disabled and reports success
+        // although the wakeup never fires; Lantor loops replace it.
         .arg("--disallowedTools")
-        .arg("Monitor")
+        .arg(CLAUDE_DISALLOWED_TOOLS)
         .arg("--permission-mode")
         .arg("bypassPermissions");
     configure_claude_process_environment(&mut command);

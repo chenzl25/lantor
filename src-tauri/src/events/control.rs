@@ -21,7 +21,9 @@ use crate::decision_store::{
     DecisionOptionInput, NewDecision,
 };
 use crate::domain::parse_due_at;
-use crate::domain::reminders::{cancel_reminder_in_pool, create_reminder_in_pool};
+use crate::domain::reminders::{
+    cancel_reminder_in_pool, create_reminder_in_pool, ReminderLoopOptions,
+};
 use crate::events::activity::{normalize_agent_activity_kind, record_agent_activity};
 use crate::events::resolution::{resolve_event_channel, resolve_run_reminder_anchor};
 use crate::freshness::hold_run_event_for_target_if_stale;
@@ -102,6 +104,12 @@ pub(crate) enum AgentEvent {
         due_at: Option<String>,
         #[serde(alias = "cadence", default)]
         recurrence: Option<String>,
+        #[serde(alias = "every_minutes", default)]
+        interval_minutes: Option<i64>,
+        #[serde(default)]
+        check_command: Option<String>,
+        #[serde(default)]
+        check_action: Option<String>,
     },
     ReminderCancel {
         reminder_id: Uuid,
@@ -926,11 +934,29 @@ pub(crate) async fn handle_agent_event(
             note,
             due_at,
             recurrence,
+            interval_minutes,
+            check_command,
+            check_action,
         } => {
-            let due_at = due_at.ok_or_else(|| {
-                "reminder_create requires a when or due_at ISO8601 timestamp".to_owned()
-            })?;
-            let due_at = parse_due_at(&due_at)?;
+            // interval_minutes alone means a loop; its first tick defaults to now.
+            let recurrence = recurrence.or_else(|| interval_minutes.map(|_| "interval".to_owned()));
+            let due_at = match (due_at, interval_minutes) {
+                (Some(due_at), _) => parse_due_at(&due_at)?,
+                (None, Some(_)) => chrono::Utc::now(),
+                (None, None) => {
+                    return Err(
+                        "reminder_create requires a when or due_at ISO8601 timestamp".to_owned(),
+                    )
+                }
+            };
+            let interval_seconds = match interval_minutes {
+                Some(minutes) => Some(
+                    minutes
+                        .checked_mul(60)
+                        .ok_or_else(|| "interval_minutes is too large".to_owned())?,
+                ),
+                None => None,
+            };
             let (default_channel_id, default_thread_root_id, default_message_id) =
                 resolve_run_reminder_anchor(pool, agent_id, run_id).await?;
             let resolved_channel_id = if channel_id.is_some() || channel.is_some() {
@@ -948,6 +974,11 @@ pub(crate) async fn handle_agent_event(
                 note.as_deref().unwrap_or(""),
                 due_at,
                 recurrence.as_deref().unwrap_or("none"),
+                ReminderLoopOptions {
+                    interval_seconds,
+                    check_command: check_command.clone().unwrap_or_default(),
+                    check_action: check_action.clone().unwrap_or_default(),
+                },
             )
             .await?;
             record_agent_activity(
@@ -960,7 +991,9 @@ pub(crate) async fn handle_agent_event(
                     "reminder_id": reminder_id,
                     "title": title.trim(),
                     "due_at": due_at.to_rfc3339(),
-                    "recurrence": recurrence.unwrap_or_else(|| "none".to_owned())
+                    "recurrence": recurrence.unwrap_or_else(|| "none".to_owned()),
+                    "interval_seconds": interval_seconds,
+                    "check_action": check_action.unwrap_or_default(),
                 })
                 .to_string(),
             )

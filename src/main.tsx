@@ -95,6 +95,7 @@ import {
   MessageAttachment,
   normalizeCodexReasoningEffortForModel,
   RUNTIME_PRESETS,
+  Reminder,
   RuntimeCheck,
   SavedMessage,
   SearchResult,
@@ -4524,6 +4525,20 @@ function App() {
     await mutate("start_agent", { agentId: agent.id });
   }
 
+  function stopReminder(reminder: Reminder) {
+    const loop = Boolean(reminder.check_command?.trim());
+    setConfirmRequest({
+      title: loop ? `Stop loop "${reminder.title}"?` : `Cancel reminder "${reminder.title}"?`,
+      body: loop
+        ? "The check command stops running and nothing more is posted. Ask the agent to create a new loop if you need it again."
+        : "The reminder will not fire. Ask the agent to schedule a new one if you need it again.",
+      confirmLabel: loop ? "Stop loop" : "Cancel reminder",
+      onConfirm: async () => {
+        await mutate("cancel_reminder", { reminderId: reminder.id });
+      },
+    });
+  }
+
   async function sendRootMessage(asTask = false, bodyOverride?: string, attachmentsOverride?: DraftAttachment[]) {
     const rawBody = bodyOverride ?? draft;
     const attachments = attachmentsOverride ?? draftAttachments;
@@ -5355,6 +5370,7 @@ function App() {
             startEditAgent(agent);
           }}
           onRestart={restartAgent}
+          onStopReminder={stopReminder}
           channels={data.channels}
           messages={data.messages}
           onOpenWorkItem={(item, focusedMessageIdOverride) => {

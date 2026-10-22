@@ -443,7 +443,14 @@ export type Reminder = {
   title: string;
   note: string;
   status: string;
-  recurrence: "none" | "daily" | "weekly" | string;
+  recurrence: "none" | "daily" | "weekly" | "interval" | string;
+  interval_seconds: number | null;
+  check_command: string;
+  check_action: "" | "post" | "wake" | string;
+  last_checked_at: string | null;
+  last_check_status: "" | "quiet" | "posted" | "woke" | "failed" | string;
+  last_check_detail: string;
+  check_failures: number;
   due_at: string;
   fired_at: string | null;
   completed_at: string | null;

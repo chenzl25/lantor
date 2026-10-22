@@ -59,7 +59,7 @@ use crate::application::{
     },
     AgentIdRequest,
 };
-use crate::domain::reminders::complete_reminder_in_pool;
+use crate::domain::reminders::{cancel_reminder_in_pool, complete_reminder_in_pool};
 use crate::launch_agent;
 use crate::lifecycle_commands::start_agent_in_pool;
 use crate::system_commands::{
@@ -325,6 +325,7 @@ fn web_router(state: Arc<WebState>, dist_dir: PathBuf) -> Router {
         .route("/api/mark_all_inbox_read", post(api_mark_all_inbox_read))
         .route("/api/mark_channel_read", post(api_mark_channel_read))
         .route("/api/complete_reminder", post(api_complete_reminder))
+        .route("/api/cancel_reminder", post(api_cancel_reminder))
         .route("/api/update_task_status", post(api_update_task_status))
         .route("/api/answer_decision", post(api_answer_decision))
         .route("/api/push/config", get(api_push_config))
@@ -910,6 +911,16 @@ async fn api_complete_reminder(
     Json(request): Json<ReminderIdRequest>,
 ) -> Result<impl IntoResponse, Response> {
     complete_reminder_in_pool(&state.pool, request.reminder_id)
+        .await
+        .map(|_| Json(json!({ "ok": true })))
+        .map_err(api_error)
+}
+
+async fn api_cancel_reminder(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<ReminderIdRequest>,
+) -> Result<impl IntoResponse, Response> {
+    cancel_reminder_in_pool(&state.pool, request.reminder_id)
         .await
         .map(|_| Json(json!({ "ok": true })))
         .map_err(api_error)

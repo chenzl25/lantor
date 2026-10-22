@@ -316,6 +316,10 @@ export type ApiContract = {
     args: { reminderId: string };
     result: MutationResult;
   };
+  cancel_reminder: {
+    args: { reminderId: string };
+    result: MutationResult;
+  };
   update_task_status: {
     args: {
       taskId: string;
@@ -436,6 +440,7 @@ const API_COMMAND_NAMES = {
   mark_all_inbox_read: true,
   mark_channel_read: true,
   complete_reminder: true,
+  cancel_reminder: true,
   update_task_status: true,
   answer_decision: true,
   dismiss_decision: true,

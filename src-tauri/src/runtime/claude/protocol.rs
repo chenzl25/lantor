@@ -10,6 +10,8 @@ pub(super) const CLAUDE_MAX_RETRIES_ENV: &str = "ANTHROPIC_MAX_RETRIES";
 pub(super) const DEFAULT_CLAUDE_MAX_RETRIES: &str = "5";
 pub(super) const CLAUDE_DISABLE_BACKGROUND_TASKS_ENV: &str = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS";
 pub(super) const CLAUDE_DISABLE_CRON_ENV: &str = "CLAUDE_CODE_DISABLE_CRON";
+/// Tools that would start provider turns outside a Lantor request.
+pub(super) const CLAUDE_DISALLOWED_TOOLS: &str = "Monitor,ScheduleWakeup";
 
 pub(super) fn claude_stream_key(run_id: Uuid) -> String {
     format!("{run_id}:claude-assistant")
@@ -308,7 +310,7 @@ pub(super) fn claude_streaming_command_text(model: &str, reasoning_effort: &str)
         format!(" --effort {effort}")
     };
     format!(
-        "{CLAUDE_DISABLE_BACKGROUND_TASKS_ENV}=1 {CLAUDE_DISABLE_CRON_ENV}=1 {CLAUDE_MAX_RETRIES_ENV}={DEFAULT_CLAUDE_MAX_RETRIES} claude --model {model}{effort_arg} --output-format stream-json --input-format stream-json --include-partial-messages --replay-user-messages --verbose --disallowedTools Monitor --permission-mode bypassPermissions"
+        "{CLAUDE_DISABLE_BACKGROUND_TASKS_ENV}=1 {CLAUDE_DISABLE_CRON_ENV}=1 {CLAUDE_MAX_RETRIES_ENV}={DEFAULT_CLAUDE_MAX_RETRIES} claude --model {model}{effort_arg} --output-format stream-json --input-format stream-json --include-partial-messages --replay-user-messages --verbose --disallowedTools {CLAUDE_DISALLOWED_TOOLS} --permission-mode bypassPermissions"
     )
 }
 

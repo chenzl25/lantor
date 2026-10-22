@@ -25,6 +25,7 @@ import { MessageMarkdown } from "./MessageMarkdown";
 import { Modal } from "./Modal";
 import { sourceKindMeta } from "./ActivityProgressDock";
 import { formatRelativeTime, formatTime } from "../ui-utils";
+import { formatReminderCadence, isLoopReminder, loopActionLabel, loopCheckSummary } from "../reminder-loops";
 
 type AgentPhase = {
   kind: string;
@@ -58,6 +59,7 @@ type AgentDetailDrawerProps = {
   onDelete: (agent: Agent) => void;
   onEdit: (agent: Agent) => void;
   onRestart: (agent: Agent) => void;
+  onStopReminder: (reminder: Reminder) => void;
   onOpenWorkItem: (item: AgentWorkItem, focusedMessageIdOverride?: string | null) => void;
   onResizeStart: (event: ReactPointerEvent<HTMLButtonElement>) => void;
 };
@@ -440,6 +442,7 @@ export function AgentDetailDrawer({
   onDelete,
   onEdit,
   onRestart,
+  onStopReminder,
   onOpenWorkItem,
   onResizeStart,
 }: AgentDetailDrawerProps) {
@@ -723,8 +726,9 @@ export function AgentDetailDrawer({
           <div>
             <h4>Agent-managed routines</h4>
             <p>
-              Reminders are created from conversation intent by the agent through {APP_DISPLAY_NAME} APIs.
-              They are shown here as read-only agent state instead of a manual user reminder form.
+              Reminders and loops are created from conversation intent by the agent through {APP_DISPLAY_NAME} APIs.
+              A loop runs its check command on a schedule and only posts or wakes the agent when the command prints output.
+              Stop one here when it is no longer needed.
             </p>
           </div>
         </section>
@@ -743,28 +747,56 @@ export function AgentDetailDrawer({
             <p className="empty-mini">No active reminders created by @{agent.handle}.</p>
           ) : (
             <div className="agent-reminder-list" aria-label={`${agent.handle} reminders`}>
-              {visibleAgentReminders.map((reminder) => (
-                <article
-                  key={reminder.id}
-                  className={`agent-reminder-row status-${reminder.status}`}
-                >
-                  <div className="agent-reminder-icon" aria-hidden="true">
-                    {reminder.status === "fired" ? "!" : reminder.recurrence !== "none" ? "R" : "."}
-                  </div>
-                  <div className="agent-reminder-body">
-                    <div className="agent-reminder-title">
-                      <strong>{reminder.title}</strong>
-                      <span>{reminderStatusLabel(reminder.status)}</span>
+              {visibleAgentReminders.map((reminder) => {
+                const loop = isLoopReminder(reminder);
+                const cadence = formatReminderCadence(reminder);
+                const loopFailing = loop && reminder.last_check_status === "failed";
+                return (
+                  <article
+                    key={reminder.id}
+                    className={`agent-reminder-row status-${reminder.status}${loop ? " is-loop" : ""}${loopFailing ? " check-failed" : ""}`}
+                  >
+                    <div className="agent-reminder-icon" aria-hidden="true">
+                      {reminder.status === "fired" ? "!" : loop ? "L" : reminder.recurrence !== "none" ? "R" : "."}
                     </div>
-                    {reminder.note && <p>{reminder.note}</p>}
-                    <small>
-                      {formatReminderTime(reminder.due_at)}
-                      {reminder.recurrence !== "none" ? ` · ${reminder.recurrence}` : ""}
-                      {reminder.channel_name ? ` · #${reminder.channel_name}` : ""}
-                    </small>
-                  </div>
-                </article>
-              ))}
+                    <div className="agent-reminder-body">
+                      <div className="agent-reminder-title">
+                        <strong>{reminder.title}</strong>
+                        <span>{loop ? "Loop" : reminderStatusLabel(reminder.status)}</span>
+                      </div>
+                      {reminder.note && <p>{reminder.note}</p>}
+                      {loop && (
+                        <>
+                          <p className="agent-reminder-loop-meta">
+                            {[cadence, loopActionLabel(reminder, agent.handle)].filter(Boolean).join(" · ")}
+                          </p>
+                          <p className={`agent-reminder-loop-check${loopFailing ? " failed" : ""}`}>
+                            {loopCheckSummary(reminder, formatReminderTime)}
+                          </p>
+                          <code className="agent-reminder-command" title={reminder.check_command}>
+                            {reminder.check_command}
+                          </code>
+                        </>
+                      )}
+                      <div className="agent-reminder-foot">
+                        <small>
+                          {loop ? `Next ${formatReminderTime(reminder.due_at)}` : formatReminderTime(reminder.due_at)}
+                          {!loop && cadence ? ` · ${cadence}` : ""}
+                          {reminder.channel_name ? ` · #${reminder.channel_name}` : ""}
+                        </small>
+                        <button
+                          type="button"
+                          className="agent-reminder-stop"
+                          onClick={() => onStopReminder(reminder)}
+                          title={loop ? "Stop this loop" : "Cancel this reminder"}
+                        >
+                          {loop ? "Stop" : "Cancel"}
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
               {liveAgentReminders.length > visibleAgentReminders.length && (
                 <p className="agent-reminder-overflow">Showing {visibleAgentReminders.length} of {liveAgentReminders.length} active reminders.</p>
               )}

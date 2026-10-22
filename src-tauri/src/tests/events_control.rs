@@ -1500,3 +1500,60 @@ async fn activity_event_records_progress_without_chat_message() {
     drop_test_schema(pool, schema).await;
     assert!(result.is_ok(), "{:?}", result.err());
 }
+
+#[tokio::test]
+async fn reminder_create_event_with_interval_minutes_creates_a_loop() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "loop-event-agent").await?;
+        let channel_id = insert_test_channel(&pool, "loop-events").await?;
+        sqlx::query("insert into channel_members (channel_id, agent_id) values ($1, $2)")
+            .bind(channel_id)
+            .bind(agent_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let run_id: Uuid = sqlx::query_scalar(
+            r#"
+            insert into agent_runs (agent_id, command, status)
+            values ($1, 'claude', 'running')
+            returning id
+            "#,
+        )
+        .bind(agent_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        let line = format!(
+            r#"LANTOR_EVENT {{"type":"reminder_create","channel_id":"{channel_id}","title":"Forward #github-pulls","interval_minutes":5,"check_command":"./poll.sh","check_action":"post"}}"#
+        );
+        let json = extract_agent_event_json(&line).ok_or("event line should parse")?;
+        let event: AgentEvent = serde_json::from_str(json).map_err(|err| err.to_string())?;
+        handle_agent_event(&pool, agent_id, run_id, event).await?;
+
+        let row = sqlx::query(
+            r#"
+            select recurrence, interval_seconds, check_command, check_action, status,
+                   abs(julianday(due_at) - julianday('now')) * 86400.0 as due_delta
+            from reminders
+            where creator_agent_id = $1
+            "#,
+        )
+        .bind(agent_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(row.get::<String, _>("recurrence"), "interval");
+        assert_eq!(row.get::<Option<i64>, _>("interval_seconds"), Some(300));
+        assert_eq!(row.get::<String, _>("check_command"), "./poll.sh");
+        assert_eq!(row.get::<String, _>("check_action"), "post");
+        assert_eq!(row.get::<String, _>("status"), "scheduled");
+        assert!(row.get::<f64, _>("due_delta") < 10.0, "first tick should be due now");
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    assert!(result.is_ok(), "{:?}", result.err());
+}

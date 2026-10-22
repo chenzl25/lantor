@@ -80,6 +80,7 @@ const LANTOR_CONTROL_EVENTS = [
   '{"type":"memory_compact","body":"Full compact MEMORY.md replacement with Role, Key Knowledge / Memory Map, Active Context, and Memory Policy"}',
   '{"type":"profile_update","display_name":"Name","role":"specialist role","avatar":"dicebear:dylan:Hancock","description":"What this agent is good at"}',
   '{"type":"reminder_create","when":"ISO8601 timestamp","title":"Follow-up title","note":"optional note","recurrence":"none|daily|weekly"}',
+  '{"type":"reminder_create","title":"Loop title","interval_minutes":5,"check_command":"shell command printing only new items","check_action":"post|wake"}',
   '{"type":"reminder_cancel","reminder_id":"uuid"}',
   '{"type":"task_create","channel_id":"uuid","title":"Short task title","body":"Root task message","thread_body":"First execution update","assign_self":true,"status":"in_progress"}',
   '{"type":"task_status","task_number":1,"status":"in_review"}',
