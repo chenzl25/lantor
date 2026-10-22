@@ -9618,6 +9618,9 @@ body.resizing-column * {
 
 .agent-reminder-body {
   display: grid;
+  /* An auto column would grow to the unwrapped title and push the badge,
+     note and Stop button out of the row. */
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   gap: 4px;
 }
@@ -9630,6 +9633,8 @@ body.resizing-column * {
 }
 
 .agent-reminder-title strong {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   color: var(--ink);
   font-size: var(--type-size-body);
@@ -9638,6 +9643,7 @@ body.resizing-column * {
 }
 
 .agent-reminder-title span {
+  flex: none;
   padding: 3px 7px;
   border-radius: 999px;
   background: var(--badge-phase-default-bg);
@@ -9660,9 +9666,11 @@ body.resizing-column * {
   color: var(--muted);
   font-size: var(--type-size-meta);
   line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .agent-reminder-body small {
+  min-width: 0;
   overflow: hidden;
   color: var(--muted);
   font-family: var(--font-mono);

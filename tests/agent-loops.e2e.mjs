@@ -32,6 +32,11 @@ const initialReminders = [
     check_action: "wake", last_checked_at: iso(-4), last_check_status: "failed", last_check_detail: "exit status 1: gh: not logged in",
     check_failures: 3, due_at: iso(26) }),
   reminder(702, { title: "Daily worktree cleanup", recurrence: "daily", due_at: iso(600) }),
+  // Long titles and unbroken paths must stay inside the row.
+  reminder(703, { title: "PR #202 deploy: verify supervisor switch, then create #github-pulls loop and report the first check",
+    note: "Read artifacts/deploy-20261022-loops/README.md and supervisor-switch-status.json. If stage=complete: emit "
+      + "reminder_create loop in #oncall:832403dc (interval_minutes 5, check_command "
+      + "`tools/slack-forward/run.sh tools/slack-forward/github-pulls.json`, check_action post).", due_at: iso(8) }),
 ];
 const state = { db_url: "synthetic://agent-loops", web_base_url: null, owner_profile: { display_name: "Dylan", avatar: "D", description: "" },
   channels, messages: [root], channel_message_history: channels.map(c => ({ channel_id: c.id, before_seq: null, has_more: false })),
@@ -88,7 +93,14 @@ try {
     await page.getByRole("tab", { name: /Reminders/ }).click();
     const rows = page.locator(".agent-reminder-row");
     await rows.first().waitFor();
-    assert.equal(await rows.count(), 3);
+    assert.equal(await rows.count(), 4);
+    const overflow = await rows.evaluateAll(list => list.flatMap(row => {
+      const edge = row.getBoundingClientRect().right;
+      return [...row.querySelectorAll("*")]
+        .filter(node => node.getBoundingClientRect().right > edge + 0.5)
+        .map(node => `${row.querySelector("strong")?.textContent?.slice(0, 24)}: ${node.tagName.toLowerCase()}.${node.className}`);
+    }));
+    assert.deepEqual(overflow, [], "reminder row content stays inside the row");
 
     const forward = rows.filter({ hasText: "Forward #github-pulls" });
     assert.match(await forward.locator(".agent-reminder-title span").textContent(), /^Loop$/);
@@ -122,7 +134,7 @@ try {
     await dialog.getByRole("button", { name: "Stop loop", exact: true }).click();
     await forward.waitFor({ state: "detached" });
     assert.deepEqual(requests.filter(r => r.path === "/api/cancel_reminder").map(r => r.args), [{ reminderId: initialReminders[0].id }]);
-    assert.equal(await rows.count(), 2);
+    assert.equal(await rows.count(), 3);
     assert.deepEqual(errors, [], `${name} page errors`);
     await browser.close(); browser = null;
     console.log(`agent loops e2e passed in ${name}`);
