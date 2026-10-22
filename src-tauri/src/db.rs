@@ -621,6 +621,7 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             last_check_status text not null default '',
             last_check_detail text not null default '',
             check_failures integer not null default 0,
+            check_lease_until text,
             due_at text not null,
             fired_at text,
             completed_at text,
@@ -1015,6 +1016,7 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         ensure_text_column(pool, "reminders", column, "text not null default ''").await?;
     }
     ensure_text_column(pool, "reminders", "last_checked_at", "text").await?;
+    ensure_text_column(pool, "reminders", "check_lease_until", "text").await?;
     ensure_integer_column(
         pool,
         "reminders",

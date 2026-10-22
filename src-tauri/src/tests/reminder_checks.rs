@@ -3,7 +3,10 @@ use std::time::Duration;
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::{run_reminder_check, ReminderCheckJob, ReminderCheckOutcome};
+use super::{
+    acquire_check_lease, release_check_lease, run_reminder_check, ReminderCheckJob,
+    ReminderCheckOutcome,
+};
 use crate::domain::reminders::{
     cancel_reminder_in_pool, create_reminder_in_pool, process_due_reminders, ReminderLoopOptions,
 };
@@ -172,6 +175,21 @@ async fn due_loop_runs_its_check_without_posting_a_reminder_message() {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         assert_eq!(checked, "quiet");
+        let mut lease_released = false;
+        for _ in 0..100 {
+            let lease: Option<String> =
+                sqlx::query_scalar("select check_lease_until from reminders where id = $1")
+                    .bind(reminder_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            if lease.is_none() {
+                lease_released = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(lease_released, "a finished check should release its lease");
         let system_messages: i64 = sqlx::query_scalar(
             "select count(*) from messages where channel_id = $1 and sender_role = 'system'",
         )
@@ -526,6 +544,51 @@ async fn loop_options_are_validated_on_create() {
             .expect_err("invalid loop should be rejected");
             assert!(err.contains(expected), "{err} should mention {expected}");
         }
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    assert!(result.is_ok(), "{:?}", result.err());
+}
+
+#[tokio::test]
+async fn check_lease_keeps_one_check_per_loop_across_processes() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let fixture = loop_fixture(&pool, "loop-lease").await?;
+        let reminder_id = create_loop(&pool, &fixture, "printf ''", "post").await?;
+        let timeout = Duration::from_secs(60);
+
+        // The desktop app and the supervisor share the database: the second
+        // claimant must skip while the first check holds the lease.
+        assert!(acquire_check_lease(&pool, reminder_id, timeout).await?);
+        assert!(!acquire_check_lease(&pool, reminder_id, timeout).await?);
+        let lease_seconds: f64 = sqlx::query_scalar(
+            "select (julianday(check_lease_until) - julianday('now')) * 86400.0 from reminders where id = $1",
+        )
+        .bind(reminder_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert!(
+            (85.0..=91.0).contains(&lease_seconds),
+            "lease should cover the timeout plus grace, got {lease_seconds}s"
+        );
+
+        release_check_lease(&pool, reminder_id).await?;
+        assert!(acquire_check_lease(&pool, reminder_id, timeout).await?);
+
+        // A lease left by a crashed process expires instead of stopping the loop.
+        sqlx::query(
+            "update reminders set check_lease_until = strftime('%Y-%m-%dT%H:%M:%f+00:00','now','-1 seconds') where id = $1",
+        )
+        .bind(reminder_id)
+        .execute(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert!(acquire_check_lease(&pool, reminder_id, timeout).await?);
         Ok(())
     }
     .await;

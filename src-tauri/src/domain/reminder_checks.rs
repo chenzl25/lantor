@@ -34,6 +34,8 @@ const POSTED_OUTPUT_CHAR_LIMIT: usize = 20_000;
 const WAKE_OUTPUT_CHAR_LIMIT: usize = 16_000;
 const CHECK_DETAIL_CHAR_LIMIT: usize = 600;
 const MAX_CHECK_TIMEOUT_SECONDS: i64 = 300;
+/// Covers killing the process group and recording the result after a timeout.
+const CHECK_LEASE_GRACE_SECONDS: u64 = 30;
 /// Consecutive failures before the thread is told and retries back off.
 pub(crate) const CHECK_FAILURE_NOTICE_THRESHOLD: i64 = 3;
 const MAX_FAILURE_BACKOFF_SECONDS: i64 = 60 * 60;
@@ -101,10 +103,62 @@ pub(crate) fn spawn_reminder_check(pool: SqlitePool, job: ReminderCheckJob) {
     };
     tokio::spawn(async move {
         let _guard = guard;
+        // The desktop app and the supervisor both run the reminder worker, so
+        // the in-process guard alone cannot keep a slow check from overlapping
+        // the next tick claimed by the other process.
+        match acquire_check_lease(&pool, job.reminder_id, job.timeout).await {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(err) => {
+                eprintln!("Lantor loop check {} lease failed: {err}", job.reminder_id);
+                return;
+            }
+        }
         if let Err(err) = run_reminder_check(&pool, &job).await {
             eprintln!("Lantor loop check {} failed: {err}", job.reminder_id);
         }
+        if let Err(err) = release_check_lease(&pool, job.reminder_id).await {
+            eprintln!(
+                "Lantor loop check {} lease release failed: {err}",
+                job.reminder_id
+            );
+        }
     });
+}
+
+/// Claims the loop's check across processes. The lease outlives the command
+/// timeout so a crashed process cannot block the loop for longer than that.
+pub(crate) async fn acquire_check_lease(
+    pool: &SqlitePool,
+    reminder_id: Uuid,
+    timeout: Duration,
+) -> CommandResult<bool> {
+    let lease_seconds = timeout.as_secs() + CHECK_LEASE_GRACE_SECONDS;
+    let claimed = sqlx::query(
+        r#"
+        update reminders
+        set check_lease_until = strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now', '+' || $2 || ' seconds')
+        where id = $1
+          and (check_lease_until is null
+               or julianday(check_lease_until) <= julianday('now'))
+        "#,
+    )
+    .bind(reminder_id)
+    .bind(lease_seconds as i64)
+    .execute(pool)
+    .await
+    .map_err(to_string)?
+    .rows_affected();
+    Ok(claimed == 1)
+}
+
+pub(crate) async fn release_check_lease(pool: &SqlitePool, reminder_id: Uuid) -> CommandResult<()> {
+    sqlx::query("update reminders set check_lease_until = null where id = $1")
+        .bind(reminder_id)
+        .execute(pool)
+        .await
+        .map_err(to_string)?;
+    Ok(())
 }
 
 struct CheckAgent {
