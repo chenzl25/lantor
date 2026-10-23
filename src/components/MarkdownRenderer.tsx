@@ -28,12 +28,13 @@ import { CodeBlock } from "./CodeBlock";
 import { GithubReferenceLink } from "./GithubReferenceLink";
 import {
   getGithubReferenceIndex,
+  githubReferenceKey,
   githubReferenceUrl,
   parseGithubIssueUrl,
   resolveGithubRepository,
   subscribeGithubReferences,
 } from "../github-references";
-import { remarkInlineEnrichment } from "../markdown-inline";
+import { REFERENCE_TITLE_PROPERTY, remarkInlineEnrichment } from "../markdown-inline";
 
 export type MessageMarkdownProps = {
   body: string;
@@ -293,6 +294,10 @@ export function MarkdownRenderer({
         const repository = resolveGithubRepository(githubReferences, prefix, channelId);
         return repository ? githubReferenceUrl(githubReferences, repository, number) : null;
       },
+      githubReferenceKey: (url: string) => {
+        const link = parseGithubIssueUrl(url);
+        return link ? githubReferenceKey(link) : null;
+      },
     }],
   ], [channelId, githubReferences, remarkPlugins]);
   const tableIndexRef = useRef(0);
@@ -324,13 +329,15 @@ export function MarkdownRenderer({
       if (githubLink && href) {
         // A bare URL autolinks to itself; show it as `rw#123` instead.
         const bareUrl = node ? hastText(node as HastNode) === href : false;
+        const { [REFERENCE_TITLE_PROPERTY]: referenceTitle, ...linkProps } = props as typeof props & Record<string, unknown>;
         return (
           <GithubReferenceLink
-            {...props}
+            {...linkProps}
             href={href}
             link={githubLink}
             references={githubReferences}
             compactLabel={bareUrl}
+            showTitle={referenceTitle !== undefined}
             onPointerDown={isolateLinkEvent}
             onContextMenu={isolateLinkEvent}
             // The link may point at the resolved /pull/ page instead of `href`.

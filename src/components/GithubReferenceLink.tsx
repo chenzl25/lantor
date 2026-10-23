@@ -30,6 +30,8 @@ type GithubReferenceLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
   references: GithubReferenceIndex;
   /** Replace the children (a bare URL) with `rw#123`. */
   compactLabel?: boolean;
+  /** Show the PR/issue title after the label once its state is known. */
+  showTitle?: boolean;
   children?: ReactNode;
 };
 
@@ -65,16 +67,17 @@ function ChecksIcon({ status }: { status: string }) {
 }
 
 /**
- * A link to a GitHub PR or issue with a state icon, a CI mark (open PRs) and a
- * title tooltip. Items in the synced GitHub queues have their state locally;
- * others are looked up on demand and stay plain links until (or unless) that
- * lookup finds them.
+ * A link to a GitHub PR or issue with a state icon, a CI mark (open PRs), an
+ * optional truncated title and the full title in a tooltip. Items in the synced
+ * GitHub queues have their state locally; others are looked up on demand and
+ * stay plain links until (or unless) that lookup finds them.
  */
 export function GithubReferenceLink({
   href,
   link,
   references,
   compactLabel = false,
+  showTitle = false,
   children,
   className,
   ...props
@@ -107,9 +110,12 @@ export function GithubReferenceLink({
       target="_blank"
       rel="noreferrer"
     >
-      {item && status && <StatusIcon kind={item.kind} status={status} />}
-      {label}
-      {item && checks && <ChecksIcon status={item.checks_status} />}
+      <span className="github-reference-ref">
+        {item && status && <StatusIcon kind={item.kind} status={status} />}
+        {label}
+        {item && checks && <ChecksIcon status={item.checks_status} />}
+      </span>
+      {showTitle && item?.title && <span className="github-reference-title">{item.title}</span>}
     </a>
   );
 }

@@ -57,8 +57,8 @@ test("messages link references and show cached state", () => {
   const html = render("See #27429, rw#27500 and ir#244. Skip `#27429`, task #99, #7, a#b and [#1](https://x.dev).", RW_CHANNEL);
   assert.match(html, /<a href="https:\/\/github.com\/risingwavelabs\/risingwave\/pull\/27429" class="github-reference" data-status="open" title="Pull request rw#27429: fix\(sum\): keep NULL\nOpen · checks failing"/);
   assert.match(html, /github-reference-checks failure/);
-  assert.match(html, /href="https:\/\/github.com\/risingwavelabs\/risingwave\/issues\/27500" class="github-reference"[^>]*>rw#27500<\/a>/);
-  assert.match(html, /href="https:\/\/github.com\/risingwavelabs\/iceberg-rust\/issues\/244"[^>]*>ir#244<\/a>/);
+  assert.match(html, /href="https:\/\/github.com\/risingwavelabs\/risingwave\/issues\/27500" class="github-reference"[^>]*><span class="github-reference-ref">rw#27500<\/span><\/a>/);
+  assert.match(html, /href="https:\/\/github.com\/risingwavelabs\/iceberg-rust\/issues\/244"[^>]*><span class="github-reference-ref">ir#244<\/span><\/a>/);
   assert.match(html, /<code>#27429<\/code>/);
   assert.match(html, /\/lantor\/task\/99/);
   assert.doesNotMatch(html, /issues\/7"/);
@@ -68,7 +68,26 @@ test("messages link references and show cached state", () => {
   assert.equal(dm.match(/github-reference"/g)?.length, 1);
   // A bare PR URL renders as a compact label.
   assert.match(render("https://github.com/risingwavelabs/risingwave/pull/27429"), /<\/svg>rw#27429<svg/);
-  assert.match(render("https://github.com/risingwavelabs/iceberg-rust/pull/9"), />iceberg-rust#9<\/a>/);
+  assert.match(render("https://github.com/risingwavelabs/iceberg-rust/pull/9"), />iceberg-rust#9<\/span><\/a>/);
+  setGithubReferences({ repositories: [], items: [] });
+});
+
+test("the first reference to a known PR shows its title", () => {
+  setGithubReferences(references);
+  const title = /<span class="github-reference-title">fix\(sum\): keep NULL<\/span>/g;
+  // Bare reference and bare URL: only the first mention in a message gets the title.
+  const repeated = render("rw#27429 failed; see https://github.com/risingwavelabs/risingwave/pull/27429 and #27429.", RW_CHANNEL);
+  assert.equal(repeated.match(title)?.length, 1);
+  assert.match(repeated, /rw#27429<svg[^]*?<\/svg><\/span><span class="github-reference-title">/);
+  assert.equal(render("https://github.com/risingwavelabs/risingwave/pull/27429").match(title)?.length, 1);
+  // Links with their own text, table cells and unknown PRs show no title.
+  assert.doesNotMatch(render("[the sum fix](https://github.com/risingwavelabs/risingwave/pull/27429)"), title);
+  const table = render("| PR | Title |\n|---|---|\n| rw#27429 | keep NULL |", RW_CHANNEL);
+  assert.match(table, /<td><a href="https:\/\/github.com\/risingwavelabs\/risingwave\/pull\/27429" class="github-reference"/);
+  assert.doesNotMatch(table, title);
+  assert.doesNotMatch(render("rw#27500", RW_CHANNEL), /github-reference-title/);
+  // The marker only selects links; it is not rendered as an attribute.
+  assert.doesNotMatch(repeated, /data-reference-title/);
   setGithubReferences({ repositories: [], items: [] });
 });
 

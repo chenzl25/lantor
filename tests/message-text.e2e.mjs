@@ -12,6 +12,8 @@ const body = [
   "Next reminder: 2026-10-13T19:00:00+00:00，代码里 `#27429` 不链接。",
   "",
   "rw#27251 已经合了。",
+  "",
+  "@arch review rw#27626",
 ].join("\n");
 const message = {
   id: "00000000-0000-4000-8000-000000000002", seq: 1,
@@ -30,6 +32,11 @@ const references = {
     name_with_owner: "risingwavelabs/risingwave", number: 27429, kind: "pull", title: "fix(sum): keep NULL",
     url: "https://github.com/risingwavelabs/risingwave/pull/27429", state: "open", state_reason: "", is_draft: false,
     checks_status: "failure", updated_at: "2026-10-14T00:00:00Z",
+  }, {
+    name_with_owner: "risingwavelabs/risingwave", number: 27626, kind: "pull",
+    title: "fix(frontend): keep the enclosing correlation when a lateral subquery is nested under a join",
+    url: "https://github.com/risingwavelabs/risingwave/pull/27626", state: "open", state_reason: "", is_draft: true,
+    checks_status: "pending", updated_at: "2026-10-23T00:00:00Z",
   }],
 };
 // On-demand lookup for references outside the queue: 27251 is merged, 27500 unknown.
@@ -97,12 +104,36 @@ try {
   assert.equal(await queued.first().getAttribute("href"), "https://github.com/risingwavelabs/risingwave/pull/27429");
   assert.match(await queued.first().getAttribute("title"), /fix\(sum\): keep NULL\nOpen · checks failing/);
   assert.equal(await queued.first().locator(".github-reference-checks.failure").count(), 1);
-  assert.equal((await queued.nth(1).innerText()).trim(), "rw#27429", "bare PR URL is shortened");
+  assert.equal((await queued.nth(1).innerText()).trim(), "rw#27429", "bare PR URL is shortened; a repeat shows no title");
+  assert.equal(await queued.first().locator(".github-reference-title").innerText(), "fix(sum): keep NULL");
+  const draftTitle = markdown.locator("a.github-reference[data-status='draft'] .github-reference-title");
+  const titleBox = await draftTitle.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const body = element.closest(".markdown-body").getBoundingClientRect();
+    return { truncated: element.scrollWidth > element.clientWidth, inside: box.right <= body.right + 0.5 };
+  });
+  assert.deepEqual(titleBox, { truncated: true, inside: true }, "a long title truncates inside the message");
+  // On a phone the line breaks before the title and the title stays inside the message.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(300);
+  const narrow = await draftTitle.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const body = element.closest(".markdown-body").getBoundingClientRect();
+    const ref = element.previousElementSibling.getBoundingClientRect();
+    return { inside: box.left >= body.left - 0.5 && box.right <= body.right + 0.5, wrapped: box.top >= ref.bottom - 1 };
+  });
+  if (process.env.MESSAGE_TEXT_SCREENSHOT) {
+    await markdown.screenshot({ path: process.env.MESSAGE_TEXT_SCREENSHOT.replace(/(\.png)?$/, "-narrow.png") });
+  }
+  assert.deepEqual(narrow, { inside: true, wrapped: true }, "a long title wraps below the reference on a narrow screen");
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await page.waitForTimeout(300);
   const merged = markdown.locator("a.github-reference[data-status='merged']");
   await merged.waitFor();
   assert.equal(await merged.getAttribute("href"), "https://github.com/risingwavelabs/risingwave/pull/27251", "looked-up PR links to its page");
   assert.match(await merged.getAttribute("title"), /fix\(stream\): wrap\nMerged$/);
   assert.equal(await merged.locator(".github-reference-checks").count(), 0, "merged PRs show no CI mark");
+  assert.equal(await merged.locator(".github-reference-title").innerText(), "fix(stream): wrap", "looked-up PRs show their title");
   assert.deepEqual(lookupRequests, [{ references: [
     { nameWithOwner: "risingwavelabs/risingwave", number: 27500 },
     { nameWithOwner: "risingwavelabs/risingwave", number: 27251 },
@@ -114,7 +145,7 @@ try {
   const time = markdown.locator("time.lantor-time");
   assert.equal(await time.innerText(), "10-14 03:00");
   assert.equal(await time.getAttribute("title"), "2026-10-13 19:00 UTC");
-  console.log("PASS message body: GitHub references, queued and looked-up PR state, local time");
+  console.log("PASS message body: GitHub references, PR state and titles, local time");
   if (process.env.MESSAGE_TEXT_SCREENSHOT) {
     await markdown.screenshot({ path: process.env.MESSAGE_TEXT_SCREENSHOT });
     await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });

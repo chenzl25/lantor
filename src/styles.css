@@ -4566,9 +4566,23 @@ mark {
   font-weight: var(--type-weight-semibold);
 }
 
-/* `#123` / `rw#123` references with PR/issue state and CI. */
-.markdown-body a.github-reference {
+/* `#123` / `rw#123` references with PR/issue state, CI and title. */
+.markdown-body .github-reference-ref {
   white-space: nowrap;
+}
+
+/* The line may break before the title (an inline-block, so the link
+   underline does not run into the gap); the title itself truncates. */
+.markdown-body .github-reference-title {
+  display: inline-block;
+  margin-left: 0.3em;
+  max-width: min(40ch, calc(100% - 0.3em));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  color: var(--ink-on-surface-secondary);
+  font-weight: var(--type-weight-regular);
 }
 
 .github-reference-icon,

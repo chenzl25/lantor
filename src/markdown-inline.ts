@@ -1,7 +1,8 @@
 // Remark plugin for message text: links GitHub references (`#123`, `rw#123`,
 // `owner/repo#123`) and shows absolute UTC times (`2026-10-13T19:00:00+00:00`,
 // `07:46Z`) in the viewer's local time. Only plain text is touched: code,
-// links, HTML and image alt text are left alone.
+// links, HTML and image alt text are left alone. It also marks the first
+// reference to each PR/issue in a message so the link can show its title.
 
 type MdastNode = {
   type: string;
@@ -17,7 +18,12 @@ export type InlineEnrichmentOptions = {
   resolveGithubReference?: (prefix: string | null, number: number) => string | null;
   /** Defaults to now; tests pin it. Decides whether the year is shown. */
   now?: Date;
+  /** `owner/repo#123` for a GitHub PR/issue URL, else `null`; enables title marking. */
+  githubReferenceKey?: (url: string) => string | null;
 };
+
+/** Set on links that should show the PR/issue title after the reference. */
+export const REFERENCE_TITLE_PROPERTY = "data-reference-title";
 
 type Replacement = {
   start: number;
@@ -32,6 +38,9 @@ const GITHUB_REFERENCE = /(^|[^A-Za-z0-9_/@.&#-])(?:([A-Za-z0-9][A-Za-z0-9_.-]*\
 const ISO_TIMESTAMP = /(^|[^0-9A-Za-z:])([0-9]{4})-([0-9]{2})-([0-9]{2})[T ]([0-9]{2}):([0-9]{2})(?::([0-9]{2})(?:\.[0-9]+)?)?(Z|[+-][0-9]{2}:?[0-9]{2})(?![0-9A-Za-z])/g;
 // `07:46Z`, optionally with a `10-14 ` month-day prefix.
 const UTC_CLOCK = /(^|[^0-9A-Za-z:-])(?:([0-9]{1,2})-([0-9]{2}) )?([01][0-9]|2[0-3]):([0-5][0-9])Z(?![0-9A-Za-z])/g;
+
+// Link text that is just a reference: `#123`, `rw#123` or `owner/repo#123`.
+const REFERENCE_TEXT = /^(?:[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+|[A-Za-z][A-Za-z0-9_-]*)?#[0-9]+$/;
 
 const pad = (value: number) => String(value).padStart(2, "0");
 
@@ -168,8 +177,31 @@ function visit(node: MdastNode, options: InlineEnrichmentOptions, now: Date) {
   node.children = children;
 }
 
+function nodeText(node: MdastNode): string {
+  if (node.type === "text") return node.value ?? "";
+  return node.children?.map(nodeText).join("") ?? "";
+}
+
+// Marks the first link to each PR/issue whose text is the bare URL or a bare
+// reference; links with their own text, repeats and table cells are left as is.
+function markReferenceTitles(node: MdastNode, keyOf: (url: string) => string | null, seen: Set<string>) {
+  if (node.type === "tableCell") return;
+  if (node.type === "link" && node.url) {
+    const key = keyOf(node.url);
+    const text = nodeText(node).trim();
+    if (key && !seen.has(key) && (text === node.url || REFERENCE_TEXT.test(text))) {
+      seen.add(key);
+      const hProperties = (node.data?.hProperties ?? {}) as Record<string, unknown>;
+      node.data = { ...node.data, hProperties: { ...hProperties, [REFERENCE_TITLE_PROPERTY]: "" } };
+    }
+    return;
+  }
+  for (const child of node.children ?? []) markReferenceTitles(child, keyOf, seen);
+}
+
 export function remarkInlineEnrichment(options: InlineEnrichmentOptions = {}) {
   return (tree: MdastNode) => {
     visit(tree, options, options.now ?? new Date());
+    if (options.githubReferenceKey) markReferenceTitles(tree, options.githubReferenceKey, new Set());
   };
 }
