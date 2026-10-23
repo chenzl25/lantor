@@ -50,7 +50,8 @@ const initialState = { db_url: "synthetic://activity", web_base_url: null, owner
   thread_activities: initialActivities, saved_messages: [], dismissed_inbox_items: {}, read_inbox_items: {}, artifacts: [],
   agent_runs: [], agent_work_items: [], agent_activities: [], supervisor: { pid: null, status: "stopped", updated_at: null },
   launch_agent: { label: "", plist_path: "", installed: false, loaded: false }, ui_event_cursor: 0 };
-let state, messages, cursor = 0, emulateThreadReceipts = false;
+// Agent replies counted in the channel's unread totals that no receipt has covered yet.
+let state, messages, cursor = 0, emulateThreadReceipts = false, receiptableReplies = 0;
 const clients = new Set(), requests = [];
 const until = async (check, message) => {
   for (const end = Date.now() + 5_000; Date.now() < end; await new Promise(done => setTimeout(done, 50))) {
@@ -89,8 +90,15 @@ const api = createServer(async (req, res) => {
       for (const item of args.items) state.read_inbox_items[item.itemId] = item.dismissedUntil;
       if (emulateThreadReceipts) {
         // Like the backend: a thread receipt clears replies up to its cutoff and refreshes read state.
-        state.thread_activities = state.thread_activities.map(a => args.items.some(item => item.itemId === `thread:${a.thread_root_id}`
-          && Date.parse(item.dismissedUntil) >= Date.parse(a.latest_activity_at))
+        const covered = a => args.items.some(item => item.itemId === `thread:${a.thread_root_id}`
+          && Date.parse(item.dismissedUntil) >= Date.parse(a.latest_activity_at));
+        // The channel totals drop the receipted replies too.
+        for (const a of state.thread_activities.filter(covered)) {
+          state.channels = state.channels.map(c => c.id === a.channel_id ? { ...c,
+            unread_count: c.unread_count - receiptableReplies, agent_unread_count: c.agent_unread_count - receiptableReplies } : c);
+          receiptableReplies = 0;
+        }
+        state.thread_activities = state.thread_activities.map(a => covered(a)
           ? { ...a, unread_count: 0, agent_unread_count: 0, first_unread_agent_message_id: null } : a);
         setTimeout(() => publish({ type: "refresh", reason: "owner_inbox_read" }), 0);
       }
@@ -108,6 +116,7 @@ let browser;
 try {
   for (const [name, engine, width] of [["desktop", chromium, 1440], ["mobile", webkit, 390]]) {
     state = structuredClone(initialState); messages = structuredClone(initialMessages); requests.length = 0; emulateThreadReceipts = false;
+    receiptableReplies = 0;
     browser = await engine.launch();
     const page = await browser.newPage({ serviceWorkers: "block", viewport: { width, height: 900 } });
     page.setDefaultTimeout(10_000);
@@ -169,11 +178,21 @@ try {
       await page.getByRole("button", { name: "Expand thread", exact: true }).click();
       await page.locator(".app.thread-expanded").waitFor();
       emulateThreadReceipts = true;
+      // Unfollowed, the thread leaves Activity once read, so a channel entry
+      // for the same replies would show up in its place.
+      const unfollowed = { ...messages.find(m => m.id === root.id), thread_followed: false };
+      messages = messages.map(m => m.id === root.id ? unfollowed : m);
+      publish({ type: "message_upsert", message: unfollowed });
       const badge = trigger.locator(".unread-badge");
       const badgeValue = async () => await badge.count() ? Number(await badge.textContent()) : 0;
+      await page.waitForTimeout(300);
       const before = await badgeValue();
       const late = message(110, "agent", "Late reply in the expanded thread", { thread_root_id: root.id });
       messages.push(late);
+      // Like the backend, channel totals count thread replies above the watermark.
+      state.channels = state.channels.map(c => c.id === channelId
+        ? { ...c, unread_count: c.unread_count + 1, agent_unread_count: c.agent_unread_count + 1 } : c);
+      receiptableReplies = 1;
       state.thread_activities = state.thread_activities.map(a => a.thread_root_id === root.id
         ? { ...a, reply_count: a.reply_count + 1, unread_count: 1, agent_unread_count: 1, first_unread_agent_message_id: late.id,
           latest_message_id: late.id, latest_activity_at: late.created_at } : a);
@@ -185,6 +204,12 @@ try {
         "expanded thread receipts its new reply, fenced to the snapshot's latest activity");
       for (const end = Date.now() + 5_000; await badgeValue() !== before && Date.now() < end;) await page.waitForTimeout(50);
       assert.equal(await badgeValue(), before, "Activity unread clears while the thread stays expanded");
+      await trigger.click();
+      await dialog.waitFor();
+      assert.equal(await dialog.locator(".activity-feed-unread-dot").count(), before,
+        "no unread channel entry replaces the read thread");
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "detached" });
       assert.equal(requests.slice(sent).filter(r => r.path === "/api/mark_channel_read").length, 0, "hidden conversation is not marked read");
     }
     assert.equal(errors.length, 0, errors.join("\n"));
