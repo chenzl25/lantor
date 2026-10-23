@@ -517,3 +517,63 @@ async fn assistant_line_with_text_and_tool_call_marks_the_note_without_stream_ev
     assert_eq!(activity_titles(&f, "thinking").await, vec!["Now fix fig3."]);
     f.close().await;
 }
+
+const MIDTURN_CONTROLS: &str = "LANTOR_EVENT {\"type\":\"activity\",\"kind\":\"file_edit\",\"title\":\"Editing styles\"}\nLANTOR_EVENT {\"type\":\"reminder_create\",\"title\":\"Forward Slack\",\"interval_minutes\":5,\"check_command\":\"true\",\"check_action\":\"post\"}";
+
+async fn midturn_control_effects(f: &Fixture) -> (Vec<String>, i64) {
+    let loops: i64 = sqlx::query_scalar(
+        "select count(*) from reminders where title='Forward Slack' and interval_seconds=300",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    (activity_titles(f, "file_edit").await, loops)
+}
+
+/// Guards the live path for controls written between tool calls: a block with
+/// no prose, split mid-JSON across deltas, takes effect before the tool runs.
+#[tokio::test]
+async fn control_only_block_before_a_tool_call_applies_before_the_tool_runs() {
+    let f = Fixture::new().await;
+    let (head, tail) = MIDTURN_CONTROLS.split_at(MIDTURN_CONTROLS.len() - 30);
+    f.send(json!({"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}})).await;
+    for delta in [head, tail] {
+        f.send(json!({"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":delta}}})).await;
+    }
+    f.assistant("m1", MIDTURN_CONTROLS).await;
+    f.send(tool_start(1)).await;
+    assert_eq!(
+        midturn_control_effects(&f).await,
+        (vec!["Editing styles".to_owned()], 1)
+    );
+    f.stream("Loop created.").await;
+    f.assistant("m2", "Loop created.").await;
+    f.result("Loop created.").await;
+    assert_eq!(f.body().await, "Loop created.");
+    assert_eq!(
+        midturn_control_effects(&f).await,
+        (vec!["Editing styles".to_owned()], 1),
+        "the turn-end reconcile must not apply the block again"
+    );
+    f.close().await;
+}
+
+/// Same block when Claude sends only the complete assistant line (no deltas).
+#[tokio::test]
+async fn control_only_block_applies_from_the_assistant_line_without_deltas() {
+    let f = Fixture::new().await;
+    f.send(json!({"type":"assistant","parent_tool_use_id":null,"uuid":"a1","message":{"id":"m1","content":[{"type":"text","text":MIDTURN_CONTROLS},{"type":"tool_use","id":"t1","name":"Edit","input":{}}]}})).await;
+    assert_eq!(
+        midturn_control_effects(&f).await,
+        (vec!["Editing styles".to_owned()], 1)
+    );
+    f.stream("Loop created.").await;
+    f.assistant("m2", "Loop created.").await;
+    f.result("Loop created.").await;
+    assert_eq!(f.body().await, "Loop created.");
+    assert_eq!(
+        midturn_control_effects(&f).await,
+        (vec!["Editing styles".to_owned()], 1)
+    );
+    f.close().await;
+}
