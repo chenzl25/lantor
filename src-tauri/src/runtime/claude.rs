@@ -1216,7 +1216,7 @@ mod tests {
     async fn claude_child_enforces_turn_boundaries_over_environment_overrides() {
         let mut command = Command::new("sh");
         command.arg("-c").arg(
-            r#"printf '%s\n' "$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" "$CLAUDE_CODE_DISABLE_CRON" "$CLAUDE_CODE_DISABLE_AUTO_MEMORY" "$ANTHROPIC_MAX_RETRIES""#,
+            r#"printf '%s\n' "$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" "$CLAUDE_CODE_DISABLE_CRON" "$CLAUDE_CODE_DISABLE_AUTO_MEMORY" "$CLAUDE_CODE_MAX_RETRIES""#,
         );
         for key in [
             CLAUDE_DISABLE_BACKGROUND_TASKS_ENV,

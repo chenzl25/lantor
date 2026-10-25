@@ -6,7 +6,9 @@ use super::ClaudeSurface;
 use crate::app::{to_string, CommandResult};
 use crate::runtime::process::truncate_activity_detail;
 
-pub(super) const CLAUDE_MAX_RETRIES_ENV: &str = "ANTHROPIC_MAX_RETRIES";
+/// Claude Code reads its API retry limit from this variable; it ignores the SDK's
+/// `ANTHROPIC_MAX_RETRIES`.
+pub(super) const CLAUDE_MAX_RETRIES_ENV: &str = "CLAUDE_CODE_MAX_RETRIES";
 pub(super) const DEFAULT_CLAUDE_MAX_RETRIES: &str = "5";
 pub(super) const CLAUDE_DISABLE_BACKGROUND_TASKS_ENV: &str = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS";
 pub(super) const CLAUDE_DISABLE_CRON_ENV: &str = "CLAUDE_CODE_DISABLE_CRON";
