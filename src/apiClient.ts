@@ -9,6 +9,7 @@ import type {
 } from "./api-contract";
 
 import { subscribeWebEvents, type EventSubscription } from "./web-event-stream";
+import { sessionFetch } from "./web-session";
 
 const UI_REFRESH_EVENT = "lantor://refresh";
 
@@ -95,8 +96,8 @@ export async function apiInvoke<C extends ApiCommand>(
   }
 
   const response = command === "bootstrap"
-    ? await fetch(bootstrapApiPath(args))
-    : await fetch(apiPath(command), {
+    ? await sessionFetch(bootstrapApiPath(args))
+    : await sessionFetch(apiPath(command), {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -136,7 +137,7 @@ export async function sendMessage(
   for (const file of attachments) {
     formData.append("attachments", file, file.name || "attachment");
   }
-  const response = await fetch(apiPath("send_message"), {
+  const response = await sessionFetch(apiPath("send_message"), {
     method: "POST",
     body: formData,
   });
@@ -169,8 +170,8 @@ export async function apiInvokeMeasured<C extends ApiCommand>(
   }
 
   const response = command === "bootstrap"
-    ? await fetch(bootstrapApiPath(args))
-    : await fetch(apiPath(command), {
+    ? await sessionFetch(bootstrapApiPath(args))
+    : await sessionFetch(apiPath(command), {
       method: "POST",
       headers: {
         "content-type": "application/json",
