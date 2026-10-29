@@ -22,6 +22,7 @@
     "test:code-blocks": "node tests/code-blocks.e2e.mjs",
     "test:message-text": "node tests/message-text.e2e.mjs",
     "test:message-rows": "node tests/message-rows.e2e.mjs",
+    "test:expanded-message-press": "node tests/expanded-message-press.e2e.mjs",
     "test:channel-reading": "node tests/channel-reading-position.e2e.mjs",
     "test:mobile-performance": "node tests/mobile-performance.e2e.mjs",
     "test:avatar-cache": "node tests/avatar-cache.e2e.mjs",

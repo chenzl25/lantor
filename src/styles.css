@@ -2113,8 +2113,9 @@ button,
 
   /* The clip margin accommodates the action bar/tooltips without toggling layout
      containment on every hover while scrolling. Dialogs need a viewport-sized
-     containing block; jumps and live streams need their actual content height. */
-  .message-render-boundary:focus-within,
+     containing block; jumps and live streams need their actual content height.
+     Focus needs no rule: a row with focus inside is already kept rendered, and
+     Chromium crashes if a press that moves focus out flips the row back to auto. */
   .message-render-boundary:has(.attachment-lightbox, .attachment-download-toast),
   .message-render-boundary[data-streaming="true"],
   .message-render-boundary[data-jump-focused="true"] {
