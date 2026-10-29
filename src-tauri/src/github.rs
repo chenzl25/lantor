@@ -24,7 +24,10 @@ mod references;
 pub(crate) use reference_states::{
     lookup_github_reference_states, GithubReferenceKey, GithubReferenceLookup,
 };
-pub(crate) use references::{load_github_references, set_github_reference_alias, GithubReferences};
+pub(crate) use references::{
+    load_agent_github_reference_lines, load_github_references, set_github_reference_alias,
+    GithubReferences,
+};
 
 pub(crate) use comparisons::{
     load_github_commits_ahead, load_github_review_comparisons, GithubReviewComparisons,

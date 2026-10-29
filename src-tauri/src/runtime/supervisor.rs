@@ -823,6 +823,8 @@ async fn supervisor_start_agent(
                 context
             };
             let available_agents = load_channel_agent_roster(pool, channel_id, agent_id).await?;
+            let github_reference_lines =
+                crate::github::load_agent_github_reference_lines(pool, channel_id).await?;
             let agent_profile_hint = avatar
                 .as_deref()
                 .map(str::trim)
@@ -839,6 +841,7 @@ async fn supervisor_start_agent(
                     &title,
                     &context,
                     channel_name.as_deref(),
+                    &github_reference_lines,
                     task_number,
                     thread_root_id,
                     &available_agents,
@@ -850,6 +853,7 @@ async fn supervisor_start_agent(
                     &title,
                     &context,
                     channel_name.as_deref(),
+                    &github_reference_lines,
                     task_number,
                     thread_root_id,
                     &available_agents,

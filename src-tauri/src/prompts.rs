@@ -15,6 +15,7 @@ fn lantor_operating_policy_prompt() -> &'static str {
 - Before replying, decide whether a visible response is useful. Reply briefly to direct greetings, low-intent testing messages, or "are you there?" checks so the user can tell you are alive. For pure acknowledgements, thanks, emoji-only messages, or non-actionable chatter that does not need a response, output exactly `LANTOR_SILENT_REPLY: <short reason>` and nothing else.
 - If the latest owner message explicitly mentions another agent and does not mention you, do not perform the requested work. Treat it as assigned to the mentioned agent; reply silently unless the user directly asks you to acknowledge.
 - Keep visible replies high-density: final results, decisions, blockers, user questions, and handoffs. Put intermediate steps in activity events.
+- Write GitHub PR and issue references with their repository, e.g. `rw#123` or `owner/repo#123` (names from `github_names` in the turn header), or as full URLs. A bare `#123` links to the repository of the channel the message is posted in (`github_repo`) and is not linked where the channel has none, so use it only for that repository. Lantor tasks are `task #12`.
 - When showing code, use fenced blocks with a language tag. For a file excerpt, put its location after the language, e.g. ```rust path=src/lib.rs#L42 (a GitHub permalink also works). Show changes as unified diffs in ```diff <language> blocks with real `@@ -a,b +c,d @@` hunk headers. Keep excerpts verbatim apart from marked elisions, and explain outside the block.
 - When you need the owner to choose between concrete options or approve an action, post a decision card (see Decision cards) instead of asking in chat text.
 - Activity events are the short progress notes a user would otherwise see in chat. When work takes more than a moment, emit them with a concrete user-facing title and detail that says what you are doing or what you just learned, not just a generic phase label.
@@ -148,6 +149,7 @@ fn build_work_item_prompt_inner(
     title: &str,
     context: &str,
     channel_name: Option<&str>,
+    github_reference_lines: &[String],
     task_number: Option<i64>,
     thread_root_id: Option<Uuid>,
     available_agents: &[String],
@@ -162,6 +164,7 @@ fn build_work_item_prompt_inner(
     if let Some(channel_name) = channel_name {
         lines.push(format!("channel: #{channel_name}"));
     }
+    lines.extend(github_reference_lines.iter().cloned());
     if let Some(task_number) = task_number {
         lines.push(format!("task: #{task_number}"));
     }
@@ -204,6 +207,7 @@ pub(crate) fn build_work_item_prompt(
     title: &str,
     context: &str,
     channel_name: Option<&str>,
+    github_reference_lines: &[String],
     task_number: Option<i64>,
     thread_root_id: Option<Uuid>,
     available_agents: &[String],
@@ -214,6 +218,7 @@ pub(crate) fn build_work_item_prompt(
         title,
         context,
         channel_name,
+        github_reference_lines,
         task_number,
         thread_root_id,
         available_agents,
@@ -228,6 +233,7 @@ pub(crate) fn build_streaming_work_item_prompt(
     title: &str,
     context: &str,
     channel_name: Option<&str>,
+    github_reference_lines: &[String],
     task_number: Option<i64>,
     thread_root_id: Option<Uuid>,
     available_agents: &[String],
@@ -238,6 +244,7 @@ pub(crate) fn build_streaming_work_item_prompt(
         title,
         context,
         channel_name,
+        github_reference_lines,
         task_number,
         thread_root_id,
         available_agents,

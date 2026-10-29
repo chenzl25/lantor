@@ -1,9 +1,10 @@
 //! Data for rendering `#123` / `rw#123` references in messages: every channel
 //! binding (with its short alias) plus the state of PRs and issues that are
 //! already in the synced queues. Read-only and local; never calls GitHub
-//! (references outside the queues go through `reference_states`).
+//! (references outside the queues go through `reference_states`). The same
+//! bindings tell agents, in each turn header, how to write references.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
@@ -45,24 +46,7 @@ pub(crate) struct GithubReferences {
 }
 
 pub(crate) async fn load_github_references(pool: &SqlitePool) -> CommandResult<GithubReferences> {
-    let repositories = sqlx::query(
-        r#"
-        select channel_id, name_with_owner, url, reference_alias
-        from channel_github_repositories
-        order by name_with_owner, channel_id
-        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(to_string)?
-    .iter()
-    .map(|row| GithubReferenceRepository {
-        channel_id: row.get("channel_id"),
-        name_with_owner: row.get("name_with_owner"),
-        url: row.get("url"),
-        reference_alias: row.get("reference_alias"),
-    })
-    .collect();
+    let repositories = load_reference_bindings(pool).await?;
 
     // A repository can be bound to several channels and queued for several
     // review logins; keep the most recently updated copy of each item.
@@ -123,6 +107,109 @@ pub(crate) async fn load_github_references(pool: &SqlitePool) -> CommandResult<G
         repositories,
         items,
     })
+}
+
+/// Turn-header lines that tell an agent how to write GitHub references: the
+/// repository a bare `#123` links to in this channel, and a short name for
+/// every bound repository. Empty when no channel has a repository.
+pub(crate) async fn load_agent_github_reference_lines(
+    pool: &SqlitePool,
+    channel_id: Option<Uuid>,
+) -> CommandResult<Vec<String>> {
+    let bindings = load_reference_bindings(pool).await?;
+    Ok(agent_github_reference_lines(&bindings, channel_id))
+}
+
+async fn load_reference_bindings(
+    pool: &SqlitePool,
+) -> CommandResult<Vec<GithubReferenceRepository>> {
+    Ok(sqlx::query(
+        r#"
+        select channel_id, name_with_owner, url, reference_alias
+        from channel_github_repositories
+        order by name_with_owner, channel_id
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(to_string)?
+    .iter()
+    .map(|row| GithubReferenceRepository {
+        channel_id: row.get("channel_id"),
+        name_with_owner: row.get("name_with_owner"),
+        url: row.get("url"),
+        reference_alias: row.get("reference_alias"),
+    })
+    .collect())
+}
+
+/// The short name for each repository is its explicit alias, else its
+/// repository name when no other bound repository has that name or alias,
+/// else just `owner/repo`. These are the names the web UI resolves in `rw#123`
+/// and `rw #123` (`buildGithubReferenceIndex` in src/github-references.ts).
+pub(crate) fn agent_github_reference_lines(
+    bindings: &[GithubReferenceRepository],
+    channel_id: Option<Uuid>,
+) -> Vec<String> {
+    if bindings.is_empty() {
+        return Vec::new();
+    }
+    // Lower-cased `owner/repo` → (canonical `owner/repo`, alias).
+    let mut repositories: BTreeMap<String, (&str, &str)> = BTreeMap::new();
+    for binding in bindings {
+        let entry = repositories
+            .entry(binding.name_with_owner.to_ascii_lowercase())
+            .or_insert((&binding.name_with_owner, ""));
+        if entry.1.is_empty() {
+            entry.1 = binding.reference_alias.trim();
+        }
+    }
+    let aliases: HashSet<String> = repositories
+        .values()
+        .filter(|(_, alias)| !alias.is_empty())
+        .map(|(_, alias)| alias.to_ascii_lowercase())
+        .collect();
+    let mut name_counts: HashMap<String, usize> = HashMap::new();
+    for (name_with_owner, _) in repositories.values() {
+        *name_counts
+            .entry(repository_name(name_with_owner).to_ascii_lowercase())
+            .or_default() += 1;
+    }
+    let short_names: Vec<String> = repositories
+        .values()
+        .map(|(name_with_owner, alias)| {
+            if !alias.is_empty() {
+                return format!("{alias}={name_with_owner}");
+            }
+            let name = repository_name(name_with_owner);
+            let key = name.to_ascii_lowercase();
+            if name_counts.get(&key) == Some(&1) && !aliases.contains(&key) && key != "task" {
+                format!("{name}={name_with_owner}")
+            } else {
+                (*name_with_owner).to_owned()
+            }
+        })
+        .collect();
+
+    let channel_repository = channel_id.and_then(|channel_id| {
+        bindings
+            .iter()
+            .find(|binding| binding.channel_id == channel_id)
+            .map(|binding| binding.name_with_owner.as_str())
+    });
+    vec![
+        match channel_repository {
+            Some(repository) => format!("github_repo: {repository} (a bare #123 here links to it)"),
+            None => "github_repo: none (a bare #123 here is not linked)".to_owned(),
+        },
+        format!("github_names: {}", short_names.join(", ")),
+    ]
+}
+
+fn repository_name(name_with_owner: &str) -> &str {
+    name_with_owner
+        .split_once('/')
+        .map_or(name_with_owner, |(_, name)| name)
 }
 
 /// Normalizes a user-entered alias: lower-case ASCII letter first, then

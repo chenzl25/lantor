@@ -290,8 +290,8 @@ export function MarkdownRenderer({
   const enrichedRemarkPlugins = useMemo<PluggableList>(() => [
     ...remarkPlugins,
     [remarkInlineEnrichment, {
-      resolveGithubReference: (prefix: string | null, number: number) => {
-        const repository = resolveGithubRepository(githubReferences, prefix, channelId);
+      resolveGithubReference: (prefix: string | null, number: number, spaced: boolean) => {
+        const repository = resolveGithubRepository(githubReferences, prefix, channelId, spaced);
         return repository ? githubReferenceUrl(githubReferences, repository, number) : null;
       },
       githubReferenceKey: (url: string) => {

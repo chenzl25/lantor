@@ -1,4 +1,4 @@
-// Resolves `#123`, `rw#123` and `owner/repo#123` in message text to GitHub
+// Resolves `#123`, `rw#123`, `rw #123` and `owner/repo#123` in message text to GitHub
 // links. PRs/issues in the synced GitHub queues get their state from one local
 // read (`load_github_references`); other referenced PRs/issues (usually merged
 // or closed ones) are looked up in batches through `lookup_github_references`,
@@ -11,6 +11,12 @@ export type GithubReferenceIndex = {
   byChannel: ReadonlyMap<string, string>;
   /** Lower-cased alias or repo name → lower-cased `owner/repo`; `null` when ambiguous. */
   byName: ReadonlyMap<string, string | null>;
+  /**
+   * Explicit aliases and repository names, but not derived aliases: only these
+   * qualify a spaced `rw #123`, so prose like `in #123` never matches `in` for
+   * a repository called `iceberg-nessie`.
+   */
+  spacedNames: ReadonlySet<string>;
   /** Lower-cased `owner/repo` → canonical `owner/repo` and its short display prefix. */
   repositories: ReadonlyMap<string, { nameWithOwner: string; shortName: string }>;
   /** `owner/repo#number` (lower-cased repo) → cached item. */
@@ -27,6 +33,7 @@ export type GithubIssueLink = {
 const EMPTY_INDEX: GithubReferenceIndex = {
   byChannel: new Map(),
   byName: new Map(),
+  spacedNames: new Set(),
   repositories: new Map(),
   items: new Map(),
   aliasByChannel: new Map(),
@@ -52,7 +59,8 @@ export function buildGithubReferenceIndex(data: GithubReferences): GithubReferen
   const byChannel = new Map<string, string>();
   const aliasByChannel = new Map<string, string>();
   const repositories = new Map<string, { nameWithOwner: string; shortName: string }>();
-  const candidates = new Map<string, Set<string>>();
+  const derived = new Map<string, Set<string>>();
+  const named = new Map<string, Set<string>>();
   const explicit = new Map<string, Set<string>>();
   const add = (target: Map<string, Set<string>>, name: string, repository: string) => {
     if (!name) return;
@@ -72,25 +80,28 @@ export function buildGithubReferenceIndex(data: GithubReferences): GithubReferen
       shortName: alias || previous?.shortName || repositoryName,
     });
     add(explicit, alias, key);
-    add(candidates, repositoryName, key);
-    add(candidates, derivedReferenceAlias(repositoryName), key);
+    add(named, repositoryName, key);
+    add(derived, derivedReferenceAlias(repositoryName), key);
   }
 
   const byName = new Map<string, string | null>();
-  // Explicit aliases win over derived names; anything that still maps to two
-  // repositories stays unresolved instead of guessing.
-  for (const source of [candidates, explicit]) {
+  // Explicit aliases win over repository names, which win over derived
+  // aliases. A name that maps to two repositories at the same level stays
+  // unresolved instead of guessing. The backend lists the same short names to
+  // agents (`agent_github_reference_lines`); keep the two in step.
+  for (const source of [derived, named, explicit]) {
     for (const [name, targets] of source) {
       byName.set(name, targets.size === 1 ? [...targets][0] : null);
     }
   }
   byName.delete("task");
+  const spacedNames = new Set([...named.keys(), ...explicit.keys()]);
 
   const items = new Map<string, GithubReferenceItem>();
   for (const item of data.items ?? []) {
     items.set(`${item.name_with_owner.toLowerCase()}#${item.number}`, item);
   }
-  return { byChannel, byName, repositories, items, aliasByChannel };
+  return { byChannel, byName, spacedNames, repositories, items, aliasByChannel };
 }
 
 export function getGithubReferenceIndex() {
@@ -128,19 +139,28 @@ export function loadGithubReferences() {
   return loading;
 }
 
-/** Resolves a reference prefix (`null` for a bare `#123`) to `owner/repo`. */
+/**
+ * Resolves a reference prefix (`null` for a bare `#123`) to `owner/repo`. A bare
+ * `#123` means the repository bound to the message's channel. With `spaced`
+ * (`rw #123`) the prefix must be an explicit alias, a repository name or a bound
+ * `owner/repo`, since prose like `src/app #12` or `in #12` is not a reference.
+ */
 export function resolveGithubRepository(
   references: GithubReferenceIndex,
   prefix: string | null,
   channelId: string | undefined,
+  spaced = false,
 ) {
   if (prefix === null) return channelId ? references.byChannel.get(channelId) ?? null : null;
   if (prefix.includes("/")) {
     const [owner, repository, extra] = prefix.split("/");
     if (extra !== undefined || !REPOSITORY_PART.test(owner) || !REPOSITORY_PART.test(repository ?? "")) return null;
-    return prefix.toLowerCase();
+    const key = prefix.toLowerCase();
+    return spaced && !references.repositories.has(key) ? null : key;
   }
-  return references.byName.get(prefix.toLowerCase()) ?? null;
+  const name = prefix.toLowerCase();
+  if (spaced && !references.spacedNames.has(name)) return null;
+  return references.byName.get(name) ?? null;
 }
 
 export function githubReferenceUrl(references: GithubReferenceIndex, repository: string, number: number) {

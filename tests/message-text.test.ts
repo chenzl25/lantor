@@ -46,6 +46,23 @@ test("reference index resolves bare, aliased, derived and full references", () =
   assert.equal(resolveGithubRepository(index, "nimtable/iceberg-compaction", undefined), "nimtable/iceberg-compaction");
   assert.equal(resolveGithubRepository(index, "task", undefined), null);
   assert.equal(resolveGithubRepository(index, "a/b/c", undefined), null);
+  // `rw #123`: derived aliases and unbound `owner/repo` do not qualify a spaced reference.
+  assert.equal(resolveGithubRepository(index, "RW", undefined, true), "risingwavelabs/risingwave");
+  assert.equal(resolveGithubRepository(index, "iceberg-rust", undefined, true), "risingwavelabs/iceberg-rust");
+  assert.equal(resolveGithubRepository(index, "risingwavelabs/iceberg-rust", undefined, true), "risingwavelabs/iceberg-rust");
+  assert.equal(resolveGithubRepository(index, "ir", undefined, true), null);
+  assert.equal(resolveGithubRepository(index, "nimtable/iceberg-compaction", undefined, true), null);
+  assert.equal(resolveGithubRepository(index, "risingwave", undefined, true), "risingwavelabs/risingwave");
+  // A repository name wins over another repository's derived alias.
+  const named = buildGithubReferenceIndex({
+    repositories: [
+      ...references.repositories,
+      { channel_id: "00000000-0000-4000-8000-000000000003", name_with_owner: "acme/ir", url: "https://github.com/acme/ir", reference_alias: "" },
+    ],
+    items: [],
+  });
+  assert.equal(resolveGithubRepository(named, "ir", undefined), "acme/ir");
+  assert.equal(resolveGithubRepository(named, "ir", undefined, true), "acme/ir");
   const link = parseGithubIssueUrl("https://github.com/risingwavelabs/iceberg-rust/pull/244/files");
   assert.deepEqual(link, { nameWithOwner: "risingwavelabs/iceberg-rust", number: 244 });
   assert.equal(githubReferenceLabel(index, link!), "iceberg-rust#244");
@@ -69,6 +86,35 @@ test("messages link references and show cached state", () => {
   // A bare PR URL renders as a compact label.
   assert.match(render("https://github.com/risingwavelabs/risingwave/pull/27429"), /<\/svg>rw#27429<svg/);
   assert.match(render("https://github.com/risingwavelabs/iceberg-rust/pull/9"), />iceberg-rust#9<\/span><\/a>/);
+  setGithubReferences({ repositories: [], items: [] });
+});
+
+test("a known name followed by a space qualifies the reference", () => {
+  setGithubReferences(references);
+  const link = (repository: string, number: number, label: string) =>
+    new RegExp(`href="https://github.com/${repository}/(?:issues|pull)/${number}"[^>]*><span class="github-reference-ref">(?:<svg[^]*?</svg>)?${label}(?:<svg|</span>)`);
+  // In the iceberg-rust channel, other repositories are named with a space.
+  const html = render("RW #27500 broke iceberg-rust #244; see risingwavelabs/risingwave #27429 and risingwave #27501.", IR_CHANNEL);
+  assert.match(html, link("risingwavelabs/risingwave", 27500, "RW #27500"));
+  assert.match(html, link("risingwavelabs/iceberg-rust", 244, "iceberg-rust #244"));
+  assert.match(html, link("risingwavelabs/risingwave", 27429, "risingwavelabs/risingwave #27429"));
+  assert.match(html, link("risingwavelabs/risingwave", 27501, "risingwave #27501"));
+  assert.doesNotMatch(html, /iceberg-rust\/issues\/27500/);
+  // Other words stay prose and the number is a bare reference to the channel's repository.
+  const prose = render("PR #245, ir #246, src/app #247, the #1 issue", IR_CHANNEL);
+  assert.match(prose, /PR <a href="https:\/\/github.com\/risingwavelabs\/iceberg-rust\/issues\/245"[^>]*><span class="github-reference-ref">#245<\/span>/);
+  assert.match(prose, /ir <a href="https:\/\/github.com\/risingwavelabs\/iceberg-rust\/issues\/246"/);
+  assert.match(prose, /src\/app <a href="https:\/\/github.com\/risingwavelabs\/iceberg-rust\/issues\/247"/);
+  assert.doesNotMatch(prose, /issues\/1"/);
+  // Without a bound channel a spaced unknown word links nothing; a known name still does.
+  const dm = render("PR #245 and RW #27500");
+  assert.equal(dm.match(/github-reference"/g)?.length, 1);
+  assert.match(dm, link("risingwavelabs/risingwave", 27500, "RW #27500"));
+  // Lantor tasks keep their own links.
+  assert.match(render("Task #12 is done", RW_CHANNEL), /href="\/lantor\/task\/12"/);
+  assert.doesNotMatch(render("Task #12 is done", RW_CHANNEL), /github\.com/);
+  // A spaced reference is the first mention and shows the title.
+  assert.match(render("RW #27429 failed", IR_CHANNEL), /RW #27429<svg[^]*?<\/svg><\/span><span class="github-reference-title">/);
   setGithubReferences({ repositories: [], items: [] });
 });
 

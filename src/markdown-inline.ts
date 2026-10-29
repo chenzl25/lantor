@@ -1,5 +1,5 @@
 // Remark plugin for message text: links GitHub references (`#123`, `rw#123`,
-// `owner/repo#123`) and shows absolute UTC times (`2026-10-13T19:00:00+00:00`,
+// `rw #123`, `owner/repo#123`) and shows absolute UTC times (`2026-10-13T19:00:00+00:00`,
 // `07:46Z`) in the viewer's local time. Only plain text is touched: code,
 // links, HTML and image alt text are left alone. It also marks the first
 // reference to each PR/issue in a message so the link can show its title.
@@ -14,8 +14,12 @@ type MdastNode = {
 };
 
 export type InlineEnrichmentOptions = {
-  /** Returns the link for a reference, or `null` to leave the text as is. */
-  resolveGithubReference?: (prefix: string | null, number: number) => string | null;
+  /**
+   * Returns the link for a reference, or `null` to leave the text as is.
+   * `spaced` is set for `rw #123`, where only a known name may qualify the
+   * reference; when it does not, the text is retried as a bare `#123`.
+   */
+  resolveGithubReference?: (prefix: string | null, number: number, spaced: boolean) => string | null;
   /** Defaults to now; tests pin it. Decides whether the year is shown. */
   now?: Date;
   /** `owner/repo#123` for a GitHub PR/issue URL, else `null`; enables title marking. */
@@ -34,13 +38,13 @@ type Replacement = {
 const SKIPPED_PARENTS = new Set(["link", "linkReference", "inlineCode", "code", "html", "image", "imageReference", "definition"]);
 
 // `(^|boundary)` instead of a lookbehind so older Safari keeps working.
-const GITHUB_REFERENCE = /(^|[^A-Za-z0-9_/@.&#-])(?:([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+|[A-Za-z][A-Za-z0-9_-]*)#|#)([0-9]+)(?![A-Za-z0-9_-])/g;
+const GITHUB_REFERENCE = /(^|[^A-Za-z0-9_/@.&#-])(?:([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+|[A-Za-z][A-Za-z0-9_-]*)( ?)#|#)([0-9]+)(?![A-Za-z0-9_-])/g;
 const ISO_TIMESTAMP = /(^|[^0-9A-Za-z:])([0-9]{4})-([0-9]{2})-([0-9]{2})[T ]([0-9]{2}):([0-9]{2})(?::([0-9]{2})(?:\.[0-9]+)?)?(Z|[+-][0-9]{2}:?[0-9]{2})(?![0-9A-Za-z])/g;
 // `07:46Z`, optionally with a `10-14 ` month-day prefix.
 const UTC_CLOCK = /(^|[^0-9A-Za-z:-])(?:([0-9]{1,2})-([0-9]{2}) )?([01][0-9]|2[0-3]):([0-5][0-9])Z(?![0-9A-Za-z])/g;
 
-// Link text that is just a reference: `#123`, `rw#123` or `owner/repo#123`.
-const REFERENCE_TEXT = /^(?:[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+|[A-Za-z][A-Za-z0-9_-]*)?#[0-9]+$/;
+// Link text that is just a reference: `#123`, `rw#123`, `rw #123` or `owner/repo#123`.
+const REFERENCE_TEXT = /^(?:(?:[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+|[A-Za-z][A-Za-z0-9_-]*) ?)?#[0-9]+$/;
 
 const pad = (value: number) => String(value).padStart(2, "0");
 
@@ -124,17 +128,25 @@ function referenceReplacements(
 ): Replacement[] {
   const replacements: Replacement[] = [];
   for (const match of text.matchAll(GITHUB_REFERENCE)) {
-    const [whole, boundary, prefix, digits] = match;
-    // A bare `#7` is too likely to be prose; prefixed references can be short.
-    if (prefix === undefined && digits.length < 2) continue;
-    const url = resolve(prefix ?? null, Number(digits));
+    const [whole, boundary, prefix, space, digits] = match;
+    const spaced = space === " ";
+    const bareFallback = prefix === undefined || spaced;
+    // A bare `#7` (or `the #1`) is too likely to be prose; `rw#7` can be short.
+    if (bareFallback && digits.length < 2) continue;
+    const number = Number(digits);
+    const end = match.index + whole.length;
+    let start = match.index + boundary.length;
+    let url = prefix === undefined ? null : resolve(prefix, number, spaced);
+    // `PR #123`: the word is not a repository, so only `#123` is the reference.
+    if (!url && bareFallback) {
+      url = resolve(null, number, false);
+      start = end - digits.length - 1;
+    }
     if (!url) continue;
-    const start = match.index + boundary.length;
-    const label = whole.slice(boundary.length);
     replacements.push({
       start,
-      end: start + label.length,
-      node: { type: "link", url, title: null, children: [{ type: "text", value: label }] },
+      end,
+      node: { type: "link", url, title: null, children: [{ type: "text", value: text.slice(start, end) }] },
     });
   }
   return replacements;
