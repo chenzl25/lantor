@@ -272,7 +272,8 @@ npm run web:dev                                            # built web UI + back
 ```
 
 Hot reload, browser test suites, and benchmarks are in
-[`docs/development.md`](docs/development.md).
+[`docs/development.md`](docs/development.md). Rules for every change, by people
+and by agents, are in [`AGENTS.md`](AGENTS.md).
 
 ## License
 
