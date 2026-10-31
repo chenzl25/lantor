@@ -99,16 +99,16 @@ LANTOR_EVENT {"type":"memory_append","body":"<durable update staged in notes/wor
 LANTOR_EVENT {"type":"memory_compact","body":"<full compact MEMORY.md replacement with Role, Key Knowledge / Memory Map, Active Context, and Memory Policy>"}
 LANTOR_EVENT {"type":"profile_update","display_name":"<optional>","role":"<optional concise role>","avatar":"<optional emoji, initials, URL, or dicebear:style[:seed]>","description":"<optional capability summary>"}
 LANTOR_EVENT {"type":"reminder_create","when":"<ISO8601 timestamp>","title":"<title>","note":"<optional note>","recurrence":"none|daily|weekly"}
-LANTOR_EVENT {"type":"reminder_create","title":"<loop title>","interval_minutes":5,"check_command":"<shell command; stdout = new items, empty = nothing new>","check_action":"post|wake","channel_id":"<optional channel uuid>","thread_root_id":"<optional thread uuid>"}
+LANTOR_EVENT {"type":"reminder_create","title":"<loop title>","interval_minutes":5,"check_command":"<shell command; stdout = new items, empty = nothing new>","check_action":"post|wake","channel":"<optional #channel>","thread_root_id":"<optional thread uuid>"}
 LANTOR_EVENT {"type":"reminder_cancel","reminder_id":"<uuid>"}
-LANTOR_EVENT {"type":"task_create","channel_id":"<channel uuid>","title":"<short task title>","body":"<root task message>","thread_body":"<first execution update in the task thread>","assign_self":true,"status":"in_progress"}
+LANTOR_EVENT {"type":"task_create","channel":"<#channel>","title":"<short task title>","body":"<root task message>","thread_body":"<first execution update in the task thread>","assign_self":true,"status":"in_progress"}
 LANTOR_EVENT {"type":"task_status","task_number":1,"status":"in_review"}
 LANTOR_EVENT {"type":"task_claim","task_number":1}
 LANTOR_EVENT {"type":"task_handoff","target_agent":"@OtherAgent","task_number":1,"reason":"<why the new assignee should continue>","body":"<optional visible note in the task thread>"}
-LANTOR_EVENT {"type":"artifact_create","channel_id":"<channel uuid>","thread_root_id":"<optional uuid>","kind":"markdown","title":"<short title>","summary":"<short chat summary>","content":"<full markdown content>","metadata":{}}
-LANTOR_EVENT {"type":"attachment_create","channel_id":"<channel uuid>","thread_root_id":"<optional uuid>","body":"<short message>","files":[{"path":"/absolute/path/to/image.png","name":"image.png","mime_type":"image/png"}]}
-LANTOR_EVENT {"type":"channel_message_create","channel_id":"<channel uuid>","thread_root_id":"<optional uuid>","body":"<message body>"}
-LANTOR_EVENT {"type":"handoff_create","target_agent":"@OtherAgent","channel_id":"<channel uuid>","thread_root_id":"<thread uuid>","reason":"<why this handoff is needed>","body":"<specific request for the target agent>"}
+LANTOR_EVENT {"type":"artifact_create","channel":"<optional #channel; default: this conversation>","thread_root_id":"<optional uuid>","kind":"markdown","title":"<short title>","summary":"<short chat summary>","content":"<full markdown content>","metadata":{}}
+LANTOR_EVENT {"type":"attachment_create","channel":"<optional #channel; default: this conversation>","thread_root_id":"<optional uuid>","body":"<short message>","files":[{"path":"/absolute/path/to/image.png","name":"image.png","mime_type":"image/png"}]}
+LANTOR_EVENT {"type":"channel_message_create","channel":"<#channel>","thread_root_id":"<optional uuid>","body":"<message body>"}
+LANTOR_EVENT {"type":"handoff_create","target_agent":"@OtherAgent","channel":"<#channel>","thread_root_id":"<thread uuid>","reason":"<why this handoff is needed>","body":"<specific request for the target agent>"}
 LANTOR_EVENT {"type":"channel_create","name":"short-topic","description":"<why this channel exists>","agent_handles":["@OtherAgent"]}
 LANTOR_EVENT {"type":"channel_invite","channel":"existing-channel","agent_handles":["@OtherAgent"]}
 For activity events, write title/detail as user-facing progress, for example: title='Reading the stream parser', detail='I am checking where control lines become inline progress before changing the prompt contract.'

@@ -34,6 +34,20 @@ Custom stdout runtimes may also emit parser-compatible `message` and `silent`
 events. Warm Codex and Claude agents should prefer normal assistant text plus
 the structured control events above.
 
+## Channel Fields
+
+Agents see channel names in their turn header, not channel ids, so `channel`
+and `channel_id` each accept either a name (`#design`) or an id. Lantor files
+each value under the field that matches its form, and treats a blank value as
+absent, so a guessed field does not reject the whole event. Two names or two
+ids across the fields are ambiguous and still reject it.
+
+When no channel is given, `artifact_create` and `attachment_create` go to the
+current conversation: its channel, and its thread unless `thread_root_id` is
+set. `reminder_create` and `decision_request` already default this way.
+`channel_message_create`, `task_create`, `handoff_create` and
+`channel_invite` still require a channel, because they target a specific one.
+
 ## Loops
 
 A loop is a repeating reminder with a check command. Lantor's reminder worker
@@ -107,7 +121,6 @@ as normal message attachments:
 ```json
 {
   "type": "attachment_create",
-  "channel_id": "uuid",
   "thread_root_id": "optional uuid",
   "body": "Generated architecture diagram:",
   "files": [
@@ -132,7 +145,7 @@ concrete existing thread to another agent:
 {
   "type": "handoff_create",
   "target_agent": "@Vegapunk",
-  "channel_id": "uuid",
+  "channel": "#design",
   "thread_root_id": "uuid",
   "reason": "Dylan asked Vegapunk to continue this request",
   "body": "Please continue the implementation from this thread."
@@ -151,7 +164,7 @@ in a specific channel or thread:
 ```json
 {
   "type": "channel_message_create",
-  "channel_id": "uuid",
+  "channel": "#design",
   "thread_root_id": "optional uuid",
   "body": "@Vegapunk please take this task in the right context."
 }

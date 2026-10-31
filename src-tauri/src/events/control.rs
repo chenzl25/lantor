@@ -198,6 +198,82 @@ pub(crate) enum AgentEvent {
     },
 }
 
+/// Parses one control line. Agents see channel names, not ids, so `channel`
+/// and `channel_id` each accept either form and a blank one counts as absent;
+/// a guessed field must not reject the whole event.
+pub(crate) fn parse_agent_event(json: &str) -> Result<AgentEvent, String> {
+    let mut value: Value = serde_json::from_str(json).map_err(to_string)?;
+    normalize_event_channel_fields(&mut value);
+    serde_json::from_value(value).map_err(to_string)
+}
+
+fn normalize_event_channel_fields(value: &mut Value) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    let original = (
+        object.get("channel_id").cloned(),
+        object.get("channel").cloned(),
+    );
+    let mut id = None;
+    let mut name = None;
+    for key in ["channel_id", "channel"] {
+        let Some(Value::String(text)) = object.get(key) else {
+            continue;
+        };
+        let text = text.trim().to_owned();
+        object.remove(key);
+        if text.is_empty() {
+            continue;
+        }
+        let slot = if Uuid::parse_str(&text).is_ok() {
+            &mut id
+        } else {
+            &mut name
+        };
+        if slot.replace(text).is_some() {
+            // Two ids or two names: ambiguous, so leave the event as written.
+            for (key, value) in [("channel_id", original.0), ("channel", original.1)] {
+                match value {
+                    Some(value) => object.insert(key.to_owned(), value),
+                    None => object.remove(key),
+                };
+            }
+            return;
+        }
+    }
+    if let Some(id) = id {
+        object.insert("channel_id".to_owned(), Value::String(id));
+    }
+    if let Some(name) = name {
+        object.insert("channel".to_owned(), Value::String(name));
+    }
+}
+
+/// Where an artifact or attachment goes: the named channel (and the given
+/// thread, if any), or the current conversation when it names no channel.
+async fn resolve_event_channel_or_turn(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    run_id: Uuid,
+    channel_id: Option<Uuid>,
+    channel: Option<&str>,
+    thread_root_id: Option<Uuid>,
+    event_type: &str,
+) -> CommandResult<(Uuid, Option<Uuid>)> {
+    if channel_id.is_some() || channel.is_some() {
+        return Ok((
+            resolve_event_channel(pool, channel_id, channel).await?,
+            thread_root_id,
+        ));
+    }
+    let (turn_channel_id, turn_thread_root_id, _) =
+        resolve_run_reminder_anchor(pool, agent_id, run_id).await?;
+    let channel_id = turn_channel_id
+        .ok_or_else(|| format!("{event_type} requires channel_id outside a conversation turn"))?;
+    Ok((channel_id, thread_root_id.or(turn_thread_root_id)))
+}
+
 pub(crate) async fn ingest_agent_event_line(
     pool: &SqlitePool,
     agent_id: Uuid,
@@ -280,7 +356,7 @@ pub(crate) async fn replay_agent_events_from_run_log_if_needed(
         if !seen.insert(json.to_owned()) {
             continue;
         }
-        let result = match serde_json::from_str::<AgentEvent>(json).map_err(to_string) {
+        let result = match parse_agent_event(json) {
             Ok(event) => {
                 if claim_agent_event(pool, run_id, json).await? {
                     handle_agent_event(pool, agent_id, run_id, event).await
@@ -488,7 +564,7 @@ pub(crate) async fn handle_streaming_agent_event_json(
     run_id: Uuid,
     json: &str,
 ) -> CommandResult<()> {
-    match serde_json::from_str::<AgentEvent>(json).map_err(to_string) {
+    match parse_agent_event(json) {
         Ok(event) => {
             if !claim_agent_event(pool, run_id, json).await? {
                 return Ok(());
@@ -1247,7 +1323,16 @@ pub(crate) async fn handle_agent_event(
             content,
             metadata,
         } => {
-            let channel_id = resolve_event_channel(pool, channel_id, channel.as_deref()).await?;
+            let (channel_id, thread_root_id) = resolve_event_channel_or_turn(
+                pool,
+                agent_id,
+                run_id,
+                channel_id,
+                channel.as_deref(),
+                thread_root_id,
+                "artifact_create",
+            )
+            .await?;
             let (artifact_id, message_id) = create_agent_artifact(
                 pool,
                 agent_id,
@@ -1284,7 +1369,16 @@ pub(crate) async fn handle_agent_event(
             body,
             files,
         } => {
-            let channel_id = resolve_event_channel(pool, channel_id, channel.as_deref()).await?;
+            let (channel_id, thread_root_id) = resolve_event_channel_or_turn(
+                pool,
+                agent_id,
+                run_id,
+                channel_id,
+                channel.as_deref(),
+                thread_root_id,
+                "attachment_create",
+            )
+            .await?;
             let uploads = load_agent_attachment_uploads(files)?;
             let upload_count = uploads.len();
             let body = body
