@@ -1165,3 +1165,126 @@ async fn error_agent_launch_waits_for_cooldown_then_relaunches() {
     drop_test_schema(pool, schema).await;
     assert!(result.is_ok(), "{:?}", result.err());
 }
+
+#[tokio::test]
+async fn cancelling_each_request_state_writes_the_matching_lifecycle_state() {
+    use crate::test_support::{run_and_work_item_events, ui_event_cursor};
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "cancel-agent").await?;
+        let insert_work_item = |status: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Uuid>(
+                    "insert into agent_work_items (agent_id, title, status) values ($1, 'cancel me', $2) returning id",
+                )
+                .bind(agent_id)
+                .bind(status)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())
+            }
+        };
+        let insert_run = |work_item_id: Uuid, live: bool| {
+            let pool = pool.clone();
+            async move {
+                let run_id: Uuid = sqlx::query_scalar(
+                    r#"
+                    insert into agent_runs (agent_id, work_item_id, command, status, stopped_at)
+                    values ($1, $2, 'codex', $3, case when $4 then null else strftime('%Y-%m-%dT%H:%M:%f+00:00','now') end)
+                    returning id
+                    "#,
+                )
+                .bind(agent_id)
+                .bind(work_item_id)
+                .bind(if live { "running" } else { "exited" })
+                .bind(live)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+                sqlx::query("update agent_work_items set run_id = $2 where id = $1")
+                    .bind(work_item_id)
+                    .bind(run_id)
+                    .execute(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+                Ok::<Uuid, String>(run_id)
+            }
+        };
+        let work_state = |work_item_id: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_as::<_, (String, bool)>(
+                    "select status, completed_at is not null from agent_work_items where id = $1",
+                )
+                .bind(work_item_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())
+            }
+        };
+
+        // Queued: cancelled at once, and its pending start command is dropped.
+        let queued = insert_work_item("queued").await?;
+        sqlx::query(
+            "insert into supervisor_commands (command_type, agent_id, work_item_id) values ('start_agent', $1, $2)",
+        )
+        .bind(agent_id)
+        .bind(queued)
+        .execute(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        let cursor = ui_event_cursor(&pool).await?;
+        super::cancel_agent_work_in_pool(&pool, queued).await?;
+        assert_eq!(work_state(queued).await?, ("cancelled".to_owned(), true));
+        let start_command: (String, Option<String>) = sqlx::query_as(
+            "select status, error from supervisor_commands where work_item_id = $1",
+        )
+        .bind(queued)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(start_command, ("done".to_owned(), Some("cancelled".to_owned())));
+        assert_eq!(
+            run_and_work_item_events(&pool, cursor).await?,
+            ["work_item_upsert:work_item_cancelled:cancelled"]
+        );
+
+        // Running: marked cancelling, and the supervisor is asked to stop the run.
+        let running = insert_work_item("running").await?;
+        let running_run = insert_run(running, true).await?;
+        let cursor = ui_event_cursor(&pool).await?;
+        super::cancel_agent_work_in_pool(&pool, running).await?;
+        assert_eq!(work_state(running).await?, ("cancelling".to_owned(), false));
+        let stop_commands: i64 = sqlx::query_scalar(
+            "select count(*) from supervisor_commands where command_type = 'stop_run' and run_id = $1 and work_item_id = $2 and status = 'pending'",
+        )
+        .bind(running_run)
+        .bind(running)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(stop_commands, 1);
+        assert_eq!(
+            run_and_work_item_events(&pool, cursor).await?,
+            ["work_item_upsert:work_item_cancelling:cancelling"]
+        );
+
+        // Cancelling, run already over, no stop pending: finished as cancelled.
+        let stuck = insert_work_item("cancelling").await?;
+        insert_run(stuck, false).await?;
+        let cursor = ui_event_cursor(&pool).await?;
+        super::cancel_agent_work_in_pool(&pool, stuck).await?;
+        assert_eq!(work_state(stuck).await?, ("cancelled".to_owned(), true));
+        assert_eq!(
+            run_and_work_item_events(&pool, cursor).await?,
+            ["work_item_upsert:work_item_cancelled:cancelled"]
+        );
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}

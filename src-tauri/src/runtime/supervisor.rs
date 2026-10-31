@@ -1192,7 +1192,7 @@ mod tests {
 
     use super::{
         claim_next_supervisor_command, close_orphaned_agent_runs, load_channel_agent_roster,
-        mark_orphaned_agent_runs, recover_supervisor_commands_at_startup,
+        mark_orphaned_agent_runs, recover_supervisor_commands_at_startup, supervisor_stop_run,
     };
     use crate::db::{db_connect_with_url, migrate};
     use crate::runtime::{claude::WarmClaudeRegistry, codex::WarmCodexRegistry};
@@ -1474,6 +1474,228 @@ mod tests {
         .await;
         drop_test_schema(pool, schema).await;
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    /// Inserts a live run of `agent_id` and its running work item.
+    async fn insert_live_run(
+        pool: &SqlitePool,
+        agent_id: Uuid,
+        pid: Option<i32>,
+    ) -> Result<(Uuid, Uuid), String> {
+        let work_item_id: Uuid = sqlx::query_scalar(
+            "insert into agent_work_items (agent_id, title, status) values ($1, 'stop me', 'running') returning id",
+        )
+        .bind(agent_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        let run_id: Uuid = sqlx::query_scalar(
+            "insert into agent_runs (agent_id, work_item_id, command, status, pid) values ($1, $2, 'sleep', 'running', $3) returning id",
+        )
+        .bind(agent_id)
+        .bind(work_item_id)
+        .bind(pid)
+        .fetch_one(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        sqlx::query("update agent_work_items set run_id = $2 where id = $1")
+            .bind(work_item_id)
+            .bind(run_id)
+            .execute(pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        sqlx::query("update agents set runtime = 'custom', status = 'running' where id = $1")
+            .bind(agent_id)
+            .execute(pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        Ok((run_id, work_item_id))
+    }
+
+    /// Run status, agent status, work item status, and whether the run and
+    /// the work item recorded when they stopped.
+    async fn stop_state(
+        pool: &SqlitePool,
+        agent_id: Uuid,
+        run_id: Uuid,
+        work_item_id: Uuid,
+    ) -> Result<(String, String, String, bool, bool), String> {
+        let (run_status, run_stopped): (String, bool) =
+            sqlx::query_as("select status, stopped_at is not null from agent_runs where id = $1")
+                .bind(run_id)
+                .fetch_one(pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        let agent_status: String = sqlx::query_scalar("select status from agents where id = $1")
+            .bind(agent_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let (work_status, work_completed): (String, bool) = sqlx::query_as(
+            "select status, completed_at is not null from agent_work_items where id = $1",
+        )
+        .bind(work_item_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        Ok((
+            run_status,
+            agent_status,
+            work_status,
+            run_stopped,
+            work_completed,
+        ))
+    }
+
+    #[tokio::test]
+    async fn stopping_a_run_without_a_process_cancels_it_and_its_request() {
+        use crate::test_support::{run_and_work_item_events, ui_event_cursor};
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let agent_id = insert_test_agent(&pool, "stop-no-pid").await?;
+            let (run_id, work_item_id) = insert_live_run(&pool, agent_id, None).await?;
+            let cursor = ui_event_cursor(&pool).await?;
+
+            supervisor_stop_run(
+                &pool,
+                &WarmCodexRegistry::default(),
+                &WarmClaudeRegistry::default(),
+                run_id,
+                None,
+            )
+            .await?;
+
+            assert_eq!(
+                stop_state(&pool, agent_id, run_id, work_item_id).await?,
+                (
+                    "cancelled".to_owned(),
+                    "idle".to_owned(),
+                    "cancelled".to_owned(),
+                    true,
+                    true
+                )
+            );
+            assert_eq!(
+                run_and_work_item_events(&pool, cursor).await?,
+                [
+                    "agent_run_upsert:run_finished:cancelled",
+                    "work_item_upsert:work_item_cancelled:cancelled",
+                ]
+            );
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stopping_a_finished_run_cancels_the_request_left_cancelling() {
+        use crate::test_support::{run_and_work_item_events, ui_event_cursor};
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let agent_id = insert_test_agent(&pool, "stop-finished").await?;
+            let (run_id, work_item_id) = insert_live_run(&pool, agent_id, None).await?;
+            sqlx::query(
+                "update agent_runs set status = 'exited', stopped_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where id = $1",
+            )
+            .bind(run_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            sqlx::query("update agent_work_items set status = 'cancelling' where id = $1")
+                .bind(work_item_id)
+                .execute(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+            let cursor = ui_event_cursor(&pool).await?;
+
+            supervisor_stop_run(
+                &pool,
+                &WarmCodexRegistry::default(),
+                &WarmClaudeRegistry::default(),
+                run_id,
+                Some(work_item_id),
+            )
+            .await?;
+
+            assert_eq!(
+                stop_state(&pool, agent_id, run_id, work_item_id).await?,
+                (
+                    "exited".to_owned(),
+                    "running".to_owned(),
+                    "cancelled".to_owned(),
+                    true,
+                    true
+                )
+            );
+            assert_eq!(
+                run_and_work_item_events(&pool, cursor).await?,
+                ["work_item_upsert:work_item_cancelled:cancelled"]
+            );
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        result.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stopping_a_run_with_a_process_marks_it_stopping_and_signals_it() {
+        use crate::test_support::{run_and_work_item_events, ui_event_cursor};
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id().map(|pid| pid as i32);
+        let result: Result<(), String> = async {
+            let agent_id = insert_test_agent(&pool, "stop-with-pid").await?;
+            let (run_id, work_item_id) = insert_live_run(&pool, agent_id, pid).await?;
+            let cursor = ui_event_cursor(&pool).await?;
+
+            supervisor_stop_run(
+                &pool,
+                &WarmCodexRegistry::default(),
+                &WarmClaudeRegistry::default(),
+                run_id,
+                Some(work_item_id),
+            )
+            .await?;
+
+            // The run's own exit path finishes it once the process is gone.
+            assert_eq!(
+                stop_state(&pool, agent_id, run_id, work_item_id).await?,
+                (
+                    "stopping".to_owned(),
+                    "stopping".to_owned(),
+                    "cancelling".to_owned(),
+                    false,
+                    false
+                )
+            );
+            assert_eq!(
+                run_and_work_item_events(&pool, cursor).await?,
+                [
+                    "agent_run_upsert:run_stopping:stopping",
+                    "work_item_upsert:work_item_cancelling:cancelling",
+                ]
+            );
+            Ok(())
+        }
+        .await;
+        let exit = tokio::time::timeout(std::time::Duration::from_secs(10), child.wait()).await;
+        drop_test_schema(pool, schema).await;
+        result.unwrap();
+        assert!(matches!(exit, Ok(Ok(status)) if !status.success()));
     }
 
     async fn test_pool() -> Option<(SqlitePool, String)> {
