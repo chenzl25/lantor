@@ -537,7 +537,7 @@ async fn busy_warm_codex_start_requeues_work_item_without_leaving_running_state(
             run_id,
             Some(work_item_id),
             "codex warm runtime became busy before turn start",
-            crate::runtime::process::WarmStartFailure::RuntimeBusy,
+            crate::runtime::lifecycle::WarmStartFailure::RuntimeBusy,
         )
         .await?;
 
@@ -989,7 +989,7 @@ async fn transient_warm_codex_start_retries_then_fails_without_flagging_agent() 
         .await
         .map_err(|err| err.to_string())?;
 
-        let max_attempts = crate::runtime::process::MAX_WARM_START_ATTEMPTS;
+        let max_attempts = crate::runtime::lifecycle::MAX_WARM_START_ATTEMPTS;
         for attempt in 1..=max_attempts {
             let run_id: Uuid = sqlx::query_scalar(
                 r#"
@@ -1023,7 +1023,7 @@ async fn transient_warm_codex_start_retries_then_fails_without_flagging_agent() 
                 run_id,
                 Some(work_item_id),
                 "error returned from database: (code: 5) database is locked",
-                crate::runtime::process::WarmStartFailure::Transient,
+                crate::runtime::lifecycle::WarmStartFailure::Transient,
             )
             .await?;
 

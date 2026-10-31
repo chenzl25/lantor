@@ -11,6 +11,11 @@ use uuid::Uuid;
 use super::{
     claude::{self, WarmClaudeRegistry},
     codex::{self, WarmCodexRegistry},
+    lifecycle::{
+        cancel_run_without_process, cancel_unfinished_work_item, close_orphaned_run,
+        close_orphaned_runs_at_startup, fail_work_item_before_run, idle_agent_waiting_for_login,
+        mark_run_stopping,
+    },
     process::{
         effective_launch_command, start_process_agent, terminate_process_group, ProcessAgentLaunch,
     },
@@ -33,10 +38,7 @@ use crate::{
         prepend_memory_context,
     },
     provider_auth::{provider_needs_login, start_due_provider_probes},
-    ui_notifications::{
-        enqueue_ui_agent_run_changed_in_tx, enqueue_ui_work_item_changed_in_tx,
-        reconcile_work_item_change,
-    },
+    ui_notifications::reconcile_work_item_change,
     usage::agent_budget_exhausted,
 };
 
@@ -81,53 +83,6 @@ pub(crate) async fn load_supervisor_status(pool: &SqlitePool) -> CommandResult<S
         status,
         updated_at: Some(updated_at),
     })
-}
-
-pub(crate) async fn mark_orphaned_agent_runs(pool: &SqlitePool) -> CommandResult<()> {
-    sqlx::query(
-        r#"
-        update agent_runs
-        set status = 'unknown', stopped_at = coalesce(stopped_at, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
-        where stopped_at is null and status in ('starting', 'running', 'stopping')
-        "#,
-    )
-    .execute(pool)
-    .await
-    .map_err(to_string)?;
-    sqlx::query(
-        "update agents set status = 'idle' where status in ('queued', 'running', 'stopping')",
-    )
-    .execute(pool)
-    .await
-    .map_err(to_string)?;
-    sqlx::query(
-        r#"
-        update agent_work_items
-        set status = 'failed',
-            completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where status = 'running'
-        "#,
-    )
-    .execute(pool)
-    .await
-    .map_err(to_string)?;
-    // A `cancelling` item can only be completed by a live stop path; after a
-    // restart none exists, so finalize it instead of leaving it stuck forever.
-    sqlx::query(
-        r#"
-        update agent_work_items
-        set status = 'cancelled',
-            completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where status = 'cancelling'
-        "#,
-    )
-    .execute(pool)
-    .await
-    .map_err(to_string)?;
-
-    Ok(())
 }
 
 /// The startup sweep, per run and while running: a run still marked live
@@ -179,59 +134,9 @@ async fn close_orphaned_agent_run(
     agent_id: Uuid,
     run_id: Uuid,
 ) -> CommandResult<()> {
-    let mut transaction = pool
-        .begin_with("BEGIN IMMEDIATE")
-        .await
-        .map_err(to_string)?;
-    let closed = sqlx::query(
-        r#"
-        update agent_runs
-        set status = 'unknown',
-            log = substr(log || $2, -20000),
-            stopped_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id = $1 and stopped_at is null
-        "#,
-    )
-    .bind(run_id)
-    .bind("[lantor] no live runtime owned this run; closed by the orphan sweep\n")
-    .execute(&mut *transaction)
-    .await
-    .map_err(to_string)?
-    .rows_affected()
-        > 0;
-    if !closed {
+    let Some(work_items) = close_orphaned_run(pool, agent_id, run_id).await? else {
         return Ok(());
-    }
-    let work_items: Vec<(Uuid, String)> = sqlx::query(
-        r#"
-        update agent_work_items
-        set status = case status when 'cancelling' then 'cancelled' else 'failed' end,
-            completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where run_id = $1 and status in ('running', 'cancelling')
-        returning id, status
-        "#,
-    )
-    .bind(run_id)
-    .fetch_all(&mut *transaction)
-    .await
-    .map_err(to_string)?
-    .into_iter()
-    .map(|row| (row.get("id"), row.get("status")))
-    .collect();
-    sqlx::query(
-        "update agents set status = 'idle' where id = $1 and status in ('running', 'stopping')",
-    )
-    .bind(agent_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-    enqueue_ui_agent_run_changed_in_tx(&mut transaction, run_id, "orphaned_run_closed").await?;
-    for (work_item_id, _) in &work_items {
-        enqueue_ui_work_item_changed_in_tx(&mut transaction, *work_item_id, "work_item_finished")
-            .await?;
-    }
-    transaction.commit().await.map_err(to_string)?;
+    };
     for (work_item_id, status) in &work_items {
         let _ = crate::mark_task_after_work_item_finished(
             pool,
@@ -407,7 +312,7 @@ pub(crate) async fn run_supervisor() -> CommandResult<()> {
         .map_err(to_string)?;
     migrate(&pool).await.map_err(to_string)?;
 
-    mark_orphaned_agent_runs(&pool).await?;
+    close_orphaned_runs_at_startup(&pool).await?;
     settle_orphaned_streaming_messages(&pool).await?;
     recover_supervisor_commands_at_startup(&pool).await?;
     let codex_registry = WarmCodexRegistry::default();
@@ -692,23 +597,7 @@ async fn supervisor_start_agent(
 
     if let Some(reason) = agent_budget_exhausted(pool, agent_id).await? {
         if let Some(work_item_id) = work_item_id {
-            let mut transaction = pool.begin().await.map_err(to_string)?;
-            sqlx::query(
-                r#"
-                update agent_work_items
-                set status = 'failed',
-                    completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-                    updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-                where id = $1
-                "#,
-            )
-            .bind(work_item_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(to_string)?;
-            enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "budget_exhausted")
-                .await?;
-            transaction.commit().await.map_err(to_string)?;
+            fail_work_item_before_run(pool, work_item_id, "budget_exhausted").await?;
             reconcile_work_item_change(pool, work_item_id, "budget_exhausted").await?;
         }
         record_agent_activity(
@@ -748,11 +637,7 @@ async fn supervisor_start_agent(
     // Queued before the login broke: leave the request queued for the resume.
     if let Some(work_item_id) = work_item_id {
         if provider_needs_login(pool, Some(&runtime)).await? {
-            sqlx::query("update agents set status = 'idle' where id = $1 and status = 'queued'")
-                .bind(agent_id)
-                .execute(pool)
-                .await
-                .map_err(to_string)?;
+            idle_agent_waiting_for_login(pool, agent_id).await?;
             record_agent_activity(
                 pool,
                 Some(agent_id),
@@ -942,23 +827,7 @@ async fn finalize_unstoppable_work_item(
         return Ok(());
     }
     let agent_id: Uuid = row.get("agent_id");
-    let mut transaction = pool.begin().await.map_err(to_string)?;
-    sqlx::query(
-        r#"
-        update agent_work_items
-        set status = 'cancelled',
-            completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id = $1 and status in ('queued', 'running', 'cancelling')
-        "#,
-    )
-    .bind(work_item_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-    enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "work_item_cancelled")
-        .await?;
-    transaction.commit().await.map_err(to_string)?;
+    cancel_unfinished_work_item(pool, work_item_id).await?;
     let _ = crate::mark_task_after_work_item_finished(
         pool,
         work_item_id,
@@ -1030,28 +899,7 @@ async fn supervisor_stop_run(
     let Some(pid) = pid else {
         // No process to signal: finalize run + work item instead of failing,
         // so cancel never leaves them stuck.
-        let mut transaction = pool.begin().await.map_err(to_string)?;
-        sqlx::query(
-            r#"
-            update agent_runs
-            set status = 'cancelled',
-                stopped_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-            where id = $1 and stopped_at is null
-            "#,
-        )
-        .bind(run_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-        sqlx::query(
-            "update agents set status = 'idle' where id = $1 and status in ('queued', 'running', 'stopping')",
-        )
-        .bind(agent_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-        enqueue_ui_agent_run_changed_in_tx(&mut transaction, run_id, "run_finished").await?;
-        transaction.commit().await.map_err(to_string)?;
+        cancel_run_without_process(pool, agent_id, run_id).await?;
         finalize_unstoppable_work_item(pool, work_item_id, run_id, "run had no process").await?;
         record_agent_activity(
             pool,
@@ -1065,35 +913,7 @@ async fn supervisor_stop_run(
         return Ok(());
     };
 
-    let mut transaction = pool.begin().await.map_err(to_string)?;
-    sqlx::query("update agent_runs set status = 'stopping' where id = $1")
-        .bind(run_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-    sqlx::query("update agents set status = 'stopping' where id = $1")
-        .bind(agent_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-    enqueue_ui_agent_run_changed_in_tx(&mut transaction, run_id, "run_stopping").await?;
-    if let Some(work_item_id) = work_item_id {
-        sqlx::query(
-            r#"
-            update agent_work_items
-            set status = 'cancelling',
-                updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-            where id = $1 and status in ('queued', 'running')
-            "#,
-        )
-        .bind(work_item_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-        enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "work_item_cancelling")
-            .await?;
-    }
-    transaction.commit().await.map_err(to_string)?;
+    mark_run_stopping(pool, agent_id, run_id, work_item_id).await?;
     if let Some(work_item_id) = work_item_id {
         reconcile_work_item_change(pool, work_item_id, "work_item_cancelling").await?;
     }
@@ -1192,9 +1012,10 @@ mod tests {
 
     use super::{
         claim_next_supervisor_command, close_orphaned_agent_runs, load_channel_agent_roster,
-        mark_orphaned_agent_runs, recover_supervisor_commands_at_startup, supervisor_stop_run,
+        recover_supervisor_commands_at_startup, supervisor_stop_run,
     };
     use crate::db::{db_connect_with_url, migrate};
+    use crate::runtime::lifecycle::close_orphaned_runs_at_startup;
     use crate::runtime::{claude::WarmClaudeRegistry, codex::WarmCodexRegistry};
 
     #[tokio::test]
@@ -1301,7 +1122,7 @@ mod tests {
             .await
             .map_err(|err| err.to_string())?;
 
-            mark_orphaned_agent_runs(&pool).await?;
+            close_orphaned_runs_at_startup(&pool).await?;
 
             let (status, completed): (String, Option<String>) =
                 sqlx::query_as("select status, completed_at from agent_work_items where id = $1")

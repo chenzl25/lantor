@@ -1,12 +1,6 @@
 use std::{future::Future, time::Duration};
 
-use sqlx::SqlitePool;
-use uuid::Uuid;
-
-use crate::app::{to_string, CommandResult};
-use crate::ui_notifications::{
-    enqueue_ui_agent_run_changed_in_tx, enqueue_ui_work_item_changed_in_tx,
-};
+use crate::app::CommandResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WarmTurnOutcome {
@@ -125,105 +119,6 @@ pub(crate) fn finished_work_status(
     } else {
         "failed"
     }
-}
-
-pub(crate) struct TurnTerminalState<'a> {
-    pub(crate) agent_id: Uuid,
-    pub(crate) agent_status: &'a str,
-    pub(crate) run_id: Uuid,
-    pub(crate) run_status: &'a str,
-    pub(crate) log_line: &'a str,
-    pub(crate) run_reason: &'static str,
-    pub(crate) work: Option<(Uuid, &'a str)>,
-}
-
-/// Closes the run and settles its work item in one transaction, retrying
-/// transient lock errors. A `queued` work item is handed back to the
-/// scheduler rather than completed.
-pub(crate) async fn write_turn_terminal_state(
-    pool: &SqlitePool,
-    state: &TurnTerminalState<'_>,
-) -> CommandResult<()> {
-    retry_transient_sqlite(|| write_turn_terminal_state_once(pool, state)).await
-}
-
-async fn write_turn_terminal_state_once(
-    pool: &SqlitePool,
-    state: &TurnTerminalState<'_>,
-) -> CommandResult<()> {
-    let mut transaction = pool
-        .begin_with("BEGIN IMMEDIATE")
-        .await
-        .map_err(to_string)?;
-    sqlx::query(
-        r#"
-        update agent_runs
-        set status = $2,
-            exit_code = null,
-            log = substr(log || $3, -20000),
-            stopped_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id = $1
-        "#,
-    )
-    .bind(state.run_id)
-    .bind(state.run_status)
-    .bind(state.log_line)
-    .execute(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-    sqlx::query("update agents set status = $2 where id = $1")
-        .bind(state.agent_id)
-        .bind(state.agent_status)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-    enqueue_ui_agent_run_changed_in_tx(&mut transaction, state.run_id, state.run_reason).await?;
-    if let Some((work_item_id, work_status)) = state.work {
-        if work_status == "queued" {
-            sqlx::query(
-                r#"
-                update agent_work_items
-                set status = 'queued',
-                    run_id = null,
-                    completed_at = null,
-                    updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-                where id = $1
-                "#,
-            )
-            .bind(work_item_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(to_string)?;
-            enqueue_ui_work_item_changed_in_tx(
-                &mut transaction,
-                work_item_id,
-                "work_item_requeued",
-            )
-            .await?;
-        } else {
-            sqlx::query(
-                r#"
-                update agent_work_items
-                set status = $2,
-                    completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-                    updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-                where id = $1
-                "#,
-            )
-            .bind(work_item_id)
-            .bind(work_status)
-            .execute(&mut *transaction)
-            .await
-            .map_err(to_string)?;
-            enqueue_ui_work_item_changed_in_tx(
-                &mut transaction,
-                work_item_id,
-                "work_item_finished",
-            )
-            .await?;
-        }
-    }
-    transaction.commit().await.map_err(to_string)
 }
 
 #[cfg(test)]
