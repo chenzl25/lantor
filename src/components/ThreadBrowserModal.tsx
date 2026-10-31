@@ -1,5 +1,6 @@
+import { DialogHeader } from "./DialogHeader";
 import { DialogSurface } from "./DialogSurface";
-import { Check, MessageSquare, X } from "lucide-react";
+import { Check, MessageSquare } from "lucide-react";
 import { type MouseEvent as ReactMouseEvent } from "react";
 import { Channel, Message } from "../types";
 import { firstLines, formatTime } from "../ui-utils";
@@ -43,16 +44,7 @@ export function ThreadBrowserModal({
 
   return (
     <DialogSurface label="Threads" backdropClassName="search-backdrop" className="thread-browser-panel" onClose={onClose}>
-        <header className="thread-browser-head">
-          <div className="search-input-icon"><MessageSquare size={24} /></div>
-          <div>
-            <h2>Threads</h2>
-            <p>{threads.length} active</p>
-          </div>
-          <button className="search-clear" onClick={onClose} aria-label="Close threads">
-            <X size={18} />
-          </button>
-        </header>
+        <DialogHeader title="Threads" subtitle={`${threads.length} active`} closeLabel="Close threads" onClose={onClose} />
 
         <div className="thread-browser-body">
           {threads.length === 0 && (

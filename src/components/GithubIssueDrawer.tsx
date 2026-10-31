@@ -1,4 +1,6 @@
+import { DialogHeader } from "./DialogHeader";
 import { DialogSurface } from "./DialogSurface";
+import { IconButton } from "./IconButton";
 import {
   Bot,
   CircleDot,
@@ -8,7 +10,6 @@ import {
   Milestone,
   RotateCcw,
   UserRound,
-  X,
 } from "lucide-react";
 import {
   useEffect,
@@ -130,34 +131,22 @@ export function GithubIssueDrawer({
   return (
     <DialogSurface label={title} labelledBy="github-issue-drawer-title" backdropClassName="github-issue-drawer-backdrop"
       className="github-issue-drawer" onClose={onClose} closeOnBackdrop={!creating} closeOnEscape={!creating}>
-        <header className="github-issue-drawer-head">
-          <div>
-            <span>
-              <CircleDot size={14} />
-              Issue #{issue.number}
-            </span>
-            <h2 id="github-issue-drawer-title">{title}</h2>
-          </div>
-          <div className="github-issue-drawer-head-actions">
-            <button
-              type="button"
-              onClick={() => onOpenGithub(detail?.url ?? issue.url)}
-              aria-label={`Open issue #${issue.number} on GitHub`}
-              title="Open on GitHub"
-            >
-              <ExternalLink size={17} />
-            </button>
-            <button
-              type="button"
-              autoFocus
-              disabled={creating}
-              onClick={onClose}
-              aria-label="Close issue details"
-            >
-              <X size={18} />
-            </button>
-          </div>
-        </header>
+        <DialogHeader
+          title={title}
+          titleId="github-issue-drawer-title"
+          eyebrow={<><CircleDot size={14} />Issue #{issue.number}</>}
+          closeLabel="Close issue details"
+          closeDisabled={creating}
+          autoFocusClose
+          onClose={onClose}
+          actions={<IconButton
+            label={`Open issue #${issue.number} on GitHub`}
+            title="Open on GitHub"
+            onClick={() => onOpenGithub(detail?.url ?? issue.url)}
+          >
+            <ExternalLink size={17} />
+          </IconButton>}
+        />
 
         <div className="github-issue-drawer-body">
           <div className="github-issue-detail-meta">

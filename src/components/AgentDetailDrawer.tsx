@@ -21,6 +21,7 @@ import {
 } from "../types";
 import { AgentAvatar } from "./AgentAvatar";
 import { AgentSubscriptionUsage } from "./AgentSubscriptionUsage";
+import { IconButton } from "./IconButton";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { Modal } from "./Modal";
 import { sourceKindMeta } from "./ActivityProgressDock";
@@ -1130,14 +1131,9 @@ export function AgentDetailDrawer({
         onPointerDown={onResizeStart}
       />
       <header className="agent-drawer-head">
-        <button
-          type="button"
-          className="agent-mobile-back"
-          onClick={onClose}
-          aria-label="Back"
-        >
+        <IconButton className="agent-mobile-back" onClick={onClose} label="Back">
           <ArrowLeft size={18} />
-        </button>
+        </IconButton>
         <div className="agent-title">
           <span className="hash-card agent-title-card" aria-hidden="true">
             <AgentAvatar agent={agent} size="sm" showStatus={false} />
@@ -1147,38 +1143,36 @@ export function AgentDetailDrawer({
           </div>
         </div>
         <div className="agent-drawer-head-actions">
-          <button
-            type="button"
+          <IconButton
             className="agent-head-action"
-            aria-label={`Edit @${agent.handle}`}
+            label={`Edit @${agent.handle}`}
             data-tooltip={`Edit @${agent.handle}`}
             onClick={() => onEdit(agent)}
           >
-            <Pencil size={16} />
-          </button>
-          <button
-            type="button"
+            <Pencil size={18} />
+          </IconButton>
+          <IconButton
             className="agent-head-action"
             disabled={restartDisabled}
-            aria-label={restartLabel}
+            label={restartLabel}
             title={restartDisabledReason || restartLabel}
             onClick={() => onRestart(agent)}
           >
-            <RotateCcw size={16} />
-          </button>
-          <button
-            type="button"
-            className="agent-head-action danger"
+            <RotateCcw size={18} />
+          </IconButton>
+          <IconButton
+            className="agent-head-action"
+            tone="danger"
             disabled={deleteDisabled}
-            aria-label={`Delete @${agent.handle}`}
+            label={`Delete @${agent.handle}`}
             data-tooltip={deleteDisabled ? "Stop the active run before deleting this agent" : `Delete @${agent.handle}`}
             onClick={() => onDelete(agent)}
           >
-            <Trash2 size={16} />
-          </button>
-          <button type="button" className="agent-close" onClick={onClose} aria-label="Close agent detail">
+            <Trash2 size={18} />
+          </IconButton>
+          <IconButton className="agent-close" onClick={onClose} label="Close agent detail">
             <X size={18} />
-          </button>
+          </IconButton>
         </div>
       </header>
       <div className="agent-drawer-body">

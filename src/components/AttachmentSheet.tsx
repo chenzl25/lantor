@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { Download, FileText, RotateCcw, Share, X } from "lucide-react";
+import { Download, FileText, RotateCcw, Share } from "lucide-react";
 import { attachmentAssetUrl, downloadAttachment, revealInFileManager, saveTextDownload } from "../apiClient";
 import {
   attachmentPreviewKind,
@@ -14,6 +14,7 @@ import {
 } from "../attachment-sheet";
 import type { MessageAttachment } from "../types";
 import { formatByteSize } from "../ui-utils";
+import { DialogHeader } from "./DialogHeader";
 import { DialogSurface } from "./DialogSurface";
 import { MessageMarkdown } from "./MessageMarkdown";
 
@@ -139,21 +140,12 @@ function AttachmentSheet({ item, onClose }: { item: AttachmentSheetItem; onClose
   const savedPath = notice?.savedPath;
   return <DialogSurface label={info.name} labelledBy={titleId} className="modal-card attachment-sheet"
     onClose={onClose}>
-    <header className="modal-head attachment-sheet-head">
-      <div className="attachment-sheet-title">
-        <h3 id={titleId}>{info.name}</h3>
-        <small>{[info.mimeType || "file", formatByteSize(info.sizeBytes)].join(" · ")}</small>
-      </div>
-      <div className="attachment-sheet-actions">
-        <button type="button" className="attachment-sheet-share" disabled={!ready || saving} onClick={deliver}>
-          {delivery === "share" ? <Share size={16} /> : <Download size={16} />}
-          <span>{delivery === "share" ? "Share" : saving ? "Saving…" : "Download"}</span>
-        </button>
-        <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
-          <X size={18} />
-        </button>
-      </div>
-    </header>
+    <DialogHeader className="attachment-sheet-head" title={info.name} titleId={titleId}
+      subtitle={[info.mimeType || "file", formatByteSize(info.sizeBytes)].join(" · ")} onClose={onClose}
+      actions={<button type="button" className="attachment-sheet-share" disabled={!ready || saving} onClick={deliver}>
+        {delivery === "share" ? <Share size={16} /> : <Download size={16} />}
+        <span>{delivery === "share" ? "Share" : saving ? "Saving…" : "Download"}</span>
+      </button>} />
     <div className="modal-body attachment-sheet-body">
       {notice && <p className={notice.kind === "error" ? "attachment-sheet-error" : "attachment-sheet-notice"}
         role={notice.kind === "error" ? "alert" : "status"}>

@@ -1,10 +1,11 @@
-import { CheckCircle2, ClipboardCheck, Hand, Hourglass, MessageSquare, X } from "lucide-react";
+import { CheckCircle2, ClipboardCheck, Hand, Hourglass, MessageSquare } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { formatIdle, type NeedsYou, type NeedsYouTask } from "../decisions";
 import type { Agent, Decision, Task } from "../types";
 import { formatTime } from "../ui-utils";
 import { AgentAvatar } from "./AgentAvatar";
 import { DecisionCard } from "./DecisionCard";
+import { DialogHeader } from "./DialogHeader";
 import { DialogSurface } from "./DialogSurface";
 import { PushNotificationsRow } from "./PushNotificationsRow";
 
@@ -109,15 +110,8 @@ export function NeedsYouModal({
 
   return (
     <DialogSurface label="Needs you" backdropClassName="search-backdrop" className="activity-feed-panel needs-you-panel" onClose={onClose}>
-      <header className="activity-feed-head">
-        <div>
-          <h2>Needs you</h2>
-          <p>{empty ? "Nothing is waiting on you" : summary}</p>
-        </div>
-        <button className="activity-feed-back" onClick={onClose} aria-label="Close Needs you">
-          <X size={18} />
-        </button>
-      </header>
+      <DialogHeader title="Needs you" subtitle={empty ? "Nothing is waiting on you" : summary}
+        closeLabel="Close Needs you" onClose={onClose} />
 
       <div className="activity-feed-body needs-you-body">
         <PushNotificationsRow />

@@ -1,3 +1,4 @@
+import { DialogHeader } from "./DialogHeader";
 import { DialogSurface } from "./DialogSurface";
 import { ArrowUp, Check, Hash, Inbox, MessageSquare, UserRound, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -218,12 +219,12 @@ export function ActivityFeedModal({
 
   return (
     <DialogSurface label="Activity" backdropClassName="search-backdrop" className="activity-feed-panel activity-panel" onClose={onClose}>
-        <header className="activity-feed-head">
-          <div>
-            <h2>Activity</h2>
-            <p>{displayItems.length} active · {unreadCount} unread</p>
-          </div>
-          <div className="activity-feed-head-actions">
+        <DialogHeader
+          title="Activity"
+          subtitle={`${displayItems.length} active · ${unreadCount} unread`}
+          closeLabel="Close activity"
+          onClose={onClose}
+          actions={<>
             <button
               className="activity-feed-mark-all"
               disabled={filteredUnreadCount === 0}
@@ -238,11 +239,8 @@ export function ActivityFeedModal({
             >
               Dismiss all
             </button>
-          </div>
-          <button className="activity-feed-back" onClick={onClose} aria-label="Close activity">
-            <X size={18} />
-          </button>
-        </header>
+          </>}
+        />
 
         <div className="activity-feed-filters">
           {FILTERS.map((item) => (

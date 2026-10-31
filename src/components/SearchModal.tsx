@@ -1,4 +1,5 @@
 import { DialogSurface } from "./DialogSurface";
+import { IconButton } from "./IconButton";
 import { Activity, ArrowLeft, BookOpen, Bot, CalendarDays, ChevronDown, FileText, Hash, LayoutList, MessageSquare, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import type { Agent, OwnerProfile, SearchResult, SearchScope, SearchTimeRange } from "../types";
@@ -132,19 +133,19 @@ export function SearchModal({
             placeholder="Search channels, DMs, messages, tasks, agents..."
           />
           {query.trim() && (
-            <button className="search-clear" onClick={onClear} aria-label="Clear search">
+            <IconButton label="Clear search" onClick={onClear}>
               <X size={18} />
-            </button>
+            </IconButton>
           )}
-          <button className="search-clear search-modal-close" onClick={onClose} aria-label="Close search">
+          <IconButton label="Close search" onClick={onClose}>
             <X size={18} />
-          </button>
+          </IconButton>
         </header>
 
         <div className="search-filters">
-          <button className="search-mobile-top-back" onClick={onClose} aria-label="Close search">
-            <ArrowLeft size={19} />
-          </button>
+          <IconButton className="search-mobile-top-back" label="Close search" onClick={onClose}>
+            <ArrowLeft size={18} />
+          </IconButton>
           <div className="search-filter-group" role="group" aria-label="Search type">
             {SCOPE_OPTIONS.map((option) => (
               <button

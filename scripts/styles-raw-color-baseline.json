@@ -303,36 +303,6 @@
       "n": 0
     },
     {
-      "selector": ".agent-drawer-head button:hover",
-      "prop": "background",
-      "literal": "rgba(10, 132, 255, 0.1)",
-      "n": 0
-    },
-    {
-      "selector": ".agent-drawer-head button:hover",
-      "prop": "border-color",
-      "literal": "rgba(10, 132, 255, 0.28)",
-      "n": 0
-    },
-    {
-      "selector": ".agent-drawer-head button.danger:hover",
-      "prop": "background",
-      "literal": "rgba(255, 59, 48, 0.1)",
-      "n": 0
-    },
-    {
-      "selector": ".agent-drawer-head button.danger:hover",
-      "prop": "border-color",
-      "literal": "rgba(255, 59, 48, 0.2)",
-      "n": 0
-    },
-    {
-      "selector": ".agent-drawer-head button.danger:hover",
-      "prop": "color",
-      "literal": "#d70015",
-      "n": 0
-    },
-    {
       "selector": ".agent-form-preview-avatar-action",
       "prop": "background",
       "literal": "rgba(10, 132, 255, 0.08)",
@@ -1404,42 +1374,6 @@
       "selector": ".search-backdrop",
       "prop": "background",
       "literal": "rgba(246, 247, 249, 0.7)",
-      "n": 0
-    },
-    {
-      "selector": ".search-clear",
-      "prop": "background",
-      "literal": "#f6f7f9",
-      "n": 0
-    },
-    {
-      "selector": ".search-clear",
-      "prop": "background",
-      "literal": "#ffffff",
-      "n": 0
-    },
-    {
-      "selector": ".search-clear",
-      "prop": "border",
-      "literal": "rgba(20, 23, 31, 0.1)",
-      "n": 0
-    },
-    {
-      "selector": ".search-clear",
-      "prop": "color",
-      "literal": "#656c78",
-      "n": 0
-    },
-    {
-      "selector": ".search-clear:hover",
-      "prop": "background",
-      "literal": "#fff",
-      "n": 0
-    },
-    {
-      "selector": ".search-clear:hover",
-      "prop": "color",
-      "literal": "#20242b",
       "n": 0
     },
     {

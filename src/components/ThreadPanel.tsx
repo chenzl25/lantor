@@ -24,6 +24,7 @@ import { ActivityProgressDock, activeProgressByAgent, indexProgress } from "./Ac
 import { AgentAvatar } from "./AgentAvatar";
 import { ComposerReferenceTextarea } from "./ComposerReferenceTextarea";
 import { DraftAttachmentsPreview } from "./DraftAttachmentsPreview";
+import { IconButton } from "./IconButton";
 import { MessageActionMenu } from "./MessageActionMenu";
 import { MessageRow, type MessageRowActions, type MessageRowAction } from "./MessageRow";
 import { MessageReferencePreview, type MessageReferencePreviewItem } from "./MessageReferencePreview";
@@ -743,14 +744,13 @@ export function ThreadPanel({
         onPointerDown={onResizeStart}
       />
       <header>
-        <button
-          type="button"
+        <IconButton
           className="thread-mobile-back"
           onClick={onClose}
-          aria-label={isDm ? "Back to direct message" : "Back to channel"}
+          label={isDm ? "Back to direct message" : "Back to channel"}
         >
           <ArrowLeft size={18} />
-        </button>
+        </IconButton>
         <div className="thread-title">
           <span className="hash-card thread-title-card" aria-hidden="true">
             <MessageSquare size={21} />
@@ -760,15 +760,14 @@ export function ThreadPanel({
           </h2>
         </div>
         <span className="thread-mobile-actions">
-          <button
-            type="button"
+          <IconButton
             className="thread-mobile-actions-trigger"
-            aria-label="Thread actions"
+            label="Thread actions"
             aria-expanded={showMobileThreadActions}
             onClick={() => setShowMobileThreadActions((current) => !current)}
           >
-            <MoreHorizontal size={20} />
-          </button>
+            <MoreHorizontal size={18} />
+          </IconButton>
           {showMobileThreadActions && (
             <span className="thread-mobile-actions-menu" role="menu" aria-label="Thread actions">
               <button
@@ -799,40 +798,37 @@ export function ThreadPanel({
           )}
         </span>
         <span className="thread-header-actions">
-          <button
-            type="button"
+          <IconButton
             className="thread-export-svg"
             onClick={exportThreadVectorImage}
             aria-disabled={!activeRoot}
             data-tooltip="Export thread as SVG"
             title="Export thread as SVG"
-            aria-label="Export thread as SVG"
+            label="Export thread as SVG"
           >
             <FileImage size={18} />
-          </button>
-          <button
-            type="button"
+          </IconButton>
+          <IconButton
             className="thread-locate-root"
             onClick={() => {
               if (activeRoot) onLocateRoot(activeRoot);
             }}
             disabled={!activeRoot}
             data-tooltip={isDm ? "Locate this thread in the DM" : "Locate this thread in the channel"}
-            aria-label={isDm ? "Locate this thread in the DM" : "Locate this thread in the channel"}
+            label={isDm ? "Locate this thread in the DM" : "Locate this thread in the channel"}
           >
             <Crosshair size={18} />
-          </button>
-          <button
-            type="button"
+          </IconButton>
+          <IconButton
             className="thread-expand-toggle"
             onClick={onToggleExpanded}
             aria-pressed={expanded}
             data-tooltip={expanded ? "Show the channel next to this thread" : "Expand thread over the channel"}
-            aria-label={expanded ? "Exit expanded thread" : "Expand thread"}
+            label={expanded ? "Exit expanded thread" : "Expand thread"}
           >
             {expanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
-          </button>
-          <button type="button" className="thread-close" onClick={onClose} aria-label="Close thread panel"><X size={18} /></button>
+          </IconButton>
+          <IconButton className="thread-close" onClick={onClose} label="Close thread panel"><X size={18} /></IconButton>
         </span>
       </header>
 

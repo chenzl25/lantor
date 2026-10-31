@@ -1,5 +1,5 @@
 import { useId, type ReactNode } from "react";
-import { X } from "lucide-react";
+import { DialogHeader } from "./DialogHeader";
 import { DialogSurface } from "./DialogSurface";
 
 type ModalProps = {
@@ -17,12 +17,7 @@ export function Modal({ open, title, onClose, children, width = 480, closeOnBack
   if (!open) return null;
   return <DialogSurface label={title} labelledBy={titleId} className="modal-card" style={{ width }}
     onClose={onClose} closeOnBackdrop={closeOnBackdrop} closeOnEscape={closeOnEscape}>
-    <header className="modal-head">
-      <h3 id={titleId}>{title}</h3>
-      <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
-        <X size={18} />
-      </button>
-    </header>
+    <DialogHeader title={title} titleId={titleId} onClose={onClose} />
     <div className="modal-body">{children}</div>
   </DialogSurface>;
 }
