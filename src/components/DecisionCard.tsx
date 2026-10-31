@@ -18,7 +18,7 @@ export function decisionOptionKey(optionId: string, index: number) {
 
 function errorText(err: unknown) {
   if (err instanceof Error) return err.message;
-  return typeof err === "string" ? err : "Failed to send the decision";
+  return typeof err === "string" ? err : "Couldn’t send your answer";
 }
 
 export function DecisionCard({ decision, compact = false }: DecisionCardProps) {
@@ -128,7 +128,7 @@ export function DecisionCard({ decision, compact = false }: DecisionCardProps) {
         <button type="button" className="decision-card-expand" aria-expanded={expanded}
           onClick={() => setExpanded((current) => !current)}>
           <ChevronDown size={14} data-open={expanded ? "true" : "false"} />
-          {expanded ? "Hide options" : `Show all ${decision.options.length} options`}
+          {expanded ? "Show fewer" : `Show all ${decision.options.length} options`}
         </button>
       )}
       {open && (
@@ -163,11 +163,11 @@ export function DecisionCard({ decision, compact = false }: DecisionCardProps) {
             ) : (
               <>
                 <button type="button" className="decision-secondary" onClick={() => setNoteOpen(true)}>
-                  <MessageSquareText size={14} /> Answer in words
+                  <MessageSquareText size={14} /> Write an answer
                 </button>
                 <button type="button" className="decision-secondary subtle" disabled={busy} onClick={dismiss}
-                  title="Close without answering (e.g. settled in chat)">
-                  <X size={14} /> Dismiss
+                  title="Close without answering">
+                  <X size={14} /> Skip
                 </button>
               </>
             )}

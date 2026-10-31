@@ -59,7 +59,7 @@ if (process.argv.includes("--serve")) {
         assert.equal((await state()).firstUnread, null);
         assert.equal((await state()).divider, "0-121", "the divider stays while the channel is open");
         await click("Read middle"); await page.waitForTimeout(250);
-        assert.equal((await state()).backToBottom, "Back to bottom", "messages already shown are not counted as new");
+        assert.equal((await state()).backToBottom, "Jump to latest", "messages already shown are not counted as new");
         await click("Switch to other"); await click("Switch to channel"); await page.waitForTimeout(300); await settled();
         assert.equal((await state()).divider, null, "a read channel reopens without a divider");
 

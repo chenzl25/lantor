@@ -117,7 +117,7 @@ function CopyButton({ code, className }: { code: string; className: string }) {
     window.setTimeout(() => setCopied(false), 1200);
   }
   return (
-    <button type="button" className={className} onClick={handleCopy} aria-label="Copy code block">
+    <button type="button" className={className} onClick={handleCopy} aria-label="Copy code">
       {copied ? "Copied" : "Copy"}
     </button>
   );
@@ -126,7 +126,7 @@ function CopyButton({ code, className }: { code: string; className: string }) {
 function openHeaderLink(event: MouseEvent<HTMLAnchorElement>, href: string) {
   event.preventDefault();
   event.stopPropagation();
-  void openExternalUrl(href).catch((error) => reportUiError("Could not open link", error));
+  void openExternalUrl(href).catch((error) => reportUiError("Couldn’t open link", error));
 }
 
 export type CodeBlockProps = {

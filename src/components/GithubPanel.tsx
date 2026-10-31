@@ -147,7 +147,7 @@ function checkSummaryLabel(pullRequest: GithubPullRequest) {
   if (checks.status === "success") {
     return `${checks.total} ${checks.total === 1 ? "check" : "checks"} passed`;
   }
-  return "No checks reported";
+  return "No CI checks";
 }
 
 function staleReviewLabel(pullRequest: GithubPullRequest) {
@@ -155,7 +155,7 @@ function staleReviewLabel(pullRequest: GithubPullRequest) {
   if (commits && commits > 0) {
     return `${commits} new ${commits === 1 ? "commit" : "commits"}`;
   }
-  return "New head";
+  return "New commits";
 }
 
 function rereviewActionLabel(pullRequest: GithubPullRequest) {
@@ -163,7 +163,7 @@ function rereviewActionLabel(pullRequest: GithubPullRequest) {
   if (commits && commits > 0) {
     return `Re-review ${commits} ${commits === 1 ? "commit" : "commits"}`;
   }
-  return "Re-review head";
+  return "Review again";
 }
 
 export function GithubPanel({
@@ -231,7 +231,7 @@ export function GithubPanel({
         return updated;
       });
     }).catch(() => {
-      // Counts are optional. Keep "New head" and retry on the next load/refresh.
+      // Counts are optional. Keep "New commits" and retry on the next load/refresh.
     });
   }, [channel.id]);
 
@@ -251,8 +251,8 @@ export function GithubPanel({
       setError(errorMessage(
         loadError,
         resource === "pulls"
-          ? "Failed to refresh the GitHub review queue"
-          : "Failed to refresh the GitHub issue queue",
+          ? "Couldn’t update PRs"
+          : "Couldn’t update issues",
       ));
     } finally {
       if (requestEpochRef.current === requestEpoch) setRefreshingResource(null);
@@ -283,7 +283,7 @@ export function GithubPanel({
     } catch (loadError) {
       if (requestEpochRef.current !== requestEpoch) return;
       if (!cached) setOverview(null);
-      setError(errorMessage(loadError, "Failed to load the cached GitHub review queue"));
+      setError(errorMessage(loadError, "Couldn’t load PRs"));
       setLoading(false);
     }
   }, [activeResource, channel.id, enrichOverview, refreshOverview]);
@@ -349,7 +349,7 @@ export function GithubPanel({
       githubOverviewCache.delete(channel.id);
       await loadOverview();
     } catch (saveError) {
-      setBindingError(errorMessage(saveError, "Failed to bind the GitHub repository"));
+      setBindingError(errorMessage(saveError, "Couldn’t connect the repo"));
     } finally {
       setBindingBusy(false);
     }
@@ -369,7 +369,7 @@ export function GithubPanel({
       await onCreateReviewTask(reviewTarget.number, selectedAgentId);
       setReviewTarget(null);
     } catch (createError) {
-      setReviewError(errorMessage(createError, "Failed to create the GitHub review task"));
+      setReviewError(errorMessage(createError, "Couldn’t start the review"));
     } finally {
       setReviewBusy(false);
     }
@@ -405,7 +405,7 @@ export function GithubPanel({
       });
       onOpenThread(result.thread_root_id);
     } catch (rereviewError) {
-      setError(errorMessage(rereviewError, "Failed to schedule the incremental review"));
+      setError(errorMessage(rereviewError, "Couldn’t start the re-review"));
     } finally {
       setRereviewingPullNumber(null);
     }
@@ -426,7 +426,7 @@ export function GithubPanel({
       setIssueDetail(detail);
     } catch (detailError) {
       if (detailRequestEpochRef.current !== requestEpoch) return;
-      setIssueDetailError(errorMessage(detailError, "Failed to load the GitHub issue"));
+      setIssueDetailError(errorMessage(detailError, "Couldn’t load the issue"));
     } finally {
       if (detailRequestEpochRef.current === requestEpoch) setIssueDetailLoading(false);
     }
@@ -449,7 +449,7 @@ export function GithubPanel({
     try {
       await openExternalUrl(url);
     } catch (openError) {
-      setError(errorMessage(openError, "Failed to open GitHub"));
+      setError(errorMessage(openError, "Couldn’t open GitHub"));
     }
   }
 
@@ -545,7 +545,7 @@ export function GithubPanel({
       <div className="github-panel">
         <div className="empty-state github-empty-state" role="alert">
           <Github size={36} />
-          <h2>GitHub connection unavailable</h2>
+          <h2>Can’t reach GitHub</h2>
           <p>{error}</p>
           <button type="button" className="empty-state-action" onClick={() => void loadOverview()}>
             <RefreshCw size={15} />
@@ -596,7 +596,7 @@ export function GithubPanel({
                     )}`
                   : refreshing
                     ? `Syncing ${activeResource === "pulls" ? "pull requests" : "issues"}…`
-                    : "Not synced yet"}
+                    : "Not updated yet"}
               </span>
             </div>
             <div className="github-toolbar-actions">
@@ -649,7 +649,7 @@ export function GithubPanel({
                     ["review_requested", "Review requested"],
                     ["authored", "Authored"],
                     ["linked", "Linked"],
-                    ["all", "All personal"],
+                    ["all", "All mine"],
                   ] as Array<[GithubPullRequestFilter, string]>).map(([filter, label]) => (
                     <button
                       type="button"
@@ -681,12 +681,12 @@ export function GithubPanel({
                 <div className="empty-state compact github-empty-state" aria-live="polite">
                   <LoaderCircle className="spin" size={28} />
                   <h2>Loading review requests…</h2>
-                  <p>The repository is ready while the first queue snapshot syncs.</p>
+                  <p>Fetching your PRs for the first time…</p>
                 </div>
               ) : overview.review_requests.length === 0 ? (
                 <div className="empty-state compact github-empty-state">
                   <GitPullRequest size={32} />
-                  <h2>Pull request queue is clear</h2>
+                  <h2>No open PRs</h2>
                   <p>
                     No open pull requests are currently authored by or requesting review from @
                     {binding.review_login}.
@@ -695,7 +695,7 @@ export function GithubPanel({
               ) : filteredPullRequests.length === 0 ? (
                 <div className="empty-state compact github-empty-state">
                   <GitPullRequest size={32} />
-                  <h2>This pull request queue is clear</h2>
+                  <h2>No open PRs</h2>
                   <p>
                     No open pull requests match the {pullRequestFilter.replace(/_/g, " ")} filter
                     {pullRequestSearch.trim() ? " and current search" : ""}.
@@ -812,7 +812,7 @@ export function GithubPanel({
                                   ) : (
                                     <RefreshCw size={16} />
                                   )}
-                                  {rereviewing ? "Scheduling…" : "Re-review"}
+                                  {rereviewing ? "Starting…" : "Re-review"}
                                 </button>
                               )}
                               <button
@@ -895,15 +895,15 @@ export function GithubPanel({
                 <div className="empty-state compact github-empty-state" aria-live="polite">
                   <LoaderCircle className="spin" size={28} />
                   <h2>Loading issues…</h2>
-                  <p>The cached queue will appear here after the first background sync.</p>
+                  <p>Issues show up after the first update.</p>
                 </div>
               ) : filteredIssues.length === 0 ? (
                 <div className="empty-state compact github-empty-state">
                   <CircleDot size={32} />
-                  <h2>{issueSearch.trim() ? "No matching issues" : "This issue queue is clear"}</h2>
+                  <h2>{issueSearch.trim() ? "No matching issues" : "No open issues"}</h2>
                   <p>
                     {issueSearch.trim()
-                      ? "Try a different title, issue number, author, assignee, or label."
+                      ? "Try another word or filter."
                       : `No open issues match the ${issueFilter} filter for @${binding.review_login}.`}
                   </p>
                 </div>
@@ -1022,14 +1022,13 @@ export function GithubPanel({
       ) : (
         <div className="empty-state github-empty-state">
           <Github size={38} />
-          <h2>Bind a GitHub repository</h2>
+          <h2>Connect a repo</h2>
           <p>
-            Signed in through GitHub CLI as @{overview.account.login}. Bind one repository to
-            show pull requests and issues related to your work.
+            Signed in as @{overview.account.login}. See your PRs and issues here.
           </p>
           <button type="button" className="empty-state-action" onClick={openBindingModal}>
             <Github size={15} />
-            Bind repository
+            Connect repo
           </button>
         </div>
       )}
@@ -1054,7 +1053,7 @@ export function GithubPanel({
 
       <Modal
         open={showBindingModal}
-        title={binding ? "GitHub Repository Binding" : "Bind GitHub Repository"}
+        title={binding ? "Repo settings" : "Connect a repo"}
         onClose={() => {
           if (!bindingBusy) setShowBindingModal(false);
         }}
@@ -1064,16 +1063,16 @@ export function GithubPanel({
       >
         <div className="modal-form">
           <label>
-            <span>Repository</span>
+            <span>Repo</span>
             <input
               autoFocus
               value={repositoryDraft}
               onChange={(event) => setRepositoryDraft(event.target.value)}
-              placeholder="owner/repository or GitHub URL"
+              placeholder="owner/repo or link"
             />
           </label>
           <label>
-            <span>GitHub identity for personal queues</span>
+            <span>Your GitHub username</span>
             <input
               value={reviewLoginDraft}
               onChange={(event) => setReviewLoginDraft(event.target.value)}
@@ -1089,7 +1088,7 @@ export function GithubPanel({
             />
           </label>
           <label>
-            <span>Local checkout (optional)</span>
+            <span>Local folder (optional)</span>
             <input
               value={localPathDraft}
               onChange={(event) => setLocalPathDraft(event.target.value)}
@@ -1113,7 +1112,7 @@ export function GithubPanel({
               disabled={!repositoryDraft.trim() || bindingBusy}
               onClick={() => void saveBinding()}
             >
-              {bindingBusy ? "Binding…" : binding ? "Update binding" : "Bind repository"}
+              {bindingBusy ? "Connecting…" : binding ? "Save" : "Connect repo"}
             </button>
           </div>
         </div>
@@ -1121,7 +1120,7 @@ export function GithubPanel({
 
       <Modal
         open={Boolean(reviewTarget)}
-        title={reviewTarget ? `Review ${binding?.name_with_owner}#${reviewTarget.number}` : "Review Pull Request"}
+        title={reviewTarget ? `Review ${binding?.name_with_owner}#${reviewTarget.number}` : "Review PR"}
         onClose={() => {
           if (!reviewBusy) setReviewTarget(null);
         }}
@@ -1168,7 +1167,7 @@ export function GithubPanel({
                 disabled={!selectedAgentId || reviewBusy}
                 onClick={() => void createReviewTask()}
               >
-                {reviewBusy ? "Creating…" : "Create task and start review"}
+                {reviewBusy ? "Creating…" : "Start review"}
               </button>
             </div>
           </div>

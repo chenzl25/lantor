@@ -232,7 +232,7 @@ try {
   // The preference hides both an already-streaming body and new deltas in
   // channel/thread rows, persists across reload, then reveals terminal output.
   await page.getByRole("button", { name: "Open settings", exact: true }).click();
-  await page.getByRole("button", { name: "Final result only", exact: true }).click();
+  await page.getByRole("button", { name: "When done", exact: true }).click();
   if (process.env.LANTOR_STREAMING_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.LANTOR_STREAMING_EVIDENCE_DIR, "reply-settings.png") });
   assert.equal(await page.evaluate(() => localStorage.getItem("lantor.agentReplyMode")), "final");
   await page.keyboard.press("Escape");
@@ -243,8 +243,8 @@ try {
   publish({ type: "message_upsert", message: heldReply });
   const heldRow = page.locator(`.conversation [data-message-id="${held.id}"]`);
   const heldReplyRow = page.locator(`.thread [data-message-id="${heldReply.id}"]`);
-  await heldRow.getByText("Waiting for final reply…", { exact: true }).waitFor();
-  await heldReplyRow.getByText("Waiting for final reply…", { exact: true }).waitFor();
+  await heldRow.getByText("Finishing up…", { exact: true }).waitFor();
+  await heldReplyRow.getByText("Finishing up…", { exact: true }).waitFor();
   await reset();
   for (let n = 0; n < 5; n++) { await chunk(held, " partial"); await chunk(heldReply, " partial"); }
   assert.equal(await heldRow.locator(".markdown-body").count(), 0);
@@ -252,13 +252,13 @@ try {
   const finalOnlyStats = await stats();
   assert.deepEqual(finalOnlyStats.rows, [], "final-only rows do not subscribe to per-token renders");
   await page.reload({ waitUntil: "domcontentloaded" });
-  await heldRow.getByText("Waiting for final reply…", { exact: true }).waitFor();
+  await heldRow.getByText("Finishing up…", { exact: true }).waitFor();
   assert.equal(await heldRow.locator(".markdown-body").count(), 0, "reload cannot expose a partial bootstrap body");
   Object.assign(held, { body: "Only the complete reply is visible.", delivery_state: "complete" });
   publish({ type: "message_upsert", message: held });
   await heldRow.getByText(held.body, { exact: true }).waitFor();
   await page.getByRole("button", { name: "Open settings", exact: true }).click();
-  await page.getByRole("button", { name: "Live streaming", exact: true }).click();
+  await page.getByRole("button", { name: "As they type", exact: true }).click();
   await page.keyboard.press("Escape");
   // Switching back reveals the current server snapshot; failed replies also
   // remain readable instead of being hidden forever.

@@ -64,7 +64,7 @@ function safeArtifact(artifact: Partial<Artifact> | null | undefined, index: num
     creator_agent_id: typeof artifact?.creator_agent_id === "string" ? artifact.creator_agent_id : null,
     creator_agent_handle: typeof artifact?.creator_agent_handle === "string" ? artifact.creator_agent_handle : null,
     kind: normalizeKind(artifact?.kind),
-    title: asText(artifact?.title, "Untitled artifact"),
+    title: asText(artifact?.title, "Untitled report"),
     summary: asText(artifact?.summary),
     content: asText(artifact?.content),
     metadata: artifact?.metadata && typeof artifact.metadata === "object" ? artifact.metadata : {},
@@ -113,7 +113,7 @@ function ArtifactCard({ artifact, onOpenArtifact }: { artifact: SafeArtifact; on
       </summary>
       {onOpenArtifact && (
         <div className="artifact-actions">
-          <button type="button" onClick={() => onOpenArtifact(artifact)}>Open full artifact</button>
+          <button type="button" onClick={() => onOpenArtifact(artifact)}>Open report</button>
         </div>
       )}
       {artifact.summary && <p>{artifact.summary}</p>}

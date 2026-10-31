@@ -98,7 +98,7 @@ try {
   await normal.page.goto(origin, { waitUntil: "networkidle" });
   await normal.page.locator(".markdown-body").filter({ hasText: "Plain message" }).waitFor();
   assert.equal(await normal.page.locator(".markdown-body table").count(), 1);
-  assert.equal(await normal.page.getByRole("button", { name: "Copy code block" }).count(), 1);
+  assert.equal(await normal.page.getByRole("button", { name: "Copy code" }).count(), 1);
   assert.equal(await normal.page.locator(".markdown-body .local-entity-link").count(), 1);
   assert.deepEqual(normal.requests.filter(mathResource), [], "plain channel must not request math JS/CSS/fonts");
 

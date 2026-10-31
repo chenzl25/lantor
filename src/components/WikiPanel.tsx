@@ -27,7 +27,7 @@ function revisionMeta(revision: ChannelWikiRevision, isHead: boolean) {
   return (
     <div className="wiki-revision-meta">
       <code>rev {revision.short_id}</code>
-      {isHead && <span className="wiki-head-badge">current</span>}
+      {isHead && <span className="wiki-head-badge">Current</span>}
       <span>{revision.author}</span>
       <span title={revision.created_at}>{formatRelativeTime(revision.created_at)}</span>
       {revision.note.trim() && <span className="wiki-revision-note">{revision.note.trim()}</span>}
@@ -125,7 +125,7 @@ export function WikiPanel({ channel }: WikiPanelProps) {
         <div className="wiki-toolbar">
           <div className="wiki-toolbar-title">
             <Pencil size={15} />
-            <strong>{head ? "Edit wiki" : "Write the first wiki"}</strong>
+            <strong>{head ? "Edit" : "Write wiki"}</strong>
             <span className={`wiki-byte-count ${overLimit ? "over-limit" : ""}`}>
               {draftBytes.toLocaleString()} / {maxBytes.toLocaleString()} bytes
             </span>
@@ -141,7 +141,7 @@ export function WikiPanel({ channel }: WikiPanelProps) {
               disabled={saving || overLimit || !draft.trim()}
             >
               {saving ? <LoaderCircle size={14} className="spin" /> : null}
-              Publish
+              Save
             </button>
           </div>
         </div>
@@ -166,7 +166,7 @@ export function WikiPanel({ channel }: WikiPanelProps) {
           className="wiki-note-input"
           value={draftNote}
           onChange={(event) => setDraftNote(event.target.value)}
-          placeholder="One-line edit note (why this revision)"
+          placeholder="What changed? (one line)"
           maxLength={200}
         />
         {conflict && head && (
@@ -185,7 +185,7 @@ export function WikiPanel({ channel }: WikiPanelProps) {
         <div className="wiki-toolbar">
           <div className="wiki-toolbar-title">
             <History size={15} />
-            <strong>Wiki history</strong>
+            <strong>History</strong>
             <span className="wiki-byte-count">
               {revisions.length} revision{revisions.length === 1 ? "" : "s"}
             </span>
@@ -240,12 +240,10 @@ export function WikiPanel({ channel }: WikiPanelProps) {
           <BookOpen size={28} />
           <h3>No wiki yet</h3>
           <p>
-            The channel wiki is required reading before working in this channel: stable facts,
-            conventions, key decisions, links. Agents see it automatically on every wake and can
-            maintain it with <code>wiki-write</code>; you can write it right here.
+            Key facts every agent here reads first.
           </p>
           <button type="button" className="primary" onClick={startEdit}>
-            <Pencil size={14} /> Write the first version
+            <Pencil size={14} /> Write wiki
           </button>
         </div>
       </div>
@@ -257,7 +255,7 @@ export function WikiPanel({ channel }: WikiPanelProps) {
       <div className="wiki-toolbar">
         <div className="wiki-toolbar-title">
           <BookOpen size={15} />
-          <strong>Channel wiki</strong>
+          <strong>Wiki</strong>
         </div>
         <div className="wiki-toolbar-actions">
           <button type="button" onClick={() => setView("history")}>

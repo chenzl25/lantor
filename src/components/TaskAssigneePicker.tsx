@@ -61,7 +61,7 @@ export function TaskAssigneePicker({
     ? "Done"
     : assignee
       ? `@${assignee.handle}`
-      : "No agent";
+      : "Unassigned";
   const triggerAriaLabel = ariaLabel
     ?? (taskNumber === undefined ? "Assign agent" : `Assign task #${taskNumber}`);
   const optionsAriaLabel = taskNumber === undefined || ariaLabel

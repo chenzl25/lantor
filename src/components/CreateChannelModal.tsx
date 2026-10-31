@@ -52,7 +52,7 @@ export function CreateChannelModal({
   return (
     <Modal
       open={open}
-      title="Create Channel"
+      title="New channel"
       onClose={submitting ? () => undefined : onCancel}
       width={560}
     >
@@ -89,8 +89,8 @@ export function CreateChannelModal({
               <UserPlus size={18} />
             </span>
             <div>
-              <strong>{selectedCount > 0 ? `${selectedCount} selected` : "Bring agents into this channel"}</strong>
-              <p>{agents.length > 0 ? "Click Add next to an agent below to include them when this channel is created." : "Create an agent first, then add it to this channel."}</p>
+              <strong>{selectedCount > 0 ? `${selectedCount} selected` : "Agents in this channel"}</strong>
+              <p>{agents.length > 0 ? "Tap Add to bring an agent in." : "Create an agent first."}</p>
             </div>
           </div>
           {agents.length === 0 ? (
@@ -98,7 +98,7 @@ export function CreateChannelModal({
               <p>No agents yet.</p>
               <button type="button" onClick={onCreateAgent} disabled={submitting}>
                 <UserPlus size={16} />
-                <span>Create first agent</span>
+                <span>New agent</span>
               </button>
             </div>
           ) : (
@@ -140,7 +140,7 @@ export function CreateChannelModal({
             onPointerDown={blurActiveTextInput}
             onClick={submit}
           >
-            {submitting ? "Creating..." : "Create"}
+            {submitting ? "Creating…" : "Create"}
           </button>
         </div>
       </div>

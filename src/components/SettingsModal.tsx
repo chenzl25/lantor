@@ -36,7 +36,7 @@ const CHAT_TEXT_SIZE_OPTIONS: Array<{
   { value: "compact", label: "Small" },
   { value: "default", label: "Default" },
   { value: "large", label: "Large" },
-  { value: "xlarge", label: "Extra" },
+  { value: "xlarge", label: "Largest" },
 ];
 
 const FONT_PRESET_OPTIONS: Array<{
@@ -123,7 +123,7 @@ export function SettingsModal({
         <fieldset className="settings-fieldset">
           <legend>Agent replies</legend>
           <div className="theme-choice-grid font-preset-grid">
-            {([ ["streaming", "Live streaming"], ["final", "Final result only"] ] as const).map(([value, label]) => (
+            {([ ["streaming", "As they type"], ["final", "When done"] ] as const).map(([value, label]) => (
               <button type="button" key={value} className={agentReplyMode === value ? "selected" : ""}
                 aria-pressed={agentReplyMode === value} onClick={() => setAgentReplyMode(value)}>
                 <MessageSquare size={17} />
@@ -133,11 +133,11 @@ export function SettingsModal({
           </div>
         </fieldset>
         <fieldset className="settings-fieldset settings-attachments-fieldset">
-          <legend>Attachments</legend>
+          <legend>Images</legend>
           <label className="settings-toggle-row">
             <span className="settings-toggle-copy">
               <Image size={17} />
-              <strong>Show image thumbnails</strong>
+              <strong>Show previews</strong>
             </span>
             <input
               type="checkbox"

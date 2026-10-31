@@ -37,7 +37,7 @@ export function buildActivityFeedItems(source: ActivityFeedSource): ActivityFeed
   }));
   const surface = (channel: Channel) => channel.kind === "dm" ? "Direct message" : `#${channel.name}`;
   const text = (message: Message) => (message.body && markdownPreviewText(message.body))
-    || (message.attachments.length ? "Shared attachments" : "Shared artifact");
+    || (message.attachments.length ? "Shared files" : "Shared a report");
   const fromMessage = (message: Message, kind: ActivityFeedItem["kind"], id: string, unreadCount: number): ActivityFeedItem => ({
     id,
     dismissId: id,
@@ -66,7 +66,7 @@ export function buildActivityFeedItems(source: ActivityFeedSource): ActivityFeed
     const item = fromMessage(latest, channel.kind === "dm" ? "dm" : "channel", `${channel.kind}:${channel.id}`, unreadCount);
     item.title = channel.kind === "dm"
       ? `DM with @${agents.get(channel.dm_agent_id ?? "")?.handle ?? "agent"}`
-      : `New activity in #${channel.name}`;
+      : `New in #${channel.name}`;
     items.push(item);
   }
 

@@ -47,7 +47,7 @@ export type SourceKindMeta = {
 
 export function sourceKindMeta(workItem: AgentWorkItem | null): SourceKindMeta {
   if (!workItem) {
-    return { icon: Cpu, label: "Runtime event", tone: "system", jumpable: false };
+    return { icon: Cpu, label: "System", tone: "system", jumpable: false };
   }
   if (workItem.task_number) {
     return {
@@ -63,26 +63,26 @@ export function sourceKindMeta(workItem: AgentWorkItem | null): SourceKindMeta {
     case "dm":
       return { icon: Mail, label: "Direct message", tone: "dm", jumpable: true };
     case "thread_followup":
-      return { icon: MessageSquareReply, label: "Thread follow-up", tone: "thread_followup", jumpable: true };
+      return { icon: MessageSquareReply, label: "Thread reply", tone: "thread_followup", jumpable: true };
     case "channel_message":
       return { icon: Hash, label: "Channel message", tone: "channel_message", jumpable: true };
     case "task":
-      return { icon: ListChecks, label: "Task run", tone: "task", jumpable: true };
+      return { icon: ListChecks, label: "Task", tone: "task", jumpable: true };
     case "reminder":
       return { icon: Bell, label: "Reminder", tone: "reminder", jumpable: false };
     case "handoff":
     case "collaboration":
-      return { icon: ArrowRightLeft, label: "Agent handoff", tone: "handoff", jumpable: true };
+      return { icon: ArrowRightLeft, label: "Handed over", tone: "handoff", jumpable: true };
     case "self_wake":
-      return { icon: RotateCw, label: "Self wake-up", tone: "self_wake", jumpable: false };
+      return { icon: RotateCw, label: "Agent reminder", tone: "self_wake", jumpable: false };
     case "system":
       return { icon: Cpu, label: "System", tone: "system", jumpable: false };
     case "manual":
-      return { icon: Sparkles, label: "Manual request", tone: "manual", jumpable: true };
+      return { icon: Sparkles, label: "Your request", tone: "manual", jumpable: true };
     default:
       return {
         icon: CircleDashed,
-        label: "Agent request",
+        label: "Request",
         tone: "default",
         jumpable: Boolean(workItem.channel_id),
       };
@@ -125,9 +125,9 @@ const HIDDEN_ACTIVITY_TITLES = new Set([
 const MAX_PROGRESS_HISTORY_ITEMS = 20;
 const ACTIVE_WORK_ITEM_STATUSES = new Set(["queued", "running", "cancelling"]);
 const ACTIVITY_STATUS_LABELS: Record<string, string> = {
-  active: "Active",
+  active: "Working",
   success: "Done",
-  warning: "Needs attention",
+  warning: "Needs a look",
   error: "Error",
   info: "Info",
 };
@@ -139,7 +139,7 @@ function activityTitle(activity: AgentActivity) {
 function userFacingActivityTitle(activity: AgentActivity) {
   const title = activityTitle(activity);
   const lowered = title.toLowerCase();
-  if (lowered.includes("warm app-server ready") || lowered.includes("warm stream-json ready")) return "Runtime ready";
+  if (lowered.includes("warm app-server ready") || lowered.includes("warm stream-json ready")) return "Ready";
   if (lowered === "started working" || lowered === "run started" || lowered === "run created") return "Working";
   return title;
 }
@@ -161,7 +161,7 @@ function phaseLabel(phase: string) {
     case "runtime":
       return "Runtime";
     case "run_retry":
-      return "Provider retrying";
+      return "Retrying";
     case "work":
       return "Request";
     case "error":
@@ -731,7 +731,7 @@ function ActivityProgressDockContent({ progress, onOpenWorkItem, onLoadActivityH
           }}
           disabled={!jumpable && history.length === 0}
           aria-expanded={!jumpable ? historyOpen : undefined}
-          aria-label={jumpable ? `Jump to ${latestKindMeta.label.toLowerCase()} source` : "Toggle activity history"}
+          aria-label={jumpable ? `Jump to ${latestKindMeta.label.toLowerCase()} source` : "Show steps"}
         >
           <span className="activity-progress-avatar-stack" aria-hidden="true">
             {progress.slice(0, 3).map((item) => (
@@ -781,7 +781,7 @@ function ActivityProgressDockContent({ progress, onOpenWorkItem, onLoadActivityH
               setHistoryOpen((current) => !current);
             }}
             aria-expanded={historyOpen}
-            aria-label={historyOpen ? "Hide activity history" : "Show activity history"}
+            aria-label={historyOpen ? "Hide steps" : "Show steps"}
           >
             <ChevronDown
               className="activity-progress-chevron"
@@ -793,7 +793,7 @@ function ActivityProgressDockContent({ progress, onOpenWorkItem, onLoadActivityH
       </div>
       {historyOpen && history.length === 0 && (
         <p className="activity-progress-history-empty" role="status">
-          {historyLoad === "loading" ? "Loading activity…" : "No activity recorded for this run yet."}
+          {historyLoad === "loading" ? "Loading…" : "No steps yet."}
         </p>
       )}
       {historyOpen && history.length > 0 && (

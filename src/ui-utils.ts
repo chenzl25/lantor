@@ -258,16 +258,16 @@ export function agentRequestSourceLabel(sourceKind: string, taskNumber?: number 
     case "dm":
       return "DM";
     case "thread_followup":
-      return "Thread follow-up";
+      return "Thread reply";
     case "collaboration":
-      return "Agent handoff";
+      return "Handed over";
     case "reminder":
       return "Reminder";
     case "task":
-      return "Task run";
+      return "Task";
     case "manual":
-      return "Manual request";
+      return "Your request";
     default:
-      return "Agent request";
+      return "Request";
   }
 }

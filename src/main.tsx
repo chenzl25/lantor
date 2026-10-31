@@ -195,15 +195,15 @@ const ACTIVITY_PHASE_LABELS: Record<string, string> = {
   thinking: "Thinking",
   command: "Running command",
   file_edit: "Editing file",
-  runtime: "Runtime",
-  work: "Work",
+  runtime: "Status",
+  work: "Working",
   profile: "Profile",
-  acting: "Acting",
+  acting: "Working",
   tools: "Using tools",
   error: "Error",
-  event: "Acting",
-  message: "Acting",
-  task: "Acting",
+  event: "Working",
+  message: "Working",
+  task: "Working",
   event_error: "Error",
   run_error: "Error",
   run_retry: "Retrying",
@@ -420,7 +420,7 @@ function BootSplash({ appError, onRetry }: { appError: string | null; onRetry: (
         </div>
         <div className="boot-copy">
           <strong>{APP_DISPLAY_NAME}</strong>
-          {!online ? <div className="boot-offline" role="status">Connect to the internet to load your workspace.</div> : !appError ? (
+          {!online ? <div className="boot-offline" role="status">You’re offline. Connect to open Lantor.</div> : !appError ? (
             <div className="boot-status" role="status">
               <span>Opening your workspace</span>
               <span className="boot-pips" aria-hidden="true"><i /><i /><i /></span>
@@ -448,7 +448,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, AppErrorBounda
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error(`${APP_DISPLAY_NAME} UI crashed`, error, info);
+    console.error(`${APP_DISPLAY_NAME} hit a problem`, error, info);
     reportClientCrash(error, info.componentStack, "render");
     this.setState({ info });
   }
@@ -463,8 +463,8 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, AppErrorBounda
     return (
       <main className="fatal-shell">
         <section className="fatal-card" role="alert">
-          <p className="eyebrow">{APP_DISPLAY_NAME} UI crashed</p>
-          <h1>Frontend render failed</h1>
+          <p className="eyebrow">{APP_DISPLAY_NAME} hit a problem</p>
+          <h1>This screen stopped working</h1>
           <p>
             The backend is still running. Reload the app to recover; the details below are kept
             visible so this does not become a blank window, and were also recorded in the activity log.
@@ -1393,7 +1393,7 @@ function App() {
         return;
       }
       void flushUiState().catch((err) => {
-        setAppError(errorMessage(err, "Failed to synchronize updates"));
+        setAppError(errorMessage(err, "Couldn’t sync"));
         console.error(err);
       });
     }, Math.max(UI_REFRESH_DEBOUNCE_MS, UI_STATE_REFRESH_MIN_INTERVAL_MS - (performance.now() - uiStateLastStartedRef.current)));
@@ -1430,7 +1430,7 @@ function App() {
   useEffect(() => {
     if (!selectedAgentId || data?.agents.find((agent) => agent.id === selectedAgentId)?.details_loaded !== false) return;
     void hydrateAgentDetail(selectedAgentId).catch((err) => {
-      setAppError(errorMessage(err, "Failed to load agent details"));
+      setAppError(errorMessage(err, "Couldn’t load agent"));
     });
   }, [selectedAgentId, data?.agents.find((agent) => agent.id === selectedAgentId)?.details_loaded]);
 
@@ -1450,7 +1450,7 @@ function App() {
       setData((current) => current ? { ...current, messages: mergeMessages([], mergeHydratedRows(current.messages, messages, baseline)) } : current);
       requestUiState(["thread_activities", "read_inbox_items", "dismissed_inbox_items"]);
     }).catch((err) => {
-      if (!cancelled) setAppError(errorMessage(err, "Failed to load thread messages"));
+      if (!cancelled) setAppError(errorMessage(err, "Couldn’t load thread"));
     }).finally(() => {
       if (!cancelled) loadingThreadIdsRef.current.delete(threadId);
     });
@@ -1487,7 +1487,7 @@ function App() {
       setActivityFeedSnapshotVersion((current) => current + 1);
     } catch (err) {
       if (activityFeedRequestRef.current !== requestId) return;
-      setAppError(errorMessage(err, "Failed to load Activity"));
+      setAppError(errorMessage(err, "Couldn’t load Activity"));
       console.error(err);
     }
   }
@@ -1542,7 +1542,7 @@ function App() {
       }
     } catch (err) {
       if (olderChannelRequestEpochRef.current.get(channelId) === requestEpoch) {
-        setAppError(errorMessage(err, "Failed to load channel messages"));
+        setAppError(errorMessage(err, "Couldn’t load messages"));
         console.error(err);
       }
     } finally {
@@ -1580,7 +1580,7 @@ function App() {
       });
       if (olderChannelRequestEpochRef.current.get(channelId) !== requestEpoch) return false;
       if (page.has_more && (page.next_before_seq === null || page.next_before_seq >= beforeSeq)) {
-        throw new Error("History pagination did not advance");
+        throw new Error("Couldn’t load older messages");
       }
       if (page.has_more && page.next_before_seq !== null) {
         olderChannelBeforeSeqRef.current.set(channelId, page.next_before_seq);
@@ -1608,7 +1608,7 @@ function App() {
       return page.messages.length > 0 || !page.has_more;
     } catch (err) {
       if (olderChannelRequestEpochRef.current.get(channelId) === requestEpoch) {
-        setAppError(errorMessage(err, "Failed to load earlier messages"));
+        setAppError(errorMessage(err, "Couldn’t load older messages"));
         console.error(err);
       }
       return false;
@@ -1749,7 +1749,7 @@ function App() {
       if (messageHydrationEpochRef.current.get(messageId) === hydrationEpoch) {
         messageDeltaBufferRef.current.delete(messageId);
         messageHydrationAttemptsRef.current.delete(messageId);
-        requestRefresh("Failed to hydrate streaming message");
+        requestRefresh("Couldn’t load reply");
         console.error(err);
       }
     } finally {
@@ -1952,7 +1952,7 @@ function App() {
       setArtifactViewer({
         artifact,
         loading: false,
-        error: errorMessage(err, "Failed to load artifact"),
+        error: errorMessage(err, "Couldn’t open report"),
       });
     }
   }
@@ -2082,7 +2082,7 @@ function App() {
       console.error(err);
     });
     refreshRuntimeChecks().catch((err) => {
-      setAppError(errorMessage(err, "Failed to check local runtimes"));
+      setAppError(errorMessage(err, "Couldn’t check Codex or Claude"));
       console.error(err);
     });
   }, []);
@@ -2216,7 +2216,7 @@ function App() {
         if (messageSearchRequestRef.current !== requestId) return;
         setMessageSearchResults([]);
         setMessageSearchLoading(false);
-        setAppError(errorMessage(err, "Failed to search messages"));
+        setAppError(errorMessage(err, "Search failed"));
         console.error(err);
       });
     }, 180);
@@ -2294,7 +2294,7 @@ function App() {
         if (disposed || connectionGeneration !== generation) { subscription(); return; }
         backendSubscriptionRef.current = subscription;
       } catch (err) {
-        if (!disposed) console.error("Failed to subscribe to backend updates", err);
+        if (!disposed) console.error("Live updates stopped", err);
       } finally {
         if (connectionGeneration === generation) connecting = false;
       }
@@ -2353,7 +2353,7 @@ function App() {
         resumePending = false;
         void reconcile()
           .then(() => resume === null ? undefined : waitForPendingRefresh())
-          .catch((err) => console.error("Failed to reconcile foreground state", err))
+          .catch((err) => console.error("Couldn’t sync", err))
           .finally(() => { if (resume !== null) endResumeSync(resume); });
       }, 100);
     }
@@ -3262,12 +3262,12 @@ function App() {
     ? {
         kind: selectedAgentLiveActivity?.phase ?? selectedAgentLiveActivity?.kind ?? "run",
         label: selectedAgentLiveActivity ? phaseForActivity(selectedAgentLiveActivity.phase || selectedAgentLiveActivity.kind) : "Running",
-        detail: selectedAgentLiveActivity?.summary || selectedAgentLiveActivity?.detail || "Waiting for observable output from the agent.",
+        detail: selectedAgentLiveActivity?.summary || selectedAgentLiveActivity?.detail || "Waiting for the agent…",
       }
     : {
         kind: selectedAgent.status,
         label: selectedAgent.status,
-        detail: "No active run.",
+        detail: "Idle.",
       }) : null;
 
   const selectedAgentWorkItems = useMemo(() => {
@@ -3463,7 +3463,7 @@ function App() {
   }
 
   function duplicateChannelNameMessage(normalizedName: string) {
-    return `Channel #${normalizedName} already exists`;
+    return `#${normalizedName} already exists`;
   }
 
   function isDuplicateChannelNameError(message: string) {
@@ -3594,12 +3594,12 @@ function App() {
     const name = normalizedChannelNameInput(channelNameDraft);
     if (!name) return;
     if (channel.kind === "dm") {
-      setAppError("Direct message settings are managed by the agent profile");
+      setAppError("Edit the agent to change this chat");
       setShowChannelSettingsModal(false);
       return;
     }
     if (channelNameExists(name, channel.id)) {
-      setAppError(`Channel #${name} already exists`);
+      setAppError(`#${name} already exists`);
       return;
     }
     await mutate("update_channel", {
@@ -3626,7 +3626,7 @@ function App() {
     const fallbackChannelId = data?.channels.find((item) => item.id !== channelToDelete.id)?.id ?? "";
     setConfirmRequest({
       title: `Delete #${channelToDelete.name}?`,
-      body: "This removes the channel timeline, tasks, threads, agent memberships, and attachments for this channel. This cannot be undone.",
+      body: "Deletes all messages, tasks and files here. Agents are kept.",
       confirmLabel: "Delete channel",
       onConfirm: async () => {
         // Delete on the backend first, then update the UI optimistically instead
@@ -4036,7 +4036,7 @@ function App() {
     setShowNeedsYouModal(false);
     setShowSearchModal(true);
     void reloadUiState(["agent_work_items", "agent_activities", "thread_activities", "read_inbox_items", "dismissed_inbox_items"])
-      .catch((err) => setAppError(errorMessage(err, "Failed to load search context")));
+      .catch((err) => setAppError(errorMessage(err, "Couldn’t open this")));
   }
 
   function openActivityFeedModal() {
@@ -4052,7 +4052,7 @@ function App() {
     void Promise.all([
       hydrateActivityFeedMessages(),
       reloadUiState(["thread_activities", "read_inbox_items", "dismissed_inbox_items"]),
-    ]).catch((err) => setAppError(errorMessage(err, "Failed to load Activity context")));
+    ]).catch((err) => setAppError(errorMessage(err, "Couldn’t open this")));
   }
 
   function openSavedModal() {
@@ -4079,7 +4079,7 @@ function App() {
     setShowSavedModal(false);
     setShowNeedsYouModal(true);
     void reloadUiState(["decisions", "tasks", "thread_activities"])
-      .catch((err) => setAppError(errorMessage(err, "Failed to load Needs you")));
+      .catch((err) => setAppError(errorMessage(err, "Couldn’t load Needs you")));
   }
 
   function openDecision(decision: Decision) {
@@ -4305,7 +4305,7 @@ function App() {
   async function setChannelMember(agentId: string, member: boolean) {
     if (!channel) return;
     if (channel.kind === "dm") {
-      setAppError("Direct message membership is fixed");
+      setAppError("Direct messages can’t add agents");
       return;
     }
     const channelId = channel.id;
@@ -4439,7 +4439,7 @@ function App() {
   async function startEditAgent(agent: Agent) {
     if (agent.details_loaded === false) {
       try { agent = (await hydrateAgentDetail(agent.id)).agent; }
-      catch (err) { setAppError(errorMessage(err, "Failed to load agent configuration")); return; }
+      catch (err) { setAppError(errorMessage(err, "Couldn’t load agent")); return; }
     }
     setEditingAgentId(agent.id);
     setAgentEdit({
@@ -4562,7 +4562,7 @@ function App() {
     } catch (err) {
       if (!removeOptimisticMessage(optimisticId)) return;
       updateRootComposerDraft(channel.id, () => ({ text: body, attachments }));
-      const message = errorMessage(err, "Failed to send message");
+      const message = errorMessage(err, "Message not sent");
       setAppError(message);
       console.error(err);
     }
@@ -4577,7 +4577,7 @@ function App() {
       restoreRememberedThreadForChannel(channelId);
       setActiveTab("chat");
     } catch (err) {
-      const message = errorMessage(err, "Failed to open direct message");
+      const message = errorMessage(err, "Couldn’t open chat");
       setAppError(message);
       console.error(err);
     }
@@ -4605,7 +4605,7 @@ function App() {
     } catch (err) {
       if (!removeOptimisticMessage(optimisticId)) return;
       updateReplyComposerDraft(activeRoot.id, () => ({ text: body, attachments }));
-      const message = errorMessage(err, "Failed to send reply");
+      const message = errorMessage(err, "Reply not sent");
       setAppError(message);
       console.error(err);
     }
@@ -4648,7 +4648,7 @@ function App() {
   }
 
   async function createGithubReviewTask(pullNumber: number, agentId: string) {
-    if (!channel) throw new Error("No active channel");
+    if (!channel) throw new Error("Open a channel first");
     const result = await mutate("create_github_review_task", {
       channelId: channel.id,
       pullNumber,
@@ -4662,7 +4662,7 @@ function App() {
   }
 
   async function createGithubIssueTask(issueNumber: number, agentId: string) {
-    if (!channel) throw new Error("No active channel");
+    if (!channel) throw new Error("Open a channel first");
     const result = await mutate("create_github_issue_task", {
       channelId: channel.id,
       issueNumber,
@@ -4691,7 +4691,7 @@ function App() {
         await loadReferencedMessage(focusId);
         setFocusedMessageId(focusId);
       } catch (err) {
-        setAppError(errorMessage(err, "Failed to load work item source"));
+        setAppError(errorMessage(err, "Couldn’t open this"));
       }
     }
   }
@@ -4717,7 +4717,7 @@ function App() {
       if (artifact) {
         void openArtifact(artifact);
       } else {
-        setAppError("Artifact no longer exists");
+        setAppError("This report was deleted");
       }
       return;
     }
@@ -4734,7 +4734,7 @@ function App() {
           searchResultThreadIdRef.current = threadId;
         }
       } catch (err) {
-        setAppError(errorMessage(err, "Failed to open search result"));
+        setAppError(errorMessage(err, "Couldn’t open this"));
         console.error(err);
       }
       return;
@@ -4806,7 +4806,7 @@ function App() {
         await revealMessageById(item.messageId ?? targetThreadId!);
         setShowActivityFeedModal(false);
       } catch (err) {
-        setAppError(errorMessage(err, "Failed to open Activity item"));
+        setAppError(errorMessage(err, "Couldn’t open this"));
         console.error(err);
       }
       return;
@@ -5507,7 +5507,7 @@ function App() {
 
       <AgentFormModal
         open={showCreateAgentModal}
-        title="Add Agent"
+        title="New agent"
         form={agentDraft}
         runtimeChecks={runtimeChecks}
         submitLabel="Add agent"
@@ -5529,7 +5529,7 @@ function App() {
 
       <AgentFormModal
         open={Boolean(editingAgentId)}
-        title="Edit Agent"
+        title="Edit agent"
         form={agentEdit}
         runtimeChecks={runtimeChecks}
         submitLabel="Save"

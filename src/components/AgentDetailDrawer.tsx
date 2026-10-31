@@ -39,8 +39,8 @@ type AgentDetailTab = "profile" | "reminders" | "activity" | "workspace";
 const AGENT_DETAIL_TABS: Array<{ id: AgentDetailTab; label: string }> = [
   { id: "profile", label: "Profile" },
   { id: "reminders", label: "Reminders" },
-  { id: "activity", label: "Activity" },
-  { id: "workspace", label: "Workspace" },
+  { id: "activity", label: "Work log" },
+  { id: "workspace", label: "Files" },
 ];
 
 const DEFAULT_ACTIVITY_RUN_COLLAPSED_STEP_COUNT = 3;
@@ -84,7 +84,7 @@ export type AgentPerformance = {
 const ACTIVITY_STATUS_LABELS: Record<string, string> = {
   active: "Active",
   success: "Done",
-  warning: "Needs attention",
+  warning: "Needs a look",
   error: "Error",
   info: "Info",
 };
@@ -96,7 +96,7 @@ function statusForActivity(activity: AgentActivity) {
 function userFacingActivityTitle(activity: AgentActivity) {
   const title = activity.summary || activity.title;
   const lowered = title.toLowerCase();
-  if (lowered.includes("warm app-server ready") || lowered.includes("warm stream-json ready")) return "Runtime ready";
+  if (lowered.includes("warm app-server ready") || lowered.includes("warm stream-json ready")) return "Ready";
   if (
     (lowered.includes("warm turn") && lowered.includes("started")) ||
     lowered === "started working" ||
@@ -108,21 +108,21 @@ function userFacingActivityTitle(activity: AgentActivity) {
   if (lowered.includes("running command")) return "Running command";
   if (lowered.includes("command finished")) return "Command finished";
   if (lowered.includes("editing file")) return "Editing file";
-  if (lowered.includes("file edit finished")) return "File edit finished";
-  if (lowered.includes("turn accepted")) return "Request acknowledged";
-  if (lowered.includes("turn interrupt") || lowered.includes("stop signal")) return "Stop requested";
+  if (lowered.includes("file edit finished")) return "File edited";
+  if (lowered.includes("turn accepted")) return "Received";
+  if (lowered.includes("turn interrupt") || lowered.includes("stop signal")) return "Stopping…";
   if (lowered.includes("first token")) return "Responding";
-  if (lowered.includes("content block finished")) return "Finished step";
-  if (lowered.includes("message finished")) return "Finished response";
-  if (lowered.includes("stream initialized")) return "Runtime ready";
-  if (lowered.includes("system event") || lowered.includes("status")) return "Runtime status";
-  if (lowered.includes("rate limit")) return "Checking rate limit";
-  if (lowered.includes("follow-up steer")) return title.includes("rejected") ? "Follow-up queued" : "Follow-up added";
+  if (lowered.includes("content block finished")) return "Step done";
+  if (lowered.includes("message finished")) return "Replied";
+  if (lowered.includes("stream initialized")) return "Ready";
+  if (lowered.includes("system event") || lowered.includes("status")) return "Status";
+  if (lowered.includes("rate limit")) return "Checking limits";
+  if (lowered.includes("follow-up steer")) return title.includes("rejected") ? "Message queued" : "Message added";
   if (lowered.startsWith("work item ") || lowered.startsWith("agent request ")) {
-    if (lowered.includes("running")) return "Request started";
-    if (lowered.includes("done")) return "Request completed";
-    if (lowered.includes("failed")) return "Request failed";
-    if (lowered.includes("cancelled")) return "Request cancelled";
+    if (lowered.includes("running")) return "Started";
+    if (lowered.includes("done")) return "Done";
+    if (lowered.includes("failed")) return "Failed";
+    if (lowered.includes("cancelled")) return "Cancelled";
   }
   return title;
 }
@@ -283,7 +283,7 @@ function workItemStatusLabel(status: string) {
   if (status === "queued") return "Queued";
   if (status === "running") return "Running";
   if (status === "cancelling") return "Cancelling";
-  if (status === "done") return "Run done";
+  if (status === "done") return "Done";
   if (status === "failed") return "Failed";
   if (status === "cancelled") return "Cancelled";
   return status.replace(/_/g, " ");
@@ -420,7 +420,7 @@ function agentModelSummary(agent: Agent) {
     return `${base} · ${codexReasoningEffortLabel(agent.reasoning_effort)} intelligence · ${codexServiceTierLabel(agent.service_tier)} speed`;
   }
   if (agent.runtime === "claude" && agent.reasoning_effort.trim()) {
-    return `${base} · ${claudeEffortLabel(agent.reasoning_effort)} effort`;
+    return `${base} · ${claudeEffortLabel(agent.reasoning_effort)} thinking`;
   }
   return base;
 }
@@ -460,15 +460,15 @@ export function AgentDetailDrawer({
   const deleteDisabled = Boolean(activeRun);
   const agentStatus = agent.status.toLowerCase();
   const restartDisabledReason = activeRun
-    ? "Stop the active run before restarting this agent"
+    ? "Stop its current work first"
     : agentStatus === "queued" || agentStatus === "starting"
       ? "Agent is already starting"
       : agentStatus === "running"
         ? "Agent is already running"
         : agentStatus === "stopping"
-          ? "Wait for the agent to stop before restarting"
+          ? "Wait for it to stop first"
           : agentStatus === "deleted"
-            ? "Deleted agents cannot be restarted"
+            ? "This agent was deleted"
             : "";
   const restartDisabled = Boolean(restartDisabledReason);
   const restartLabel = agentStatus === "error" ? `Restart @${agent.handle}` : `Start @${agent.handle}`;
@@ -611,7 +611,7 @@ export function AgentDetailDrawer({
       if (activeRun) return "Live";
       return activities.length > 0 ? String(activities.length) : "Idle";
     }
-    return workspacePath ? agent.workspace_exists ? "Ready" : "Missing" : "Unset";
+    return workspacePath ? agent.workspace_exists ? "Ready" : "Missing" : "Not set";
   }
 
   function renderProfilePanel() {
@@ -626,7 +626,7 @@ export function AgentDetailDrawer({
           </div>
           <div className="detail-grid">
             <div>
-              <span>Runtime</span>
+              <span>Runs on</span>
               <code>{runtimeLabel(agent.runtime)}</code>
             </div>
             <div>
@@ -636,7 +636,7 @@ export function AgentDetailDrawer({
             {isCodex && (
               <>
                 <div>
-                  <span>Intelligence</span>
+                  <span>Thinking</span>
                   <code>{codexReasoningEffortLabel(agent.reasoning_effort)}</code>
                 </div>
                 <div>
@@ -647,7 +647,7 @@ export function AgentDetailDrawer({
             )}
             {isClaude && (
               <div>
-                <span>Effort</span>
+                <span>Thinking</span>
                 <code>{claudeEffortLabel(agent.reasoning_effort)}</code>
               </div>
             )}
@@ -658,12 +658,12 @@ export function AgentDetailDrawer({
         )}
         <section className="detail-grid">
           <div>
-            <span>Workspace</span>
-            <code>{workspacePath ? agent.workspace_exists ? "Available" : "Missing" : "Not configured"}</code>
+            <span>Folder</span>
+            <code>{workspacePath ? agent.workspace_exists ? "Available" : "Missing" : "Not set"}</code>
           </div>
           <div>
-            <span>Active run</span>
-            <code>{activeRun ? runStatusLabel(activeRun.status) : "No active run"}</code>
+            <span>Working on</span>
+            <code>{activeRun ? runStatusLabel(activeRun.status) : "Idle"}</code>
           </div>
           <div>
             <span>Role</span>
@@ -671,47 +671,47 @@ export function AgentDetailDrawer({
           </div>
           <div>
             <span>Description</span>
-            <code>{agent.description || "No notes"}</code>
+            <code>{agent.description || "No description"}</code>
           </div>
         </section>
         <section className="detail-section performance-section">
           <div className="detail-section-head">
-            <h4>Performance</h4>
+            <h4>Stats</h4>
             <span>{performance.windowLabel}</span>
           </div>
           <div className="performance-grid">
             <div className="performance-card">
-              <span>Turns</span>
+              <span>Replies</span>
               <strong>{performance.turns}</strong>
               <small>{performance.completedTurns} done · {performance.failedTurns} failed</small>
             </div>
             <div className="performance-card">
-              <span>First token</span>
+              <span>Time to start</span>
               <strong>{formatDuration(performance.p50FirstTokenMs)}</strong>
               <small>p95 {formatDuration(performance.p95FirstTokenMs)}</small>
             </div>
             <div className="performance-card">
-              <span>Turn duration</span>
+              <span>Reply time</span>
               <strong>{formatDuration(performance.p50TurnMs)}</strong>
               <small>p95 {formatDuration(performance.p95TurnMs)}</small>
             </div>
             <div className="performance-card">
-              <span>Error rate</span>
+              <span>Failure rate</span>
               <strong>{Math.round(performance.errorRate * 100)}%</strong>
               <small>{performance.activeTurns} currently active</small>
             </div>
             <div className="performance-card">
-              <span>Tokens</span>
+              <span>Usage</span>
               <strong>{formatTokenCount(performance.inputTokens + performance.outputTokens)}</strong>
               <small>{formatTokenCount(performance.inputTokens)} in · {formatTokenCount(performance.outputTokens)} out</small>
             </div>
             <div className="performance-card">
-              <span>Cost est.</span>
+              <span>Est. cost</span>
               <strong>{formatCost(performance.costMicros)}</strong>
               <small>
                 {agent.daily_budget_micros > 0
                   ? `${formatCost(agent.daily_budget_micros)} daily budget`
-                  : "No daily cap"}
+                  : "No daily limit"}
               </small>
             </div>
           </div>
@@ -725,7 +725,7 @@ export function AgentDetailDrawer({
       <>
         <section className="detail-section agent-autonomy-card">
           <div>
-            <h4>Agent-managed routines</h4>
+            <h4>Set by the agent</h4>
             <p>
               Reminders and loops are created from conversation intent by the agent through {APP_DISPLAY_NAME} APIs.
               A loop runs its check command on a schedule and only posts or wakes the agent when the command prints output.
@@ -813,19 +813,19 @@ export function AgentDetailDrawer({
       <section className="detail-section workspace-section">
         <div className="detail-section-head">
           <h4>Workspace</h4>
-          <span>{workspacePath ? agent.workspace_exists ? "Ready" : "Missing" : "Not configured"}</span>
+          <span>{workspacePath ? agent.workspace_exists ? "Ready" : "Missing" : "Not set"}</span>
         </div>
         <div className="workspace-meta-grid">
           <div className="workspace-path-card">
             <div>
               <span>Path</span>
-              <code title={workspacePath}>{workspacePath ? compactPath(workspacePath) : "Not configured"}</code>
+              <code title={workspacePath}>{workspacePath ? compactPath(workspacePath) : "Not set"}</code>
             </div>
           </div>
           <div className={`workspace-memory-card ${agent.workspace_memory_exists ? "ready" : "missing"}`}>
             <div>
               <span>MEMORY.md</span>
-              <code title={memoryPath}>{memoryPath ? compactPath(memoryPath) : "Not configured"}</code>
+              <code title={memoryPath}>{memoryPath ? compactPath(memoryPath) : "Not set"}</code>
             </div>
           </div>
         </div>
@@ -842,8 +842,8 @@ export function AgentDetailDrawer({
             ) : (
               <p className="empty-mini">
                 {workspacePath
-                  ? agent.workspace_exists ? "No visible workspace files yet." : "Workspace directory does not exist yet."
-                  : "Workspace not configured."}
+                  ? agent.workspace_exists ? "No files yet." : "Folder not created yet."
+                  : "No folder set."}
               </p>
             )}
           </div>
@@ -926,10 +926,10 @@ export function AgentDetailDrawer({
     return (
       <section className="detail-section live-activity-section">
         <div className="detail-section-head">
-          <h4>Recent activity</h4>
+          <h4>Recent work</h4>
           {activityGroups.length > 0 && <span>{activityGroups.length} turns · {activities.length} steps</span>}
         </div>
-        {activities.length === 0 && <p className="empty-mini">No activity yet.</p>}
+        {activities.length === 0 && <p className="empty-mini">Nothing yet.</p>}
         {activityGroups.length > 0 && (
           <div className="activity-run-list" role="log" aria-label={`${agent.handle} activity by run`}>
             {activityGroups.map((group, index) => {
@@ -969,7 +969,7 @@ export function AgentDetailDrawer({
                         </span>
                         <time>{formatActivityTime(group.latest.created_at)}</time>
                         {group.duration && <small>· {group.duration}</small>}
-                        {group.providerRetrying && <b className="activity-run-retrying">Provider retrying</b>}
+                        {group.providerRetrying && <b className="activity-run-retrying">Retrying</b>}
                         {jumpable && (
                           <ArrowRight className="activity-run-arrow" size={13} aria-hidden="true" />
                         )}
@@ -980,7 +980,7 @@ export function AgentDetailDrawer({
                           <>
                             <span className="activity-run-context-divider" aria-hidden="true">·</span>
                             <span className="activity-run-preview" title={group.preview}>
-                              {group.sourceMissing ? "Original message no longer exists" : `“${group.preview}”`}
+                              {group.sourceMissing ? "Original message was deleted" : `“${group.preview}”`}
                             </span>
                           </>
                         )}
@@ -1007,8 +1007,8 @@ export function AgentDetailDrawer({
 
                   {group.providerRetrying && (
                     <div className="activity-provider-note">
-                      <strong>Lantor is retrying automatically.</strong>
-                      <span>No action needed unless this turns into a stalled request.</span>
+                      <strong>Retrying on its own.</strong>
+                      <span>Nothing to do yet.</span>
                     </div>
                   )}
 
@@ -1066,7 +1066,7 @@ export function AgentDetailDrawer({
                               </div>
                             )}
                             {detail && (
-                              <p title="Click to expand activity detail">{compactValue(detail, 120)}</p>
+                              <p title="Show details">{compactValue(detail, 120)}</p>
                             )}
                             {expandedActivityId === activity.id && allMetadata.length > 0 && (
                               <pre className="activity-raw">{JSON.stringify(activity.metadata, null, 2)}</pre>
@@ -1096,7 +1096,7 @@ export function AgentDetailDrawer({
                         }}
                       >
                         {runExpanded
-                          ? "Collapse steps"
+                          ? "Show fewer"
                           : `Show all ${group.activities.length} steps`}
                       </button>
                       {!runExpanded && (
@@ -1114,7 +1114,7 @@ export function AgentDetailDrawer({
         {workItems.some((item) => item.status === "queued") && (
           <div className="activity-queued-summary">
             <strong>{workItems.filter((item) => item.status === "queued").length} queued</strong>
-            <span>Queued follow-ups stay visible here while the agent is busy or retrying provider requests.</span>
+            <span>New messages wait here while the agent is busy.</span>
           </div>
         )}
       </section>
@@ -1165,12 +1165,12 @@ export function AgentDetailDrawer({
             tone="danger"
             disabled={deleteDisabled}
             label={`Delete @${agent.handle}`}
-            data-tooltip={deleteDisabled ? "Stop the active run before deleting this agent" : `Delete @${agent.handle}`}
+            data-tooltip={deleteDisabled ? "Stop its current work first" : `Delete @${agent.handle}`}
             onClick={() => onDelete(agent)}
           >
             <Trash2 size={18} />
           </IconButton>
-          <IconButton className="agent-close" onClick={onClose} label="Close agent detail">
+          <IconButton className="agent-close" onClick={onClose} label="Close">
             <X size={18} />
           </IconButton>
         </div>
@@ -1223,7 +1223,7 @@ export function AgentDetailDrawer({
     </aside>
     <Modal
       open={Boolean(workspacePreview)}
-      title={workspacePreview?.name ?? "Workspace preview"}
+      title={workspacePreview?.name ?? "File preview"}
       onClose={() => setWorkspacePreview(null)}
       width={860}
     >

@@ -134,7 +134,7 @@ try {
     assert.equal(await rows.filter({ hasText: /Synthetic|Reminder|notification|Owner follow-up/ }).count(), 0);
     assert.equal(await rows.locator(".activity-feed-unread-dot").count(), 2);
     await dialog.getByRole("button", { name: "Mentions", exact: true }).click();
-    await dialog.getByText("No activity", { exact: true }).waitFor();
+    await dialog.getByText("Nothing new", { exact: true }).waitFor();
     await dialog.getByRole("button", { name: "All", exact: true }).click();
     const target = rows.filter({ hasText: "Agent investigation complete" });
     if (width < 760) await dialog.getByRole("button", { name: "Mark all read", exact: true }).click();
@@ -175,7 +175,7 @@ try {
     if (width >= 1101) {
       // An expanded thread hides the conversation, whose read watermark was the
       // only receipt for replies arriving in the open thread.
-      await page.getByRole("button", { name: "Expand thread", exact: true }).click();
+      await page.getByRole("button", { name: "Full width", exact: true }).click();
       await page.locator(".app.thread-expanded").waitFor();
       emulateThreadReceipts = true;
       // Unfollowed, the thread leaves Activity once read, so a channel entry

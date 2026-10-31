@@ -86,7 +86,7 @@ test("Markdown fences render headers, diff rows and collapse long blocks", () =>
   assert.match(header, /class="code-block-range">L922</);
   assert.match(header, /data-line="922"/);
   assert.match(header, /data-line="923"/);
-  assert.match(header, /aria-label="Copy code block"/);
+  assert.match(header, /aria-label="Copy code"/);
 
   const diff = render("```diff rust\n@@ -1,2 +1,2 @@\n-let a = 1;\n+let a = 2;\n let b = 3;\n```");
   assert.match(diff, /<pre class="is-diff has-gutter"/);

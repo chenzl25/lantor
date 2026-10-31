@@ -65,7 +65,7 @@ function labelStyle(label: GithubLabel): CSSProperties | undefined {
 function errorMessage(error: unknown) {
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === "string" && error.trim()) return error;
-  return "Failed to create the issue investigation task";
+  return "Couldn’t create the task";
 }
 
 export function GithubIssueDrawer({
@@ -135,7 +135,7 @@ export function GithubIssueDrawer({
           title={title}
           titleId="github-issue-drawer-title"
           eyebrow={<><CircleDot size={14} />Issue #{issue.number}</>}
-          closeLabel="Close issue details"
+          closeLabel="Close"
           closeDisabled={creating}
           autoFocusClose
           onClose={onClose}
@@ -191,7 +191,7 @@ export function GithubIssueDrawer({
           {loading ? (
             <div className="github-issue-detail-loading" aria-live="polite">
               <LoaderCircle className="spin" size={22} />
-              Loading issue details…
+              Loading…
             </div>
           ) : error ? (
             <div className="github-issue-detail-error" role="alert">
@@ -212,7 +212,7 @@ export function GithubIssueDrawer({
                   scrollKey={`github-issue:${issue.number}`}
                 />
               ) : (
-                <p className="github-issue-no-description">No description provided.</p>
+                <p className="github-issue-no-description">No description.</p>
               )}
             </section>
           ) : null}
@@ -243,8 +243,8 @@ export function GithubIssueDrawer({
               <div className="github-issue-investigate-copy">
                 <Bot size={18} />
                 <div>
-                  <strong>Investigate with agent</strong>
-                  <span>Creates a Task and canonical Lantor thread. No GitHub writes.</span>
+                  <strong>Ask an agent</strong>
+                  <span>Creates a task here. Nothing is posted to GitHub.</span>
                 </div>
               </div>
               <TaskAssigneePicker
@@ -270,7 +270,7 @@ export function GithubIssueDrawer({
                 ) : (
                   <>
                     <Bot size={15} />
-                    Create task and investigate
+                    Ask agent
                   </>
                 )}
               </button>

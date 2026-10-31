@@ -89,7 +89,7 @@ try {
     const page = await context.newPage(); page.setDefaultTimeout(8000);
     const errors = []; page.on("pageerror", error => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${api.address().port}`, { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: "View @Speed details", exact: true }).click();
+    await page.getByRole("button", { name: "@Speed’s profile", exact: true }).click();
     await page.getByRole("tab", { name: /Reminders/ }).click();
     const rows = page.locator(".agent-reminder-row");
     await rows.first().waitFor();

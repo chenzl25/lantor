@@ -106,7 +106,7 @@ function AttachmentSheet({ item, onClose }: { item: AttachmentSheetItem; onClose
         : await saveTextDownload(info.name, await file.text());
       setNotice({ kind: "success", message: `Saved to ${displaySavedPath(path)}`, savedPath: path });
     } catch (error) {
-      setNotice({ kind: "error", message: `Save failed: ${errorMessage(error)}` });
+      setNotice({ kind: "error", message: `Couldn’t save: ${errorMessage(error)}` });
     } finally {
       setSaving(false);
     }
@@ -116,7 +116,7 @@ function AttachmentSheet({ item, onClose }: { item: AttachmentSheetItem; onClose
     try {
       await revealInFileManager(path);
     } catch (error) {
-      setNotice({ kind: "error", message: `Could not show the file: ${errorMessage(error)}` });
+      setNotice({ kind: "error", message: `Couldn’t show this file: ${errorMessage(error)}` });
     }
   }
 
@@ -133,7 +133,7 @@ function AttachmentSheet({ item, onClose }: { item: AttachmentSheetItem; onClose
     }
     navigator.share({ files: [ready.file] }).catch((error: unknown) => {
       if (error instanceof DOMException && error.name === "AbortError") return;
-      setNotice({ kind: "error", message: `Share failed: ${errorMessage(error)}` });
+      setNotice({ kind: "error", message: `Couldn’t share: ${errorMessage(error)}` });
     });
   }
 
@@ -180,8 +180,8 @@ function AttachmentPreview({ kind, name, url, text, delivery }: {
   if (kind === "text" && text !== null) return <pre className="attachment-sheet-text">{text}</pre>;
   return <div className="attachment-sheet-placeholder">
     <FileText size={36} />
-    <p>No preview for this file here.</p>
-    <p>{delivery === "share" ? "Use Share to save it to Files or open it in another app." : "Use Download to save it."}</p>
+    <p>Can’t preview this file.</p>
+    <p>{delivery === "share" ? "Tap Share to save it or open it elsewhere." : "Use Download to save it."}</p>
   </div>;
 }
 

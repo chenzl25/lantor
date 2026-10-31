@@ -132,7 +132,7 @@ try {
   if (isWebKit) await offline.addInitScript(connectionSignal,false);
   assert.equal((await offline.goto(origin+"/?offline-open=1")).fromServiceWorker(),true);
   await offline.locator(".boot.offline").waitFor();
-  await offline.getByText("Offline — reconnect to sync your workspace.",{exact:true}).waitFor();
+  await offline.getByText("Offline. Reconnect to catch up.",{exact:true}).waitFor();
   assert.equal(await offline.getByText("Online workspace data",{exact:true}).count(),0,"offline shell does not cache workspace content");
   await offline.setViewportSize({width:390,height:844});
   if (process.env.SHELL_SCREENSHOT) await offline.screenshot({path:process.env.SHELL_SCREENSHOT+"-offline.png"});
@@ -172,7 +172,7 @@ try {
   await page.getByText(stream.body,{exact:true}).waitFor();
   brokenAsset=null;
   await page.evaluate(async()=> (await navigator.serviceWorker.getRegistration()).update());
-  await page.getByText("A new version is available.",{exact:true}).waitFor();
+  await page.getByText("New version ready.",{exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>window.__shellFixtureBuild),"a","activation never reloads an open page");
   assert.equal(await draft.inputValue(),"Keep my unsent draft");
   stream.body+=" — still streaming after deploy";

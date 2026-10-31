@@ -93,7 +93,7 @@ try {
       // Hover tools live above the article border: containment must not clip them.
       await row(222).hover();
       if (process.env.BENCH_SCREENSHOT) await page.screenshot({path:`${process.env.BENCH_SCREENSHOT}-${thread ? "thread" : "channel"}-actions.png`});
-      const action = row(222).getByRole("button", {name:"Reference message", exact:true});
+      const action = row(222).getByRole("button", {name:"Quote", exact:true});
       await action.click();
       assert.ok((await page.evaluate(() => window.__rowProbe[location.search.includes("thread") ? "replyDraft" : "draft"])).includes(id(222)));
 

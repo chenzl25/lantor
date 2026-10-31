@@ -86,7 +86,7 @@ export const MessageRow = memo(function MessageRow({
     : deletedAgent ? <AgentAvatar agent={deletedAgent} size="md" title={`@${deletedAgent.handle} has been deleted`} />
     : ownerAvatar ? <AgentAvatar agent={ownerAvatar} size="md" showStatus={false} />
     : <div className="avatar">{message.sender_name.slice(0, 1)}</div>;
-  const saveLabel = saved ? "Unsave message" : "Save message";
+  const saveLabel = saved ? "Remove from Saved" : "Save";
   const contents = <>
     {avatar}
     <div className={channel ? "message-body" : root ? "thread-message-content" : "reply-body"}>
@@ -100,14 +100,14 @@ export const MessageRow = memo(function MessageRow({
           onClick={(event) => { event.stopPropagation(); act("save"); }}><Bookmark size={14} /></button>
       </div>}
       <div className="message-hover-actions" aria-label="Message actions">
-        <button type="button" data-tooltip="Reference" title="Reference message" aria-label="Reference message"
+        <button type="button" data-tooltip="Quote" title="Quote" aria-label="Quote"
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => { event.stopPropagation(); act("reference"); }}><Quote size={14} /></button>
         {channel && <button type="button" data-tooltip={replyCount > 0 ? "View thread" : "Reply in thread"}
-          title={replyCount > 0 ? "View thread replies" : "Reply in thread"} aria-label={replyCount > 0 ? "View thread replies" : "Reply in thread"}
+          title={replyCount > 0 ? "View replies" : "Reply in thread"} aria-label={replyCount > 0 ? "View replies" : "Reply in thread"}
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => { event.stopPropagation(); if (isPrimaryUnmodifiedClick(event)) act("thread"); }}><MessageSquare size={14} /></button>}
-        <button type="button" className={saved ? "saved" : ""} data-tooltip={saved ? "Unsave" : "Save"} title={saveLabel} aria-label={saveLabel}
+        <button type="button" className={saved ? "saved" : ""} data-tooltip={saved ? "Remove from Saved" : "Save"} title={saveLabel} aria-label={saveLabel}
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => { event.stopPropagation(); act("save"); }}><Bookmark size={14} /></button>
       </div>
@@ -119,9 +119,9 @@ export const MessageRow = memo(function MessageRow({
       </>}
       <MessageAttachments attachments={message.attachments} showImageThumbnails={showImageThumbnails} />
       <MessageArtifacts artifacts={message.artifacts} onOpenArtifact={actions.onArtifact} />
-      {message.delivery_state === "streaming" && !message.body.trim() && <div className="message-stream-state" role="status">{finalOnly ? "Waiting for final reply…" : "Responding…"}</div>}
-      {message.delivery_state === "sending" && <div className="message-stream-state sending">Sending...</div>}
-      {message.delivery_state === "error" && <div className="message-stream-state error">Response interrupted</div>}
+      {message.delivery_state === "streaming" && !message.body.trim() && <div className="message-stream-state" role="status">{finalOnly ? "Finishing up…" : "Writing…"}</div>}
+      {message.delivery_state === "sending" && <div className="message-stream-state sending">Sending…</div>}
+      {message.delivery_state === "error" && <div className="message-stream-state error">Reply stopped</div>}
       {channel && reply && <MessageReplySummary reply={reply} replyCount={replyCount} unreadReplyCount={unreadReplyCount} onOpenThread={() => act("thread")} />}
     </div>
   </>;

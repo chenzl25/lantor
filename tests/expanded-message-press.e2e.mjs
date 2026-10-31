@@ -63,7 +63,7 @@ try {
     if (surface === "thread") {
       const rootRow = page.locator(`.conversation [data-message-id="${root.id}"]`);
       await rootRow.hover();
-      await rootRow.getByRole("button", { name: "View thread replies", exact: true }).click();
+      await rootRow.getByRole("button", { name: "View replies", exact: true }).click();
     }
     const row = page.locator(`${surface === "channel" ? ".conversation" : ".thread"} [data-message-id="${surface === "channel" ? channelLong.id : threadLong.id}"]`);
     await row.getByRole("button", { name: "Show more", exact: true }).click();

@@ -223,7 +223,7 @@ function handleLinkClick(
 
   void openLink(href, attachment).catch((err) => {
     console.error("Failed to open external link", err);
-    reportUiError("Could not open link", err);
+    reportUiError("Couldn’t open link", err);
   });
 }
 

@@ -32,11 +32,11 @@ type AgentFormModalProps = {
 
 function RuntimePreflight({ check }: { check: RuntimeCheck | undefined }) {
   if (!check) {
-    return <div className="runtime-preflight pending">Checking local CLI...</div>;
+    return <div className="runtime-preflight pending">Checking…</div>;
   }
   return (
     <div className={`runtime-preflight ${check.available ? "ok" : "missing"}`}>
-      <strong>{check.available ? "Runtime ready" : "Runtime unavailable"}</strong>
+      <strong>{check.available ? "Ready" : "Not found on this Mac"}</strong>
       <span>{check.command || check.runtime}: {check.detail}</span>
     </div>
   );
@@ -87,7 +87,7 @@ export function AgentFormModal({
     : Boolean(form.handle.trim() || form.displayName.trim());
   const runtimeSelect = (
     <label className="agent-select-field">
-      <span>Runtime</span>
+      <span>Runs on</span>
       <div className="agent-select-control">
         <select value={form.runtime} onChange={(event) => onRuntimeChange(event.target.value)}>
           <option value="codex">Codex</option>
@@ -130,7 +130,7 @@ export function AgentFormModal({
   const codexControls = isCodex && (
     <>
       <label className="agent-select-field">
-        <span>Intelligence</span>
+        <span>Thinking</span>
         <div className="agent-select-control">
           <select
             value={form.reasoningEffort}
@@ -161,7 +161,7 @@ export function AgentFormModal({
   );
   const claudeControls = isClaude && (
     <label className="agent-select-field">
-      <span>Effort</span>
+      <span>Thinking</span>
       <div className="agent-select-control">
         <select
           value={form.reasoningEffort}
@@ -225,7 +225,7 @@ export function AgentFormModal({
                   ref={nameInputRef}
                   value={form.displayName}
                   onChange={(event) => onChange({ ...form, displayName: event.target.value })}
-                  placeholder="Agent name"
+                  placeholder="e.g. Reviewer"
                 />
               </label>
               {runtimeSelect}
@@ -242,7 +242,7 @@ export function AgentFormModal({
                 <ChevronDown size={16} aria-hidden="true" />
               </summary>
               <label>
-                <span>Workspace directory</span>
+                <span>Work folder</span>
                 <input
                   value={form.workingDirectory}
                   onChange={(event) => onChange({ ...form, workingDirectory: event.target.value })}
@@ -261,7 +261,7 @@ export function AgentFormModal({
                 ref={nameInputRef}
                 value={form.displayName}
                 onChange={(event) => onChange({ ...form, displayName: event.target.value })}
-                placeholder="Agent name"
+                placeholder="e.g. Reviewer"
               />
             </label>
             <div className="two-col">
@@ -282,7 +282,7 @@ export function AgentFormModal({
               </label>
             )}
             <label>
-              <span>Workspace directory</span>
+              <span>Work folder</span>
               <input
                 value={form.workingDirectory}
                 onChange={(event) => onChange({ ...form, workingDirectory: event.target.value })}

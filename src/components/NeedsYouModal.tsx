@@ -104,8 +104,8 @@ export function NeedsYouModal({
   const empty = decisions.length + reviews.length + stalled.length === 0;
   const summary = [
     decisions.length ? `${decisions.length} ${decisions.length === 1 ? "decision" : "decisions"}` : null,
-    reviews.length ? `${reviews.length} in review` : null,
-    stalled.length ? `${stalled.length} stalled` : null,
+    reviews.length ? `${reviews.length} to review` : null,
+    stalled.length ? `${stalled.length} stuck` : null,
   ].filter(Boolean).join(" · ");
 
   return (
@@ -119,11 +119,11 @@ export function NeedsYouModal({
           <div className="search-empty">
             <Hand size={34} />
             <h3>All clear</h3>
-            <p>Agent decisions, tasks waiting for your review, and stalled tasks show up here.</p>
+            <p>Decisions and reviews for you show up here.</p>
           </div>
         )}
 
-        <Section icon={<Hand size={16} />} title="Decisions" hint="Agents are blocked until you choose" count={decisions.length}>
+        <Section icon={<Hand size={16} />} title="Decisions" hint="Agents wait for your answer" count={decisions.length}>
           {decisions.map((decision) => {
             const requester = agents.find((agent) => agent.id === decision.requester_agent_id) ?? null;
             return (
@@ -142,13 +142,13 @@ export function NeedsYouModal({
           })}
         </Section>
 
-        <Section icon={<ClipboardCheck size={16} />} title="Awaiting your review" hint="Agents marked these ready" count={reviews.length}>
+        <Section icon={<ClipboardCheck size={16} />} title="To review" hint="Agents say these are done" count={reviews.length}>
           {reviews.map((item) => (
             <TaskRow key={item.task.id} item={item} agents={agents} onOpen={onOpenTask} onDone={markDone} />
           ))}
         </Section>
 
-        <Section icon={<Hourglass size={16} />} title="Stalled" hint="Active tasks with no movement for 3+ days" count={stalled.length}>
+        <Section icon={<Hourglass size={16} />} title="Stuck" hint="No progress in 3+ days" count={stalled.length}>
           {stalled.map((item) => (
             <TaskRow key={item.task.id} item={item} agents={agents} onOpen={onOpenTask} />
           ))}

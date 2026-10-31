@@ -145,7 +145,7 @@ export function MessageReferenceCard({
   const Icon = reference.kind === "thread" ? PanelRightOpen : MessageSquare;
   const preview = reference.message
     ? firstLinePreview(reference.message.body, compact ? 96 : 150)
-    : `Missing ${reference.kind} ${reference.id.slice(0, 8)}`;
+    : "Message not found";
   const className = [
     "message-reference-card",
     `reference-${reference.kind}`,
@@ -215,7 +215,7 @@ export function MessageReferenceCard({
         <button
           type="button"
           className="message-reference-remove"
-          aria-label={`Remove ${reference.kind} reference`}
+          aria-label="Remove quote"
           onClick={(event) => {
             event.stopPropagation();
             onRemove?.(reference.token);
@@ -246,7 +246,7 @@ export function MessageReferencePreview({
   const references = parseMessageReferences(text).map((reference) => resolveMessageReference(reference, messages, channels));
   if (references.length === 0) return null;
   return (
-    <div className="message-reference-preview-list" aria-label="Message references">
+    <div className="message-reference-preview-list" aria-label="Quotes">
       {references.map((reference) => (
         <MessageReferenceCard
           key={`${reference.kind}:${reference.id}`}

@@ -50,8 +50,8 @@ export function ThreadBrowserModal({
           {threads.length === 0 && (
             <div className="search-empty">
               <MessageSquare size={32} />
-              <h3>No active threads</h3>
-              <p>Threads appear here after a channel or DM message gets replies.</p>
+              <h3>No threads yet</h3>
+              <p>A thread starts when a message gets replies.</p>
             </div>
           )}
 
@@ -88,7 +88,7 @@ export function ThreadBrowserModal({
                 {thread.thread_followed && (
                   <button
                     className="thread-browser-follow"
-                    title="Stop following this thread"
+                    title="Unfollow"
                     onClick={(event) => {
                       event.stopPropagation();
                       onToggleFollow(thread);

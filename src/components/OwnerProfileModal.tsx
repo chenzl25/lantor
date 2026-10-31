@@ -53,7 +53,7 @@ export function OwnerProfileModal({
   return (
     <Modal
       open={open}
-      title="Edit Profile"
+      title="Edit profile"
       onClose={onCancel}
       width={560}
     >
@@ -67,7 +67,7 @@ export function OwnerProfileModal({
           </AvatarPicker>
           <div className="avatar-preview-copy">
             <strong>{previewAgent.display_name}</strong>
-            <span>{form.description.trim() || "local owner"}</span>
+            <span>{form.description.trim() || "You"}</span>
           </div>
         </div>
         <label>
@@ -76,7 +76,7 @@ export function OwnerProfileModal({
             autoFocus
             value={form.displayName}
             onChange={(event) => onChange({ ...form, displayName: event.target.value })}
-            placeholder="Display name"
+            placeholder="Your name"
           />
         </label>
         <label>
@@ -84,7 +84,7 @@ export function OwnerProfileModal({
           <textarea
             value={form.description}
             onChange={(event) => onChange({ ...form, description: event.target.value })}
-            placeholder="Short personal description"
+            placeholder="A line about you"
           />
         </label>
         <div className="modal-actions">

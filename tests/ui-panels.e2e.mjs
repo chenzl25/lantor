@@ -77,7 +77,7 @@ try {
     await row.waitFor(); assert.equal(await page.locator(".thread").count(), 0, "initial channel has no empty thread column");
     const openThread = async () => {
       if (page.viewportSize().width <= 760) await row.locator(".markdown-body").click();
-      else { await row.hover(); await row.getByRole("button", { name: "View thread replies", exact: true }).click(); }
+      else { await row.hover(); await row.getByRole("button", { name: "View replies", exact: true }).click(); }
       await page.locator(".thread").waitFor();
     };
     await openThread();
@@ -90,7 +90,7 @@ try {
     const box = selector => page.locator(selector).first().evaluate(e => { const r = e.getBoundingClientRect(); return { left: r.left, width: r.width }; });
     const shot = async label => { if (process.env.LANTOR_UI_SCREENSHOTS) { await mkdir(process.env.LANTOR_UI_SCREENSHOTS, { recursive: true }); await page.screenshot({ path: join(process.env.LANTOR_UI_SCREENSHOTS, `${label}-${name}.png`) }); } };
     const sideBySideThread = await box(".thread");
-    await threadHeader.getByRole("button", { name: "Expand thread", exact: true }).click();
+    await threadHeader.getByRole("button", { name: "Full width", exact: true }).click();
     await page.locator("main.app.thread-expanded").waitFor();
     assert.equal(await conversation.isVisible(), false, "expanded thread hides the conversation column");
     assert.equal(await page.locator(".thread-resize-handle").isVisible(), false, "no resize handle while expanded");
@@ -104,37 +104,37 @@ try {
     assert.equal(await page.evaluate(() => localStorage.getItem("lantor.threadExpanded")), "true", "expanded state is remembered");
     await openThread(); await page.locator("main.app.thread-expanded .thread").waitFor();
     await page.setViewportSize({ width: 1024, height: 960 });
-    assert.equal(await threadHeader.getByRole("button", { name: "Exit expanded thread", exact: true }).isVisible(), false, "compact layout has no expand toggle");
+    assert.equal(await threadHeader.getByRole("button", { name: "Show channel", exact: true }).isVisible(), false, "compact layout has no expand toggle");
     await page.setViewportSize({ width: 1440, height: 960 });
-    await threadHeader.getByRole("button", { name: "Exit expanded thread", exact: true }).click();
+    await threadHeader.getByRole("button", { name: "Show channel", exact: true }).click();
     await page.locator("main.app.thread-expanded").waitFor({ state: "detached" });
     assert.equal(await conversation.isVisible(), true);
-    await threadHeader.getByRole("button", { name: "Expand thread", exact: true }).click();
+    await threadHeader.getByRole("button", { name: "Full width", exact: true }).click();
     await page.locator("main.app.thread-expanded").waitFor();
-    await threadHeader.getByRole("button", { name: "Locate this thread in the channel", exact: true }).click();
+    await threadHeader.getByRole("button", { name: "Show in channel", exact: true }).click();
     await page.locator("main.app.thread-expanded").waitFor({ state: "detached" });
     assert.equal(await conversation.isVisible(), true, "Locate brings the channel back");
     assert.equal(await page.locator(".thread").count(), 1, "Locate keeps the thread open beside the channel");
     assert.equal(await page.evaluate(() => localStorage.getItem("lantor.threadExpanded")), "false");
     // Export as SVG previews in the file sheet first; Close goes back to the thread, Download saves the file.
     const exportSheet = page.getByRole("dialog", { name: "thread-in-ui-review.svg", exact: true });
-    await threadHeader.getByRole("button", { name: "Export thread as SVG", exact: true }).click();
+    await threadHeader.getByRole("button", { name: "Save as image", exact: true }).click();
     await exportSheet.locator("img.attachment-sheet-media").waitFor();
     assert.ok(await exportSheet.locator("img.attachment-sheet-media").evaluate(img => img.complete && img.naturalWidth > 0), "the SVG preview renders");
     await shot("thread-svg-preview");
     await exportSheet.getByRole("button", { name: "Close", exact: true }).click();
     await exportSheet.waitFor({ state: "detached" });
     assert.equal(await page.locator(".thread").count(), 1, "closing the preview keeps the thread open");
-    await threadHeader.getByRole("button", { name: "Export thread as SVG", exact: true }).click();
+    await threadHeader.getByRole("button", { name: "Save as image", exact: true }).click();
     const [svgDownload] = await Promise.all([page.waitForEvent("download"), exportSheet.getByRole("button", { name: "Download", exact: true }).click()]);
     assert.equal(svgDownload.suggestedFilename(), "thread-in-ui-review.svg");
     assert.match(await readFile(await svgDownload.path(), "utf8"), /^<\?xml[\s\S]*<foreignObject[\s\S]*Thread reply/);
     await page.keyboard.press("Escape"); await exportSheet.waitFor({ state: "detached" });
-    await page.getByRole("button", { name: "Open DM with @Hancock", exact: true }).click();
+    await page.getByRole("button", { name: "Message @Hancock", exact: true }).click();
     await page.locator(".dm-conversation").waitFor();
     await page.locator('.sidebar .channel').filter({ hasText: "ui-review" }).click();
-    await page.getByRole("button", { name: "Close thread panel" }).waitFor();
-    await page.getByRole("button", { name: "Close thread panel" }).click(); await page.locator(".thread").waitFor({ state: "detached" });
+    await page.getByRole("button", { name: "Close thread" }).waitFor();
+    await page.getByRole("button", { name: "Close thread" }).click(); await page.locator(".thread").waitFor({ state: "detached" });
     await page.reload(); await row.waitFor(); assert.equal(await page.locator(".thread").count(), 0, "closing is remembered across reload");
     await page.getByRole("button", { name: "Tasks", exact: true }).click();
     assert.equal(await page.locator(".task-queue-section").first().getAttribute("aria-label"), "In review tasks");
@@ -151,7 +151,7 @@ try {
     await page.setViewportSize({ width: 1440, height: 960 });
     await page.getByRole("button", { name: "In review tasks", exact: true }).click(); assert.equal(await page.locator(".task-row").count(), 2);
     await page.getByRole("button", { name: "Unassigned tasks", exact: true }).click(); assert.equal(await page.locator(".task-row").count(), 1);
-    await page.getByRole("button", { name: "Total tasks", exact: true }).click();
+    await page.getByRole("button", { name: "All tasks", exact: true }).click();
     await page.getByRole("button", { name: "Done 1", exact: true }).click();
     await page.getByRole("combobox", { name: "Task #5 status", exact: true }).selectOption("in_progress");
     await page.waitForFunction(() => document.querySelector('select[aria-label="Task #5 status"]')?.value === "in_progress");
@@ -164,7 +164,7 @@ try {
     await page.waitForTimeout(200);
     assert.ok(requests.some(r => r.path === "/api/update_task_title" && r.args.title === edited));
     await page.getByRole("button", { name: "Chat", exact: true }).click();
-    await page.getByRole("button", { name: "Open DM with @Hancock", exact: true }).click();
+    await page.getByRole("button", { name: "Message @Hancock", exact: true }).click();
     await page.locator(".dm-conversation").waitFor();
     assert.equal(await page.locator(".conversation .tabs").count(), 0);
     const composer = page.getByRole("button", { name: "Send message", exact: true });
@@ -219,10 +219,10 @@ try {
     await page.locator('.sidebar .channel').filter({ hasText: "ui-review" }).click();
     await openThread();
     await capture("thread-mobile-before-reference");
-    await page.getByRole("button", { name: "Thread actions", exact: true }).click();
+    await page.getByRole("button", { name: "Thread options", exact: true }).click();
     await capture("thread-mobile-menu");
-    assert.equal(await page.getByRole("menuitem", { name: "Export as SVG", exact: true }).count(), 1);
-    await page.getByRole("menuitem", { name: "Export as SVG", exact: true }).click();
+    assert.equal(await page.getByRole("menuitem", { name: "Save as image", exact: true }).count(), 1);
+    await page.getByRole("menuitem", { name: "Save as image", exact: true }).click();
     const mobileExport = page.getByRole("dialog", { name: "thread-in-ui-review.svg", exact: true });
     await mobileExport.locator("img.attachment-sheet-media").waitFor();
     // The preview is scaled down by transform (WebKit clips foreignObject in a downsized <img>) and fits the sheet.
@@ -236,12 +236,12 @@ try {
     await mobileExport.getByRole("button", { name: "Close", exact: true }).click();
     await mobileExport.waitFor({ state: "detached" });
     assert.equal(await page.locator(".thread").count(), 1, "closing the mobile preview returns to the thread");
-    await page.getByRole("button", { name: "Thread actions", exact: true }).click();
-    assert.equal(await page.getByRole("menuitem", { name: "Locate in channel", exact: true }).count(), 1);
+    await page.getByRole("button", { name: "Thread options", exact: true }).click();
+    assert.equal(await page.getByRole("menuitem", { name: "Show in channel", exact: true }).count(), 1);
     for (const name of ["Expand all messages", "Fold all messages", "Reference thread"]) {
       assert.equal(await page.getByRole("menuitem", { name, exact: true }).count(), 0);
     }
-    await page.getByRole("button", { name: "Thread actions", exact: true }).click();
+    await page.getByRole("button", { name: "Thread options", exact: true }).click();
     await page.locator(".reply-composer textarea").fill(`[[thread:${root.id}]]`);
     await page.waitForTimeout(200);
     assert.equal(await page.locator(".thread").count(), 1, "reference kind must not become another fullscreen panel");
@@ -260,7 +260,7 @@ try {
     await capture("thread-mobile-referenced");
     await page.locator(".reply-composer textarea").evaluate(e => { e.focus(); e.setSelectionRange(e.value.length, e.value.length); });
     await page.keyboard.insertText("Keep this unsaved reply");
-    await preview.getByRole("button", { name: "Remove thread reference", exact: true }).click();
+    await preview.getByRole("button", { name: "Remove quote", exact: true }).click();
     await preview.waitFor({ state: "detached" });
     assert.equal((await page.locator(".reply-composer textarea").inputValue()).trim(), "Keep this unsaved reply");
     await page.locator(".reply-composer textarea").fill("");
@@ -270,7 +270,8 @@ try {
     const channelComposer = page.locator(".conversation .composer textarea");
     await channelComposer.fill(`Context [[thread:${root.id}]] and [[message:${reply.id}]]`);
     assert.equal(await page.locator(".thread").count(), 0, "a channel draft reference must not create a thread panel");
-    await page.getByRole("button", { name: "Remove thread reference", exact: true }).click();
+    // Both chips are labelled "Remove quote"; the thread reference is first.
+    await page.getByRole("button", { name: "Remove quote", exact: true }).first().click();
     assert.equal(await channelComposer.inputValue(), `Context  and [[message:${reply.id}]]`);
     await channelComposer.fill(""); await channelComposer.blur();
     const referencedReply = { ...reply, body: `Attached [[thread:${root.id}]]` };

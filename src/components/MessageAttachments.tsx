@@ -50,7 +50,7 @@ async function openStoredAttachment(event: MouseEvent<HTMLAnchorElement>, attach
     await openExternalUrl(attachment.storage_path);
   } catch (error) {
     console.error("Failed to open attachment", error);
-    onNotice({ kind: "error", message: `Open failed: ${errorMessage(error)}` });
+    onNotice({ kind: "error", message: `Couldn’t open: ${errorMessage(error)}` });
   }
 }
 
@@ -70,7 +70,7 @@ async function downloadStoredAttachment(
       console.error("Failed to download attachment", error);
       onNotice({
         kind: "error",
-        message: `Download failed: ${errorMessage(error)}`,
+        message: `Couldn’t download: ${errorMessage(error)}`,
       });
     }
     return;
@@ -113,7 +113,7 @@ export function MessageAttachments({ attachments, showImageThumbnails }: Message
     try {
       await revealInFileManager(path);
     } catch (error) {
-      showDownloadNotice({ kind: "error", message: `Could not show the file: ${errorMessage(error)}` });
+      showDownloadNotice({ kind: "error", message: `Couldn’t show this file: ${errorMessage(error)}` });
     }
   }
 

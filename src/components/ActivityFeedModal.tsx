@@ -28,7 +28,7 @@ const FILTERS: { value: ActivityFeedFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "unread", label: "Unread" },
   { value: "mention", label: "Mentions" },
-  { value: "dm", label: "DMs" },
+  { value: "dm", label: "Direct" },
   { value: "thread", label: "Threads" },
 ];
 
@@ -237,7 +237,7 @@ export function ActivityFeedModal({
               disabled={filteredItems.length === 0}
               onClick={() => onDismissItems(filteredItems)}
             >
-              Dismiss all
+              Clear all
             </button>
           </>}
         />
@@ -269,8 +269,8 @@ export function ActivityFeedModal({
           {filteredItems.length === 0 && (
             <div className="search-empty">
               <Inbox size={34} />
-              <h3>No activity</h3>
-              <p>Agent messages from mentions, DMs, channels, and threads will appear here.</p>
+              <h3>Nothing new</h3>
+              <p>Agent replies to you show up here.</p>
             </div>
           )}
 
@@ -296,7 +296,7 @@ export function ActivityFeedModal({
               >
                 <div className="activity-feed-swipe-action" aria-hidden="true">
                   <X size={18} />
-                  <span>Dismiss</span>
+                  <span>Clear</span>
                 </div>
                 <article
                   className={rowClassName}

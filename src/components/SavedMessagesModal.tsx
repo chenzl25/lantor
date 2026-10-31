@@ -39,8 +39,8 @@ export function SavedMessagesModal({
           {items.length === 0 && (
             <div className="search-empty">
               <Bookmark size={34} />
-              <h3>No saved messages</h3>
-              <p>Use the message save action or right-click a message to track it here.</p>
+              <h3>Nothing saved</h3>
+              <p>Tap the bookmark on a message to keep it.</p>
             </div>
           )}
 
@@ -79,11 +79,11 @@ export function SavedMessagesModal({
                     {item.sender_name || "Saved message"}
                   </h3>
                   <p>{firstLines(markdownPreviewText(item.body), 3) || "Empty message"}</p>
-                  <small>Open source</small>
+                  <small>Go to message</small>
                 </div>
                 <button
                   className="activity-feed-check saved-unsave"
-                  title="Unsave"
+                  title="Remove"
                   onClick={(event) => {
                     event.stopPropagation();
                     onUnsaveItem(item);

@@ -195,7 +195,7 @@ export function Sidebar({
             type="button"
             className="mobile-owner-trigger"
             ref={mobileOwnerTriggerRef}
-            aria-label="Open owner menu"
+            aria-label="Your menu"
             aria-haspopup="menu"
             aria-expanded={showMobileOwnerMenu}
             title={data.owner_profile.display_name}
@@ -204,12 +204,12 @@ export function Sidebar({
             <AgentAvatar agent={ownerAsAvatarAgent(data.owner_profile)} size="md" showStatus={false} />
           </button>
           {showMobileOwnerMenu && (
-            <div className="mobile-owner-menu" role="menu" aria-label="Owner menu">
+            <div className="mobile-owner-menu" role="menu" aria-label="Your menu">
               <div className="mobile-owner-summary" role="presentation">
                 <AgentAvatar agent={ownerAsAvatarAgent(data.owner_profile)} size="md" showStatus={false} />
                 <span>
                   <strong>{data.owner_profile.display_name}</strong>
-                  <small>{data.owner_profile.description || "local owner"}</small>
+                  <small>{data.owner_profile.description || "You"}</small>
                 </span>
               </div>
               <button
@@ -223,7 +223,7 @@ export function Sidebar({
                 <Bookmark size={18} />
                 <span>
                   <strong>Saved{savedUnreadCount > 0 ? ` (${savedUnreadCount} new)` : ""}</strong>
-                  <small>Messages you bookmarked</small>
+                  <small>Messages you saved</small>
                 </span>
               </button>
               <button
@@ -237,7 +237,7 @@ export function Sidebar({
                 <UserRound size={18} />
                 <span>
                   <strong>Edit profile</strong>
-                  <small>Name, avatar, and description</small>
+                  <small>Your name, avatar and bio</small>
                 </span>
               </button>
               <button
@@ -251,7 +251,7 @@ export function Sidebar({
                 <Settings size={18} />
                 <span>
                   <strong>Settings</strong>
-                  <small>Appearance and app preferences</small>
+                  <small>Theme, text size and more</small>
                 </span>
               </button>
             </div>
@@ -312,8 +312,8 @@ export function Sidebar({
                 <button
                   type="button"
                   className={channelSortMode === "name" ? "active" : ""}
-                  title="Sort channels by name"
-                  aria-label="Sort channels by name"
+                  title="A–Z"
+                  aria-label="A–Z"
                   aria-pressed={channelSortMode === "name"}
                   onClick={() => setChannelSortMode("name")}
                 >
@@ -322,15 +322,15 @@ export function Sidebar({
                 <button
                   type="button"
                   className={channelSortMode === "recent" ? "active" : ""}
-                  title="Sort channels by recent messages"
-                  aria-label="Sort channels by recent messages"
+                  title="Latest first"
+                  aria-label="Latest first"
                   aria-pressed={channelSortMode === "recent"}
                   onClick={() => setChannelSortMode("recent")}
                 >
                   <Clock3 size={15} />
                 </button>
               </div>
-              <button onClick={openCreateChannelModal} title="Create channel"><Plus size={18} /></button>
+              <button onClick={openCreateChannelModal} title="New channel"><Plus size={18} /></button>
             </div>
           </div>
           <div className="sidebar-section-scroll">
@@ -353,7 +353,7 @@ export function Sidebar({
                 <p>No channels yet.</p>
                 <button type="button" onClick={openCreateChannelModal}>
                   <Plus size={16} />
-                  <span>Create first channel</span>
+                  <span>New channel</span>
                 </button>
               </div>
             )}
@@ -367,13 +367,13 @@ export function Sidebar({
                 className={`section-collapse ${collapsedSections.dms ? "collapsed" : ""}`}
                 onClick={() => toggleSection("dms")}
                 aria-expanded={!collapsedSections.dms}
-                title={collapsedSections.dms ? (showDmConversations ? "Show DMs" : "Show agents") : (showDmConversations ? "Hide DMs" : "Hide agents")}
+                title={collapsedSections.dms ? (showDmConversations ? "Show direct messages" : "Show agents") : (showDmConversations ? "Hide direct messages" : "Hide agents")}
               >
                 <ChevronDown size={14} />
               </button>
-              <span>{showDmConversations ? "DMs" : "Agents"}</span>
+              <span>{showDmConversations ? "Direct messages" : "Agents"}</span>
             </div>
-            {!showDmConversations && <button onClick={openCreateAgentModal} title="Add agent"><Plus size={18} /></button>}
+            {!showDmConversations && <button onClick={openCreateAgentModal} title="New agent"><Plus size={18} /></button>}
           </div>
           <div className="sidebar-section-scroll">
             {!collapsedSections.dms && dmRows.map(({ agent, item }) => {
@@ -386,7 +386,7 @@ export function Sidebar({
                   <button
                     type="button"
                     className="dm-avatar-shell"
-                    aria-label={`Open DM with @${agent.handle}`}
+                    aria-label={`Message @${agent.handle}`}
                     onClick={() => openAgentDmTarget(agent, item)}
                   >
                     <AgentAvatar agent={agent} size="sm" />
@@ -407,8 +407,8 @@ export function Sidebar({
                     <button
                       type="button"
                       className="dm-detail-trigger"
-                      title={`View @${agent.handle} details`}
-                      aria-label={`View @${agent.handle} details`}
+                      title={`@${agent.handle}’s profile`}
+                      aria-label={`@${agent.handle}’s profile`}
                       onClick={() => openAgentDetail(agent)}
                     >
                       <UserRound size={15} />
@@ -425,7 +425,7 @@ export function Sidebar({
                   <p>No agents yet.</p>
                   <button type="button" onClick={openCreateAgentModal}>
                     <UserRound size={16} />
-                    <span>Create first agent</span>
+                    <span>New agent</span>
                   </button>
                 </div>
               )
@@ -439,7 +439,7 @@ export function Sidebar({
           <AgentAvatar agent={ownerAsAvatarAgent(data.owner_profile)} size="md" showStatus={false} />
           <div>
             <strong>{data.owner_profile.display_name}</strong>
-            <span>{data.owner_profile.description || "local owner"}</span>
+            <span>{data.owner_profile.description || "You"}</span>
           </div>
         </button>
         <button

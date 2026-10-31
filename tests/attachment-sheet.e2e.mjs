@@ -107,7 +107,7 @@ try {
       // Download button and an agent's snapshot link open the same sheet.
       await page.getByRole("button", { name: "Download report.pdf", exact: true }).click();
       const report = sheet(page, "report.pdf");
-      await report.getByText("No preview for this file here.").waitFor();
+      await report.getByText("Can’t preview this file.").waitFor();
       if (process.env.LANTOR_UI_SCREENSHOTS) {
         await page.evaluate(() => document.documentElement.dataset.theme = "dark");
         await page.screenshot({ path: join(process.env.LANTOR_UI_SCREENSHOTS, `sheet-pdf-dark-${name}.png`) });

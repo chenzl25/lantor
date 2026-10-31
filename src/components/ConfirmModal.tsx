@@ -44,7 +44,7 @@ export function ConfirmModal({
         <div className="modal-actions">
           <button type="button" onClick={onCancel} disabled={submitting}>Cancel</button>
           <button type="button" className="danger" onClick={confirm} disabled={submitting}>
-            {submitting ? "Deleting..." : confirmLabel}
+            {submitting ? "Deleting…" : confirmLabel}
           </button>
         </div>
       </div>

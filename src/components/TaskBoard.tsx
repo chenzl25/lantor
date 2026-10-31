@@ -55,7 +55,7 @@ export function TaskBoard({ tasks, agents, assigneeOptions, titleDrafts, onTitle
     || (value === "review" && task.status === "in_review")
     || (value === "unassigned" && task.status !== "done" && !task.assignee_id);
   const filters: Array<{ value: Filter; label: string }> = [
-    { value: "all", label: "Total" }, { value: "active", label: "Active" },
+    { value: "all", label: "All" }, { value: "active", label: "Active" },
     { value: "review", label: "In review" }, { value: "unassigned", label: "Unassigned" },
   ];
   const visible = tasks.filter((task) => matches(task, filter));
@@ -68,8 +68,8 @@ export function TaskBoard({ tasks, agents, assigneeOptions, titleDrafts, onTitle
       </button>)}
     </section>
     {visible.length === 0 ? <div className="empty-state">
-      <LayoutList size={34} /><h2>{tasks.length ? "No matching tasks" : "No tasks in this channel"}</h2>
-      <p>{tasks.length ? "Choose another filter to see more tasks." : "Create tracked work from chat by sending a message in Task mode."}</p>
+      <LayoutList size={34} /><h2>{tasks.length ? "Nothing here" : "No tasks yet"}</h2>
+      <p>{tasks.length ? "Try another filter." : "Turn on Task before sending to create one."}</p>
     </div> : <div className="task-sections">
       {statuses.map((status) => {
         const group = visible.filter((task) => task.status === status);

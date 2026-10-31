@@ -28,11 +28,11 @@ type SearchModalProps = {
 const SCOPE_OPTIONS: Array<{ value: SearchScope; label: string }> = [
   { value: "all", label: "All" },
   { value: "messages", label: "Messages" },
-  { value: "channels", label: "Channels & DMs" },
+  { value: "channels", label: "Chats" },
   { value: "tasks", label: "Tasks" },
   { value: "agents", label: "Agents" },
-  { value: "activity", label: "Activity" },
-  { value: "artifacts", label: "Artifacts" },
+  { value: "activity", label: "Work log" },
+  { value: "artifacts", label: "Reports" },
   { value: "wiki", label: "Wiki" },
 ];
 
@@ -48,9 +48,9 @@ const GROUPS = [
   { key: "messages", title: "Messages", kinds: new Set(["message", "reply"]), icon: MessageSquare },
   { key: "tasks", title: "Tasks", kinds: new Set(["task"]), icon: LayoutList },
   { key: "agents", title: "Agents", kinds: new Set(["agent"]), icon: Bot },
-  { key: "activity", title: "Activity & agent turns", kinds: new Set(["activity", "request"]), icon: Activity },
+  { key: "activity", title: "Work log", kinds: new Set(["activity", "request"]), icon: Activity },
   { key: "artifacts", title: "Artifacts", kinds: new Set(["artifact"]), icon: FileText },
-  { key: "wiki", title: "Channel wikis", kinds: new Set(["wiki"]), icon: BookOpen },
+  { key: "wiki", title: "Wikis", kinds: new Set(["wiki"]), icon: BookOpen },
 ];
 
 function escapeRegExp(value: string) {
@@ -60,7 +60,7 @@ function escapeRegExp(value: string) {
 function resultLabel(kind: string) {
   if (kind === "dm") return "DM";
   if (kind === "reply") return "Thread";
-  if (kind === "request") return "Agent turn";
+  if (kind === "request") return "Agent reply";
   if (kind === "artifact") return "Artifact";
   if (kind === "wiki") return "Wiki";
   return kind;
@@ -130,7 +130,7 @@ export function SearchModal({
             ref={inputRef}
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
-            placeholder="Search channels, DMs, messages, tasks, agents..."
+            placeholder="Search everything"
           />
           {query.trim() && (
             <IconButton label="Clear search" onClick={onClear}>
@@ -173,7 +173,7 @@ export function SearchModal({
             <div className="search-empty">
               <Search size={32} />
               <h3>Search {APP_DISPLAY_NAME}</h3>
-              <p>Use filters to narrow by message, channel, task, agent, agent turn, or activity.</p>
+              <p>Use filters to narrow it down.</p>
             </div>
           )}
 
@@ -189,7 +189,7 @@ export function SearchModal({
             <div className="search-empty">
               <Search size={32} />
               <h3>No results</h3>
-              <p>Try a broader type filter or a longer time range.</p>
+              <p>Try fewer filters or a longer time.</p>
             </div>
           )}
 

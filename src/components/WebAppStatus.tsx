@@ -11,8 +11,8 @@ export function WebAppStatus() {
   useEffect(() => startAppShell(() => setUpdateAvailable(true)), []);
   if (isTauriRuntime() || (online && !updateAvailable)) return null;
   return <aside className="web-app-status" role="status" aria-live="polite">
-    {!online && <span><WifiOff size={16} aria-hidden="true" /> Offline — reconnect to sync your workspace.</span>}
-    {updateAvailable && <span><RefreshCw size={16} aria-hidden="true" /><span>A new version is available.</span>
+    {!online && <span><WifiOff size={16} aria-hidden="true" /> Offline. Reconnect to catch up.</span>}
+    {updateAvailable && <span><RefreshCw size={16} aria-hidden="true" /><span>New version ready.</span>
       <button type="button" onClick={() => window.location.reload()}>Refresh</button>
     </span>}
   </aside>;
