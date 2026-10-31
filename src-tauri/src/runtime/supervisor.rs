@@ -14,6 +14,7 @@ use super::{
     process::{
         effective_launch_command, start_process_agent, terminate_process_group, ProcessAgentLaunch,
     },
+    streaming::settle_orphaned_streaming_messages,
     surface::{
         append_claude_thread_context_with_seq, same_codex_surface, CodexActiveTurnScheduleState,
     },
@@ -407,6 +408,7 @@ pub(crate) async fn run_supervisor() -> CommandResult<()> {
     migrate(&pool).await.map_err(to_string)?;
 
     mark_orphaned_agent_runs(&pool).await?;
+    settle_orphaned_streaming_messages(&pool).await?;
     recover_supervisor_commands_at_startup(&pool).await?;
     let codex_registry = WarmCodexRegistry::default();
     let claude_registry = WarmClaudeRegistry::default();
@@ -464,6 +466,7 @@ async fn run_supervisor_iteration(
         *last_maintenance = Instant::now();
         start_due_provider_probes(pool).await?;
         close_orphaned_agent_runs(pool, codex_registry, claude_registry).await?;
+        settle_orphaned_streaming_messages(pool).await?;
     }
     schedule_queued_work_items(pool, codex_registry, claude_registry).await?;
     let mut processed_command = false;
