@@ -18,7 +18,10 @@ use crate::events::activity::{
 use crate::freshness::advance_agent_target_watermark_for_work_item;
 use crate::prompts::{build_claude_streaming_prompt, claude_system_prompt, prepend_memory_context};
 use crate::runtime::{
-    lifecycle::{fail_work_item_before_run, mark_agent_runtime_failed, WarmStartFailure},
+    lifecycle::{
+        create_run_in_tx, fail_work_item_before_run, mark_agent_runtime_failed,
+        mark_run_running_in_tx, NewRun, WarmStartFailure,
+    },
     memory_context_update,
     process::{
         classify_agent_output_activity, cleanup_failed_warm_start,
@@ -34,10 +37,7 @@ use crate::runtime::{
 use crate::subscription_status::{
     claude_subscription_status_from_event, persist_agent_subscription_status,
 };
-use crate::ui_notifications::{
-    enqueue_ui_agent_run_changed_in_tx, enqueue_ui_work_item_changed_in_tx, notify_supervisor_wake,
-    reconcile_work_item_change,
-};
+use crate::ui_notifications::{notify_supervisor_wake, reconcile_work_item_change};
 use crate::usage::{record_run_usage, usage_from_runtime_event};
 
 mod interrupt;
@@ -610,54 +610,18 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
     };
 
     let mut transaction = pool.begin().await.map_err(to_string)?;
-    let run_id: Uuid = sqlx::query_scalar(
-        r#"
-        insert into agent_runs (agent_id, work_item_id, command, working_directory, status, log)
-        values ($1, $2, $3, $4, 'starting', $5)
-        returning id
-        "#,
+    let run_id = create_run_in_tx(
+        &mut transaction,
+        &NewRun {
+            agent_id,
+            work_item_id,
+            command: &command_text,
+            working_directory: &working_directory,
+            log: &initial_log,
+        },
     )
-    .bind(agent_id)
-    .bind(work_item_id)
-    .bind(&command_text)
-    .bind(&working_directory)
-    .bind(initial_log)
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-    enqueue_ui_agent_run_changed_in_tx(&mut transaction, run_id, "run_created").await?;
-
-    if let Some(work_item_id) = work_item_id {
-        sqlx::query(
-            r#"
-            update agent_work_items
-            set status = 'running',
-                run_id = $2,
-                updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-            where id = $1
-            "#,
-        )
-        .bind(work_item_id)
-        .bind(run_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-        enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "work_item_running")
-            .await?;
-    }
-
-    sqlx::query("update agent_runs set status = 'running', pid = $2 where id = $1")
-        .bind(run_id)
-        .bind(runtime.pid)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-    sqlx::query("update agents set status = 'running' where id = $1")
-        .bind(agent_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-    enqueue_ui_agent_run_changed_in_tx(&mut transaction, run_id, "run_running").await?;
+    .await?;
+    mark_run_running_in_tx(&mut transaction, agent_id, run_id, runtime.pid).await?;
     transaction.commit().await.map_err(to_string)?;
     if let Some(work_item_id) = work_item_id {
         reconcile_work_item_change(pool, work_item_id, "work_item_running").await?;

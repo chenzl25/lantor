@@ -8,7 +8,7 @@ use crate::{
     events::activity::record_agent_activity,
     launch_agent,
     models::LaunchAgentStatus,
-    runtime::lifecycle::mark_run_stopping_in_tx,
+    runtime::lifecycle::{mark_agent_queued_in_tx, mark_run_stopping_in_tx},
     ui_notifications::{enqueue_ui_event, enqueue_ui_event_in_tx, notify_supervisor_wake, UiEvent},
 };
 
@@ -57,11 +57,7 @@ pub(crate) async fn start_agent_in_pool(pool: &SqlitePool, agent_id: Uuid) -> Co
     }
 
     let mut transaction = pool.begin().await.map_err(to_string)?;
-    sqlx::query("update agents set status = 'queued' where id = $1")
-        .bind(agent_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
+    mark_agent_queued_in_tx(&mut transaction, agent_id, false).await?;
     enqueue_ui_event_in_tx(
         &mut transaction,
         &UiEvent::Refresh {

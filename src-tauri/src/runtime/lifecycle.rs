@@ -1,11 +1,12 @@
 //! Lifecycle writes for agent runs, the work items they carry, and the agents
 //! running them.
 //!
-//! Every path that ends a run or a work item, or stops one, writes the new
-//! states here: the run, its work item and its agent move together in one
-//! transaction with their UI events. Callers decide the outcome; what follows
-//! a committed transition (task updates, reconciliation, the activity log)
-//! stays with them. See docs/agent-runtime.md#run-lifecycle.
+//! This module is the only code that changes their statuses. A run, its work
+//! item and its agent move together in one transaction with their UI events.
+//! Callers decide the outcome; what follows a committed transition (task
+//! updates, reconciliation, the activity log) stays with them. A test keeps
+//! status writes from appearing anywhere else. See
+//! docs/agent-runtime.md#run-lifecycle.
 
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use uuid::Uuid;
@@ -544,6 +545,296 @@ pub(crate) async fn finish_cancelling_work_item(
     transaction.commit().await.map_err(to_string)
 }
 
+/// Queues a start for an agent, in the caller's transaction. An agent whose
+/// work joins a turn that is already running stays running.
+pub(crate) async fn mark_agent_queued_in_tx(
+    transaction: &mut Transaction<'_, Sqlite>,
+    agent_id: Uuid,
+    joins_active_turn: bool,
+) -> CommandResult<()> {
+    sqlx::query("update agents set status = 'queued' where id = $1")
+        .bind(agent_id)
+        .execute(&mut **transaction)
+        .await
+        .map_err(to_string)?;
+    if joins_active_turn {
+        set_agent_status_in_tx(transaction, agent_id, "running").await?;
+    }
+    Ok(())
+}
+
+/// A run about to start: what it runs, where, and the request it carries.
+pub(crate) struct NewRun<'a> {
+    pub(crate) agent_id: Uuid,
+    pub(crate) work_item_id: Option<Uuid>,
+    pub(crate) command: &'a str,
+    pub(crate) working_directory: &'a str,
+    pub(crate) log: &'a str,
+}
+
+/// Creates a `starting` run in the caller's transaction and moves its work
+/// item, if any, to running on it.
+pub(crate) async fn create_run_in_tx(
+    transaction: &mut Transaction<'_, Sqlite>,
+    run: &NewRun<'_>,
+) -> CommandResult<Uuid> {
+    let run_id: Uuid = sqlx::query_scalar(
+        r#"
+        insert into agent_runs (agent_id, work_item_id, command, working_directory, status, log)
+        values ($1, $2, $3, $4, 'starting', $5)
+        returning id
+        "#,
+    )
+    .bind(run.agent_id)
+    .bind(run.work_item_id)
+    .bind(run.command)
+    .bind(run.working_directory)
+    .bind(run.log)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(to_string)?;
+    enqueue_ui_agent_run_changed_in_tx(transaction, run_id, "run_created").await?;
+    if let Some(work_item_id) = run.work_item_id {
+        mark_work_item_running_in_tx(transaction, work_item_id, run_id).await?;
+    }
+    Ok(run_id)
+}
+
+/// A run whose process is up: the run is running with its pid and so is the
+/// agent. Runs in the caller's transaction.
+pub(crate) async fn mark_run_running_in_tx(
+    transaction: &mut Transaction<'_, Sqlite>,
+    agent_id: Uuid,
+    run_id: Uuid,
+    pid: Option<i32>,
+) -> CommandResult<()> {
+    sqlx::query("update agent_runs set status = 'running', pid = $2 where id = $1")
+        .bind(run_id)
+        .bind(pid)
+        .execute(&mut **transaction)
+        .await
+        .map_err(to_string)?;
+    set_agent_status_in_tx(transaction, agent_id, "running").await?;
+    enqueue_ui_agent_run_changed_in_tx(transaction, run_id, "run_running").await
+}
+
+/// Starts a run for a Claude follow-up that the CLI took as its own turn: the
+/// run is created already running on the warm process.
+pub(crate) async fn start_follow_up_run(
+    pool: &SqlitePool,
+    run: &NewRun<'_>,
+    pid: Option<i32>,
+) -> CommandResult<Uuid> {
+    let mut transaction = pool.begin().await.map_err(to_string)?;
+    let run_id: Uuid = sqlx::query_scalar(
+        r#"
+        insert into agent_runs (agent_id, work_item_id, command, working_directory, status, log, pid)
+        values ($1, $2, $3, $4, 'running', $5, $6)
+        returning id
+        "#,
+    )
+    .bind(run.agent_id)
+    .bind(run.work_item_id)
+    .bind(run.command)
+    .bind(run.working_directory)
+    .bind(run.log)
+    .bind(pid)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(to_string)?;
+    enqueue_ui_agent_run_changed_in_tx(&mut transaction, run_id, "run_created").await?;
+    if let Some(work_item_id) = run.work_item_id {
+        mark_work_item_running_in_tx(&mut transaction, work_item_id, run_id).await?;
+    }
+    set_agent_status_in_tx(&mut transaction, run.agent_id, "running").await?;
+    enqueue_ui_agent_run_changed_in_tx(&mut transaction, run_id, "run_running").await?;
+    transaction.commit().await.map_err(to_string)?;
+    Ok(run_id)
+}
+
+/// Joins a work item to a running Codex turn as a steer.
+pub(crate) async fn join_work_item_to_run(
+    pool: &SqlitePool,
+    work_item_id: Uuid,
+    run_id: Uuid,
+) -> CommandResult<()> {
+    let mut transaction = pool.begin().await.map_err(to_string)?;
+    mark_work_item_running_in_tx(&mut transaction, work_item_id, run_id).await?;
+    transaction.commit().await.map_err(to_string)
+}
+
+/// A Codex steer that could not be sent goes back to the queue. Unlike a
+/// requeue after a turn, this leaves `completed_at` as it was.
+pub(crate) async fn return_steer_to_queue(
+    pool: &SqlitePool,
+    work_item_id: Uuid,
+) -> CommandResult<()> {
+    let mut transaction = pool.begin().await.map_err(to_string)?;
+    sqlx::query(
+        r#"
+        update agent_work_items
+        set status = 'queued',
+            run_id = null,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where id = $1
+        "#,
+    )
+    .bind(work_item_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(to_string)?;
+    enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "work_item_queued").await?;
+    transaction.commit().await.map_err(to_string)
+}
+
+/// Settles a Codex steer when the turn it joined ends: `done` or `cancelled`
+/// with that turn's run, or back to `queued` without one.
+pub(crate) async fn settle_codex_steer(
+    pool: &SqlitePool,
+    work_item_id: Uuid,
+    status: &str,
+    run_id: Option<Uuid>,
+    completed: bool,
+) -> CommandResult<()> {
+    let completed_at = if completed {
+        "strftime('%Y-%m-%dT%H:%M:%f+00:00','now')"
+    } else {
+        "null"
+    };
+    let mut transaction = pool.begin().await.map_err(to_string)?;
+    sqlx::query(&format!(
+        r#"
+        update agent_work_items
+        set status = $2,
+            run_id = $3,
+            completed_at = {completed_at},
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where id = $1
+        "#
+    ))
+    .bind(work_item_id)
+    .bind(status)
+    .bind(run_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(to_string)?;
+    enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "codex_turn_steer_result")
+        .await?;
+    transaction.commit().await.map_err(to_string)
+}
+
+/// A Claude follow-up the running turn consumed is done with that turn's run.
+pub(crate) async fn finish_merged_follow_up(
+    pool: &SqlitePool,
+    work_item_id: Uuid,
+    run_id: Uuid,
+) -> CommandResult<()> {
+    let mut transaction = pool.begin().await.map_err(to_string)?;
+    sqlx::query(
+        r#"
+        update agent_work_items
+        set status = 'done',
+            run_id = $2,
+            completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where id = $1
+        "#,
+    )
+    .bind(work_item_id)
+    .bind(run_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(to_string)?;
+    enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "claude_follow_up_merged")
+        .await?;
+    transaction.commit().await.map_err(to_string)
+}
+
+/// Moves a Claude follow-up's work item from `from` to `to`; false if it was
+/// not in `from`.
+pub(crate) async fn move_follow_up_status(
+    pool: &SqlitePool,
+    work_item_id: Uuid,
+    from: &str,
+    to: &str,
+    run_id: Option<Uuid>,
+    reason: &str,
+) -> CommandResult<bool> {
+    let mut transaction = pool.begin().await.map_err(to_string)?;
+    let updated = sqlx::query(
+        r#"
+        update agent_work_items
+        set status = $3,
+            run_id = $4,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where id = $1 and status = $2
+        "#,
+    )
+    .bind(work_item_id)
+    .bind(from)
+    .bind(to)
+    .bind(run_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(to_string)?
+    .rows_affected();
+    if updated == 0 {
+        return Ok(false);
+    }
+    enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, reason).await?;
+    transaction.commit().await.map_err(to_string)?;
+    Ok(true)
+}
+
+/// A work item whose agent chose not to reply visibly, unless it already
+/// failed or was cancelled.
+pub(crate) async fn mark_work_item_silent(
+    pool: &SqlitePool,
+    work_item_id: Uuid,
+) -> CommandResult<()> {
+    let mut transaction = pool.begin().await.map_err(to_string)?;
+    sqlx::query(
+        r#"
+        update agent_work_items
+        set status = 'silent',
+            completed_at = coalesce(completed_at, strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where id = $1
+          and status not in ('cancelled', 'failed')
+        "#,
+    )
+    .bind(work_item_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(to_string)?;
+    enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "work_item_silent").await?;
+    transaction.commit().await.map_err(to_string)
+}
+
+/// A work item whose reply was held back because newer messages arrived,
+/// unless it already failed, was cancelled or went silent. Runs in the
+/// caller's transaction, which also records the held reply.
+pub(crate) async fn mark_work_item_held_in_tx(
+    transaction: &mut Transaction<'_, Sqlite>,
+    work_item_id: Uuid,
+) -> CommandResult<()> {
+    sqlx::query(
+        r#"
+        update agent_work_items
+        set status = 'held',
+            completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where id = $1
+          and status not in ('cancelled', 'failed', 'silent')
+        "#,
+    )
+    .bind(work_item_id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(to_string)?;
+    enqueue_ui_work_item_changed_in_tx(transaction, work_item_id, "work_item_held").await
+}
+
 async fn close_run_in_tx(
     transaction: &mut Transaction<'_, Sqlite>,
     run_id: Uuid,
@@ -629,3 +920,29 @@ async fn requeue_work_item_in_tx(
     .map_err(to_string)?;
     enqueue_ui_work_item_changed_in_tx(transaction, work_item_id, reason).await
 }
+
+async fn mark_work_item_running_in_tx(
+    transaction: &mut Transaction<'_, Sqlite>,
+    work_item_id: Uuid,
+    run_id: Uuid,
+) -> CommandResult<()> {
+    sqlx::query(
+        r#"
+        update agent_work_items
+        set status = 'running',
+            run_id = $2,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where id = $1
+        "#,
+    )
+    .bind(work_item_id)
+    .bind(run_id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(to_string)?;
+    enqueue_ui_work_item_changed_in_tx(transaction, work_item_id, "work_item_running").await
+}
+
+#[cfg(test)]
+#[path = "../tests/runtime_lifecycle.rs"]
+mod tests;
