@@ -13,8 +13,8 @@ use super::{
     codex::{self, WarmCodexRegistry},
     lifecycle::{
         cancel_run_without_process, cancel_unfinished_work_item, close_orphaned_run,
-        close_orphaned_runs_at_startup, fail_work_item_before_run, idle_agent_waiting_for_login,
-        mark_run_stopping,
+        close_orphaned_runs_at_startup, fail_work_item_before_run,
+        idle_agent_after_start_command_in_tx, idle_agent_waiting_for_login, mark_run_stopping,
     },
     process::{
         effective_launch_command, start_process_agent, terminate_process_group, ProcessAgentLaunch,
@@ -293,21 +293,31 @@ pub(crate) async fn finish_supervisor_command(
         None => ("done", String::new()),
     };
 
-    sqlx::query(
+    let mut transaction = pool.begin().await.map_err(to_string)?;
+    let finished = sqlx::query(
         r#"
         update supervisor_commands
         set status = $2, error = $3, updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
         where id = $1
+        returning command_type, agent_id
         "#,
     )
     .bind(command_id)
     .bind(status)
     .bind(error)
-    .execute(pool)
+    .fetch_optional(&mut *transaction)
     .await
     .map_err(to_string)?;
-
-    Ok(())
+    // A start can end without a run (its request already finished, the budget
+    // is spent, the runtime would not start); its agent must not stay queued.
+    if let Some(row) = finished {
+        let command_type: String = row.get("command_type");
+        let agent_id: Option<Uuid> = row.get("agent_id");
+        if let (Some(agent_id), "start_agent") = (agent_id, command_type.as_str()) {
+            idle_agent_after_start_command_in_tx(&mut transaction, agent_id).await?;
+        }
+    }
+    transaction.commit().await.map_err(to_string)
 }
 
 pub(crate) async fn cleanup_supervisor_commands(pool: &SqlitePool) -> CommandResult<()> {
@@ -415,21 +425,30 @@ async fn run_supervisor_iteration(
             break;
         };
         processed_command = true;
-        let command_id = command.id;
         let pool = pool.clone();
         let codex_registry = codex_registry.clone();
         let claude_registry = claude_registry.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            let result =
-                process_supervisor_command(&pool, &codex_registry, &claude_registry, command).await;
-            if let Err(err) = finish_supervisor_command(&pool, command_id, result.err()).await {
-                eprintln!("failed to finish supervisor command {command_id}: {err}");
-            }
+            run_supervisor_command(&pool, &codex_registry, &claude_registry, command).await;
         });
     }
 
     Ok(processed_command)
+}
+
+/// Runs a claimed command and records how it ended.
+async fn run_supervisor_command(
+    pool: &SqlitePool,
+    codex_registry: &WarmCodexRegistry,
+    claude_registry: &WarmClaudeRegistry,
+    command: SupervisorCommand,
+) {
+    let command_id = command.id;
+    let result = process_supervisor_command(pool, codex_registry, claude_registry, command).await;
+    if let Err(err) = finish_supervisor_command(pool, command_id, result.err()).await {
+        eprintln!("failed to finish supervisor command {command_id}: {err}");
+    }
 }
 
 async fn should_schedule_queued_work_item(
@@ -1043,7 +1062,7 @@ mod tests {
 
     use super::{
         claim_next_supervisor_command, close_orphaned_agent_runs, load_channel_agent_roster,
-        recover_supervisor_commands_at_startup, supervisor_stop_run,
+        recover_supervisor_commands_at_startup, run_supervisor_command, supervisor_stop_run,
     };
     use crate::db::{db_connect_with_url, migrate};
     use crate::runtime::lifecycle::close_orphaned_runs_at_startup;
@@ -1745,6 +1764,167 @@ mod tests {
         .await;
         drop_test_schema(pool, database_path).await;
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn a_start_that_ends_without_a_run_returns_its_queued_agent_to_idle() {
+        let Some((pool, database_path)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            // A request cancelled after its start was queued is skipped.
+            let skipped = insert_test_agent(&pool, "skipped").await?;
+            queue_test_start(&pool, skipped, "cancelled").await?;
+            // A request whose agent spent its daily budget fails before a run.
+            let spent = insert_test_agent(&pool, "spent").await?;
+            sqlx::query("update agents set daily_budget_micros = 1 where id = $1")
+                .bind(spent)
+                .execute(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+            sqlx::query(
+                r#"
+                insert into agent_runs (agent_id, command, status, cost_micros, stopped_at)
+                values ($1, 'codex', 'exited', 1, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
+                "#,
+            )
+            .bind(spent)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            let over_budget = queue_test_start(&pool, spent, "queued").await?;
+            let cursor = latest_ui_event(&pool).await?;
+
+            run_pending_commands(&pool).await?;
+
+            for agent_id in [skipped, spent] {
+                assert_eq!(agent_status(&pool, agent_id).await?, "idle");
+            }
+            let work_status: String =
+                sqlx::query_scalar("select status from agent_work_items where id = $1")
+                    .bind(over_budget)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            assert_eq!(work_status, "failed");
+            assert_eq!(
+                refresh_reasons_since(&pool, cursor).await?,
+                ["agent_updated", "agent_updated"]
+            );
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, database_path).await;
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn a_start_that_ends_without_a_run_keeps_an_agent_another_start_or_run_needs() {
+        let Some((pool, database_path)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let codex_registry = WarmCodexRegistry::default();
+            let claude_registry = WarmClaudeRegistry::default();
+            // Two starts are queued; the first ending leaves the second.
+            let twice = insert_test_agent(&pool, "twice").await?;
+            queue_test_start(&pool, twice, "cancelled").await?;
+            queue_test_start(&pool, twice, "cancelled").await?;
+            let first = claim_next_supervisor_command(&pool)
+                .await?
+                .ok_or("no first command")?;
+            run_supervisor_command(&pool, &codex_registry, &claude_registry, first).await;
+            assert_eq!(agent_status(&pool, twice).await?, "queued");
+            let second = claim_next_supervisor_command(&pool)
+                .await?
+                .ok_or("no second command")?;
+            run_supervisor_command(&pool, &codex_registry, &claude_registry, second).await;
+            assert_eq!(agent_status(&pool, twice).await?, "idle");
+
+            // A live run settles its agent's status itself when it ends.
+            let busy = insert_test_agent(&pool, "busy").await?;
+            sqlx::query("insert into agent_runs (agent_id, command, status) values ($1, 'codex', 'running')")
+                .bind(busy)
+                .execute(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+            queue_test_start(&pool, busy, "cancelled").await?;
+            run_pending_commands(&pool).await?;
+            assert_eq!(agent_status(&pool, busy).await?, "queued");
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, database_path).await;
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    /// Queues a start for a work item with `work_status`, as an inbox wake does.
+    async fn queue_test_start(
+        pool: &SqlitePool,
+        agent_id: Uuid,
+        work_status: &str,
+    ) -> Result<Uuid, String> {
+        let work_item_id: Uuid = sqlx::query_scalar(
+            "insert into agent_work_items (agent_id, title, status) values ($1, 'request', $2) returning id",
+        )
+        .bind(agent_id)
+        .bind(work_status)
+        .fetch_one(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        sqlx::query(
+            "insert into supervisor_commands (command_type, agent_id, work_item_id) values ('start_agent', $1, $2)",
+        )
+        .bind(agent_id)
+        .bind(work_item_id)
+        .execute(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        sqlx::query("update agents set status = 'queued' where id = $1")
+            .bind(agent_id)
+            .execute(pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        Ok(work_item_id)
+    }
+
+    async fn run_pending_commands(pool: &SqlitePool) -> Result<(), String> {
+        let codex_registry = WarmCodexRegistry::default();
+        let claude_registry = WarmClaudeRegistry::default();
+        while let Some(command) = claim_next_supervisor_command(pool).await? {
+            run_supervisor_command(pool, &codex_registry, &claude_registry, command).await;
+        }
+        Ok(())
+    }
+
+    async fn agent_status(pool: &SqlitePool, agent_id: Uuid) -> Result<String, String> {
+        sqlx::query_scalar("select status from agents where id = $1")
+            .bind(agent_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|err| err.to_string())
+    }
+
+    async fn latest_ui_event(pool: &SqlitePool) -> Result<i64, String> {
+        sqlx::query_scalar("select coalesce(max(id), 0) from ui_events")
+            .fetch_one(pool)
+            .await
+            .map_err(|err| err.to_string())
+    }
+
+    async fn refresh_reasons_since(pool: &SqlitePool, cursor: i64) -> Result<Vec<String>, String> {
+        sqlx::query_scalar(
+            r#"
+            select json_extract(event_json, '$.reason')
+            from ui_events
+            where id > $1 and json_extract(event_json, '$.type') = 'refresh'
+            order by id
+            "#,
+        )
+        .bind(cursor)
+        .fetch_all(pool)
+        .await
+        .map_err(|err| err.to_string())
     }
 
     async fn test_pool() -> Option<(SqlitePool, String)> {
