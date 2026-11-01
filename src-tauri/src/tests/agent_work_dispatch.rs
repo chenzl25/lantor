@@ -1288,3 +1288,57 @@ async fn cancelling_each_request_state_writes_the_matching_lifecycle_state() {
     drop_test_schema(pool, schema).await;
     result.unwrap();
 }
+
+#[tokio::test]
+async fn owner_cancel_leaves_a_request_that_moved_on_untouched() {
+    use crate::runtime::lifecycle::{cancel_queued_work_item_in_tx, mark_work_item_cancelling};
+    use crate::test_support::{run_and_work_item_events, ui_event_cursor};
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "cancel-race-agent").await?;
+        let insert_work_item = |status: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Uuid>(
+                    "insert into agent_work_items (agent_id, title, status) values ($1, 'cancel me', $2) returning id",
+                )
+                .bind(agent_id)
+                .bind(status)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())
+            }
+        };
+        let status_of = |work_item_id: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, String>("select status from agent_work_items where id = $1")
+                    .bind(work_item_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())
+            }
+        };
+
+        // The owner's cancel read the first request as queued, but its turn
+        // started before the cancel wrote; it read the second as running, but
+        // that turn finished first. Neither may be overwritten.
+        let started = insert_work_item("running").await?;
+        let finished = insert_work_item("done").await?;
+        let cursor = ui_event_cursor(&pool).await?;
+        let mut transaction = pool.begin().await.map_err(|err| err.to_string())?;
+        assert!(!cancel_queued_work_item_in_tx(&mut transaction, started).await?);
+        transaction.commit().await.map_err(|err| err.to_string())?;
+        assert!(!mark_work_item_cancelling(&pool, finished, Uuid::new_v4()).await?);
+
+        assert_eq!(status_of(started).await?, "running");
+        assert_eq!(status_of(finished).await?, "done");
+        assert!(run_and_work_item_events(&pool, cursor).await?.is_empty());
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}

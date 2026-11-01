@@ -57,7 +57,9 @@ has one function per transition:
 - Orphans: the supervisor closes runs no process owns, at startup
   (`close_orphaned_runs_at_startup`) and while running (`close_orphaned_run`).
 - Stop and cancel: the run is marked stopping and its work item cancelling,
-  and whatever can no longer end on its own is finished.
+  and whatever can no longer end on its own is finished. An owner's cancel
+  writes only while the work item still has the status it read; a request
+  whose turn started or finished in between is read again.
 
 Each function updates the rows and enqueues their UI events in one
 transaction, or in the caller's transaction for the `_in_tx` variants. The
