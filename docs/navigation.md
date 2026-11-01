@@ -7,10 +7,12 @@ the tab (Chat, Tasks, GitHub, Wiki), the agent panel, the full-screen panel
 ## State
 
 `navigationReducer` in `src/navigation.ts` holds the navigation state that
-has moved out of `App()`: so far the agent panel (which agent is open and
-whether it was opened from phone Home). Each change is a named action, unit
-tested in `tests/navigation.test.ts`. The other fields are still `App()`
-state.
+has moved out of `App()`: so far which surfaces are open (Home, the thread
+panel, the agent panel and where it was opened from, the full-screen panel).
+Each change is a named action, unit tested in `tests/navigation.test.ts`; an
+action that opens one surface closes the ones it covers, for example
+`returnHome` closes everything above Home. The channel, active thread, tab and
+focused message are still `App()` state.
 
 ## Desktop history
 
