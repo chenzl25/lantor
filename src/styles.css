@@ -1034,7 +1034,7 @@ button,
   background: var(--accent-soft);
   color: var(--accent-soft-ink);
   font-size: 13px;
-  font-weight: 760;
+  font-weight: var(--type-weight-bold);
 }
 
 .sidebar-empty-cta button:hover,
@@ -2189,7 +2189,7 @@ button,
   background: rgba(10, 132, 255, 0.08);
   color: #1262b3;
   font-size: 13px;
-  font-weight: 760;
+  font-weight: var(--type-weight-bold);
 }
 
 .empty-state-action:hover {
@@ -3068,7 +3068,7 @@ button,
   flex: 0 0 auto;
   color: var(--accent);
   font-size: var(--type-size-meta, 12px);
-  font-weight: 700;
+  font-weight: var(--type-weight-bold);
 }
 
 .message-reference-hovercard.reference-thread .message-reference-hovercard-head strong {
@@ -8264,7 +8264,7 @@ body.resizing-column * {
   margin: -2px 0 0;
   color: #c91810;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: var(--type-weight-semibold);
   line-height: 1.35;
 }
 
@@ -10331,7 +10331,7 @@ body.resizing-column * {
   display: block;
   color: var(--ink-on-surface);
   font-size: 14px;
-  font-weight: 780;
+  font-weight: var(--type-weight-bold);
 }
 
 .channel-agent-modal-intro p {
@@ -10369,7 +10369,7 @@ body.resizing-column * {
   background: var(--accent-soft);
   color: var(--accent-soft-ink);
   font-size: 13px;
-  font-weight: 760;
+  font-weight: var(--type-weight-bold);
 }
 
 .channel-agent-empty-cta button:hover,
@@ -10438,7 +10438,7 @@ body.resizing-column * {
   background: var(--surface-elevated);
   color: var(--ink-on-surface-muted);
   font-size: 12px;
-  font-weight: 760;
+  font-weight: var(--type-weight-bold);
 }
 
 .channel-agent-option-state.selected {
@@ -13101,7 +13101,7 @@ body.resizing-column * {
 
 .wiki-byte-count.over-limit {
   color: var(--status-danger);
-  font-weight: 600;
+  font-weight: var(--type-weight-semibold);
 }
 
 .wiki-toolbar-actions {
@@ -13488,7 +13488,7 @@ body.resizing-column * {
   display: block;
   margin: 0;
   font-size: 1.02em;
-  font-weight: 700;
+  font-weight: var(--type-weight-bold);
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -13498,7 +13498,7 @@ body.resizing-column * {
   align-items: center;
   gap: 6px;
   font-size: 0.78em;
-  font-weight: 600;
+  font-weight: var(--type-weight-semibold);
   letter-spacing: 0.02em;
   text-transform: uppercase;
   color: var(--accent-soft-ink);
@@ -13515,7 +13515,7 @@ body.resizing-column * {
 
 .decision-card-kicker time,
 .decision-card-task {
-  font-weight: 500;
+  font-weight: var(--type-weight-medium);
   text-transform: none;
   letter-spacing: 0;
   color: var(--ink-muted);
@@ -13597,7 +13597,7 @@ body.resizing-column * {
   background: var(--surface-elevated);
   color: var(--ink-secondary);
   font-size: 0.82em;
-  font-weight: 700;
+  font-weight: var(--type-weight-bold);
 }
 
 .decision-option.selected .decision-option-key {
@@ -13621,7 +13621,7 @@ body.resizing-column * {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  font-weight: 600;
+  font-weight: var(--type-weight-semibold);
   overflow-wrap: anywhere;
 }
 
@@ -13635,7 +13635,7 @@ body.resizing-column * {
   color: var(--accent-soft-ink);
   font-size: 0.74em;
   font-style: normal;
-  font-weight: 600;
+  font-weight: var(--type-weight-semibold);
 }
 
 .decision-option-text small {
@@ -13668,7 +13668,7 @@ body.resizing-column * {
   background: transparent;
   color: var(--ink-muted);
   font-size: 0.86em;
-  font-weight: 600;
+  font-weight: var(--type-weight-semibold);
 }
 
 .decision-card-expand:hover {
@@ -13733,7 +13733,7 @@ body.resizing-column * {
   border-radius: 10px;
   font: inherit;
   font-size: 0.9em;
-  font-weight: 600;
+  font-weight: var(--type-weight-semibold);
   cursor: pointer;
 }
 
@@ -13820,7 +13820,7 @@ body.resizing-column * {
   background: var(--badge-bg);
   color: var(--badge-ink);
   font-size: 0.78em;
-  font-weight: 700;
+  font-weight: var(--type-weight-bold);
   line-height: 20px;
   text-align: center;
 }
@@ -13908,7 +13908,7 @@ body.resizing-column * {
 .needs-you-task-text strong {
   overflow: hidden;
   color: var(--ink-primary);
-  font-weight: 600;
+  font-weight: var(--type-weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -13976,7 +13976,7 @@ body.resizing-column * {
   color: var(--ink-secondary);
   font: inherit;
   font-size: 0.86em;
-  font-weight: 600;
+  font-weight: var(--type-weight-semibold);
   white-space: nowrap;
   cursor: pointer;
 }
@@ -14004,7 +14004,7 @@ body.resizing-column * {
   color: var(--status-success);
   font: inherit;
   font-size: 0.86em;
-  font-weight: 600;
+  font-weight: var(--type-weight-semibold);
   cursor: pointer;
 }
 
