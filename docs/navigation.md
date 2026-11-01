@@ -4,6 +4,14 @@
 the tab (Chat, Tasks, GitHub, Wiki), the agent panel, the full-screen panel
 (Search, Activity, Saved, Needs you) and, on phones, Home (the sidebar).
 
+## State
+
+`navigationReducer` in `src/navigation.ts` holds the navigation state that
+has moved out of `App()`: so far the agent panel (which agent is open and
+whether it was opened from phone Home). Each change is a named action, unit
+tested in `tests/navigation.test.ts`. The other fields are still `App()`
+state.
+
 ## Desktop history
 
 Above the phone breakpoint every view change writes one browser history entry,
