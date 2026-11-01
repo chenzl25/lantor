@@ -757,20 +757,6 @@ async fn refresh_inbox_wake_work_item(
     Ok(())
 }
 
-pub(crate) fn prepend_inbox_context(inbox_item_id: Uuid, kind: &str, context: &str) -> String {
-    let mut lines = vec![
-        "Agent inbox item:".to_owned(),
-        format!("id: {inbox_item_id}"),
-        format!("kind: {kind}"),
-        "decision: decide whether this inbox item needs a visible reply, a task claim/create, a reminder, a handoff, or a silent_reply.".to_owned(),
-    ];
-    if !context.trim().is_empty() {
-        lines.push(String::new());
-        lines.push(context.trim().to_owned());
-    }
-    lines.join("\n")
-}
-
 pub(crate) async fn sync_inbox_for_work_item(
     pool: &SqlitePool,
     work_item_id: Uuid,

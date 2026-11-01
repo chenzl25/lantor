@@ -5,7 +5,6 @@ use crate::{
     app::{AppState, CommandResult},
     application::inbox::{
         self as application, InboxItemTimestamp, InboxItemsRequest, MarkChannelReadRequest,
-        UpdateThreadFollowedRequest,
     },
 };
 
@@ -44,20 +43,4 @@ pub(crate) async fn mark_inbox_items_read(
 #[tauri::command]
 pub(crate) async fn mark_all_inbox_read(state: State<'_, AppState>) -> CommandResult<()> {
     application::mark_all_inbox_read(&state.pool).await
-}
-
-#[tauri::command]
-pub(crate) async fn update_thread_followed(
-    thread_root_id: Uuid,
-    followed: bool,
-    state: State<'_, AppState>,
-) -> CommandResult<()> {
-    application::update_thread_followed(
-        &state.pool,
-        UpdateThreadFollowedRequest {
-            thread_root_id,
-            followed,
-        },
-    )
-    .await
 }

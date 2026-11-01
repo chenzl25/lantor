@@ -13,7 +13,6 @@ use crate::{
     create_agent_inbox_item, ensure_agent_inbox_wake_work_item, AgentInboxItemInput,
 };
 
-use super::parse_due_at;
 use super::reminder_checks::{check_timeout, spawn_reminder_check, ReminderCheckJob};
 
 pub(super) async fn process_due_reminders(pool: &SqlitePool) -> CommandResult<()> {
@@ -530,71 +529,6 @@ pub(crate) async fn cancel_reminder_in_pool(
         &mut transaction,
         &UiEvent::Refresh {
             reason: "reminder_cancelled",
-        },
-    )
-    .await?;
-    transaction.commit().await.map_err(to_string)?;
-    Ok(())
-}
-
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn create_reminder(
-    channel_id: Option<Uuid>,
-    thread_root_id: Option<Uuid>,
-    message_id: Option<Uuid>,
-    title: String,
-    note: String,
-    due_at: String,
-    recurrence: String,
-    state: State<'_, AppState>,
-) -> CommandResult<Uuid> {
-    let due_at = parse_due_at(&due_at)?;
-    create_reminder_in_pool(
-        &state.pool,
-        None,
-        channel_id,
-        thread_root_id,
-        message_id,
-        &title,
-        &note,
-        due_at,
-        &recurrence,
-        ReminderLoopOptions::default(),
-    )
-    .await
-}
-
-#[tauri::command]
-pub(crate) async fn snooze_reminder(
-    reminder_id: Uuid,
-    minutes: i64,
-    state: State<'_, AppState>,
-) -> CommandResult<()> {
-    if !(1..=10_080).contains(&minutes) {
-        return Err("snooze minutes must be between 1 and 10080".to_owned());
-    }
-    let mut transaction = state.pool.begin().await.map_err(to_string)?;
-    sqlx::query(
-        r#"
-        update reminders
-        set status = 'scheduled',
-            due_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now','+' || $2 || ' minutes'),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id = $1 and status in ('scheduled', 'fired')
-        "#,
-    )
-    .bind(reminder_id)
-    .bind(minutes)
-    .execute(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-    let snooze_detail = format!("{minutes} minutes");
-    insert_reminder_event(&mut *transaction, reminder_id, "snoozed", &snooze_detail).await?;
-    enqueue_ui_event_in_tx(
-        &mut transaction,
-        &UiEvent::Refresh {
-            reason: "reminder_snoozed",
         },
     )
     .await?;
