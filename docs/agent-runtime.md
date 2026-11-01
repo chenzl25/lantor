@@ -27,6 +27,28 @@ Stdout-command runtimes are still supported for custom scripts. They can print
 one line to stdout with the `LANTOR_EVENT ` prefix followed by JSON. Non-matching
 stdout and stderr are preserved only in the run log.
 
+## Run Lifecycle
+
+A run, the work item it carries, and its agent each have a status, and they
+change together. `src-tauri/src/runtime/lifecycle.rs` writes every transition
+that ends or stops a run or a work item:
+
+- A warm turn ends (`end_turn`) or a cold process exits (`end_cold_run`).
+- A launch fails: a cold process cannot spawn (`fail_cold_launch`), a warm turn
+  fails before it starts (`fail_warm_start`), a work item fails before any run
+  (`fail_work_item_before_run`), or a warm runtime cannot spawn
+  (`mark_agent_runtime_failed`).
+- The supervisor closes runs no process owns, at startup
+  (`close_orphaned_runs_at_startup`) and while running (`close_orphaned_run`).
+- A stop or cancel marks the run stopping and its work item cancelling, and
+  finishes whatever can no longer end on its own.
+
+Each function updates the rows and enqueues their UI events in one
+transaction. The caller picks the outcome and does what follows the commit:
+task status, reconciliation, and the activity log. Starting a run and taking
+follow-ups into a running turn still write their statuses in the runtime
+modules.
+
 ## Context Tools
 
 The supervisor injects `LANTOR_CONTEXT_TOOL` for context access and narrow

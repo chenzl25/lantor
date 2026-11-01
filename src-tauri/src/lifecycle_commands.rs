@@ -8,10 +8,8 @@ use crate::{
     events::activity::record_agent_activity,
     launch_agent,
     models::LaunchAgentStatus,
-    ui_notifications::{
-        enqueue_ui_agent_run_changed_in_tx, enqueue_ui_event, enqueue_ui_event_in_tx,
-        notify_supervisor_wake, UiEvent,
-    },
+    runtime::lifecycle::mark_run_stopping_in_tx,
+    ui_notifications::{enqueue_ui_event, enqueue_ui_event_in_tx, notify_supervisor_wake, UiEvent},
 };
 
 #[tauri::command]
@@ -156,17 +154,7 @@ pub(crate) async fn stop_agent(run_id: Uuid, state: State<'_, AppState>) -> Comm
     .execute(&mut *transaction)
     .await
     .map_err(to_string)?;
-    sqlx::query("update agent_runs set status = 'stopping' where id = $1")
-        .bind(run_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-    enqueue_ui_agent_run_changed_in_tx(&mut transaction, run_id, "run_stopping").await?;
-    sqlx::query("update agents set status = 'stopping' where id = $1")
-        .bind(agent_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
+    mark_run_stopping_in_tx(&mut transaction, agent_id, run_id).await?;
     enqueue_ui_event_in_tx(
         &mut transaction,
         &UiEvent::Refresh {

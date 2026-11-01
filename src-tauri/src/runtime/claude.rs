@@ -18,11 +18,12 @@ use crate::events::activity::{
 use crate::freshness::advance_agent_target_watermark_for_work_item;
 use crate::prompts::{build_claude_streaming_prompt, claude_system_prompt, prepend_memory_context};
 use crate::runtime::{
+    lifecycle::{fail_work_item_before_run, mark_agent_runtime_failed, WarmStartFailure},
     memory_context_update,
     process::{
         classify_agent_output_activity, cleanup_failed_warm_start,
         configure_agent_context_tool_env, configure_agent_identity_env, terminate_process_group,
-        truncate_activity_detail, upsert_runtime_thread_id, WarmStartFailure,
+        truncate_activity_detail, upsert_runtime_thread_id,
     },
     runtime_environment_changed,
     streaming::{
@@ -367,11 +368,7 @@ async fn spawn_warm_claude_runtime(
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(err) => {
-            sqlx::query("update agents set status = 'error' where id = $1")
-                .bind(agent_id)
-                .execute(pool)
-                .await
-                .map_err(to_string)?;
+            mark_agent_runtime_failed(pool, agent_id).await?;
             record_agent_activity(
                 pool,
                 Some(agent_id),
@@ -511,27 +508,7 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
         Ok(runtime) => runtime,
         Err(err) => {
             if let Some(work_item_id) = work_item_id {
-                let mut transaction = pool.begin().await.map_err(to_string)?;
-                sqlx::query(
-                    r#"
-                    update agent_work_items
-                    set status = 'failed',
-                        completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-                        updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-                    where id = $1
-                    "#,
-                )
-                .bind(work_item_id)
-                .execute(&mut *transaction)
-                .await
-                .map_err(to_string)?;
-                enqueue_ui_work_item_changed_in_tx(
-                    &mut transaction,
-                    work_item_id,
-                    "work_item_failed",
-                )
-                .await?;
-                transaction.commit().await.map_err(to_string)?;
+                fail_work_item_before_run(pool, work_item_id, "work_item_failed").await?;
                 reconcile_work_item_change(pool, work_item_id, "work_item_failed").await?;
             }
             return Err(err);

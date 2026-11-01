@@ -16,7 +16,7 @@ use super::{steer::settle_claude_follow_ups, ClaudeSurface, WarmClaudeRuntime};
 use crate::app::{to_string, CommandResult};
 use crate::events::activity::record_agent_activity;
 use crate::runtime::{
-    process::{cleanup_failed_warm_start, WarmStartFailure},
+    lifecycle::WarmStartFailure, process::cleanup_failed_warm_start,
     streaming::delete_streaming_agent_message_by_key,
 };
 

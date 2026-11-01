@@ -72,3 +72,37 @@ pub(crate) async fn insert_test_channel(pool: &SqlitePool, name: &str) -> Result
     .await
     .map_err(|err| err.to_string())
 }
+
+/// The id of the newest UI event, to read only the events a step writes.
+pub(crate) async fn ui_event_cursor(pool: &SqlitePool) -> Result<i64, String> {
+    sqlx::query_scalar("select coalesce(max(id), 0) from ui_events")
+        .fetch_one(pool)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// The run and work item events written after `cursor`, oldest first, as
+/// `type:reason:status` with the status each event carried.
+pub(crate) async fn run_and_work_item_events(
+    pool: &SqlitePool,
+    cursor: i64,
+) -> Result<Vec<String>, String> {
+    sqlx::query_scalar(
+        r#"
+        select json_extract(event_json, '$.type') || ':' ||
+               json_extract(event_json, '$.reason') || ':' ||
+               coalesce(
+                   json_extract(event_json, '$.run.status'),
+                   json_extract(event_json, '$.work_item.status')
+               )
+        from ui_events
+        where id > $1
+          and json_extract(event_json, '$.type') in ('agent_run_upsert', 'work_item_upsert')
+        order by id
+        "#,
+    )
+    .bind(cursor)
+    .fetch_all(pool)
+    .await
+    .map_err(|err| err.to_string())
+}

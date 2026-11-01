@@ -151,3 +151,242 @@ fn maps_unclassified_stderr_to_runtime_output_not_thinking() {
         ))
     );
 }
+
+async fn insert_cold_run(
+    pool: &sqlx::SqlitePool,
+    agent_id: uuid::Uuid,
+    run_status: &str,
+    work_status: &str,
+) -> Result<(uuid::Uuid, uuid::Uuid), String> {
+    let work_item_id: uuid::Uuid = sqlx::query_scalar(
+        "insert into agent_work_items (agent_id, title, status) values ($1, 'cold', $2) returning id",
+    )
+    .bind(agent_id)
+    .bind(work_status)
+    .fetch_one(pool)
+    .await
+    .map_err(|err| err.to_string())?;
+    let run_id: uuid::Uuid = sqlx::query_scalar(
+        "insert into agent_runs (agent_id, work_item_id, command, status) values ($1, $2, 'true', $3) returning id",
+    )
+    .bind(agent_id)
+    .bind(work_item_id)
+    .bind(run_status)
+    .fetch_one(pool)
+    .await
+    .map_err(|err| err.to_string())?;
+    sqlx::query("update agent_work_items set run_id = $2 where id = $1")
+        .bind(work_item_id)
+        .bind(run_id)
+        .execute(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+    Ok((run_id, work_item_id))
+}
+
+/// Run status, exit code, agent status, work item status, and whether the
+/// run and the work item recorded when they stopped.
+async fn cold_run_state(
+    pool: &sqlx::SqlitePool,
+    agent_id: uuid::Uuid,
+    run_id: uuid::Uuid,
+    work_item_id: uuid::Uuid,
+) -> Result<(String, Option<i32>, String, String, bool, bool), String> {
+    let (run_status, exit_code, run_stopped): (String, Option<i32>, bool) = sqlx::query_as(
+        "select status, exit_code, stopped_at is not null from agent_runs where id = $1",
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|err| err.to_string())?;
+    let agent_status: String = sqlx::query_scalar("select status from agents where id = $1")
+        .bind(agent_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+    let (work_status, work_completed): (String, bool) = sqlx::query_as(
+        "select status, completed_at is not null from agent_work_items where id = $1",
+    )
+    .bind(work_item_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|err| err.to_string())?;
+    Ok((
+        run_status,
+        exit_code,
+        agent_status,
+        work_status,
+        run_stopped,
+        work_completed,
+    ))
+}
+
+#[tokio::test]
+async fn cold_process_exit_settles_run_agent_and_work_item_together() {
+    use crate::test_support::{
+        drop_test_schema, insert_test_agent, run_and_work_item_events, test_pool, ui_event_cursor,
+    };
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        // (exit code, run status before exit, work status before exit) ->
+        // (run status, exit code, agent status, work status)
+        let cases = [
+            (
+                (0, "running", "running"),
+                ("exited", Some(0), "idle", "done"),
+            ),
+            (
+                (3, "running", "running"),
+                ("stopped", Some(3), "idle", "failed"),
+            ),
+            (
+                (0, "running", "cancelling"),
+                ("exited", Some(0), "idle", "cancelled"),
+            ),
+            (
+                (0, "running", "silent"),
+                ("exited", Some(0), "idle", "silent"),
+            ),
+            (
+                (3, "running", "silent"),
+                ("stopped", Some(3), "idle", "failed"),
+            ),
+            (
+                (0, "failed", "running"),
+                ("failed", None, "error", "failed"),
+            ),
+        ];
+        for (index, ((exit_code, run_status, work_status), expected)) in
+            cases.into_iter().enumerate()
+        {
+            let agent_id = insert_test_agent(&pool, &format!("cold-exit-{index}")).await?;
+            sqlx::query("update agents set status = 'running' where id = $1")
+                .bind(agent_id)
+                .execute(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+            let (run_id, work_item_id) =
+                insert_cold_run(&pool, agent_id, run_status, work_status).await?;
+            let child = tokio::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("exit {exit_code}"))
+                .spawn()
+                .map_err(|err| err.to_string())?;
+            let cursor = ui_event_cursor(&pool).await?;
+
+            super::wait_for_agent_run(
+                pool.clone(),
+                agent_id,
+                run_id,
+                Some(work_item_id),
+                Vec::new(),
+                child,
+            )
+            .await;
+
+            let (expected_run, expected_exit, expected_agent, expected_work) = expected;
+            assert_eq!(
+                cold_run_state(&pool, agent_id, run_id, work_item_id).await?,
+                (
+                    expected_run.to_owned(),
+                    expected_exit,
+                    expected_agent.to_owned(),
+                    expected_work.to_owned(),
+                    true,
+                    true,
+                ),
+                "case {index}"
+            );
+            assert_eq!(
+                run_and_work_item_events(&pool, cursor).await?,
+                [
+                    format!("agent_run_upsert:run_finished:{expected_run}"),
+                    format!("work_item_upsert:work_item_finished:{expected_work}"),
+                ],
+                "case {index}"
+            );
+        }
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn cold_launch_failure_fails_run_agent_and_work_item_together() {
+    use crate::test_support::{
+        drop_test_schema, insert_test_agent, run_and_work_item_events, test_pool, ui_event_cursor,
+    };
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "cold-launch").await?;
+        let work_item_id: uuid::Uuid = sqlx::query_scalar(
+            "insert into agent_work_items (agent_id, title, status) values ($1, 'cold', 'queued') returning id",
+        )
+        .bind(agent_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        let cursor = ui_event_cursor(&pool).await?;
+
+        // A working directory that does not exist makes the spawn fail.
+        let error = super::start_process_agent(
+            &pool,
+            super::ProcessAgentLaunch {
+                agent_id,
+                work_item_id: Some(work_item_id),
+                handle: "cold-launch".to_owned(),
+                working_directory: "/nonexistent/lantor-cold-launch-test".to_owned(),
+                command_text: "true".to_owned(),
+                environment_variables: String::new(),
+                work_item_prompt: String::new(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(!error.is_empty());
+
+        let run_id: uuid::Uuid =
+            sqlx::query_scalar("select run_id from agent_work_items where id = $1")
+                .bind(work_item_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        assert_eq!(
+            cold_run_state(&pool, agent_id, run_id, work_item_id).await?,
+            (
+                "failed".to_owned(),
+                None,
+                "error".to_owned(),
+                "failed".to_owned(),
+                true,
+                true,
+            )
+        );
+        let log: String = sqlx::query_scalar("select log from agent_runs where id = $1")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        assert!(log.starts_with("$ true\n"), "{log}");
+        assert!(log.contains("failed to start process: "), "{log}");
+        assert_eq!(
+            run_and_work_item_events(&pool, cursor).await?,
+            [
+                "agent_run_upsert:run_created:starting",
+                "work_item_upsert:work_item_running:running",
+                "agent_run_upsert:run_failed:failed",
+                "work_item_upsert:work_item_failed:failed",
+            ]
+        );
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}

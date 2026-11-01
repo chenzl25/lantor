@@ -24,11 +24,12 @@ use crate::prompts::{
     build_codex_streaming_prompt, codex_developer_instructions, prepend_memory_context,
 };
 use crate::runtime::{
+    lifecycle::{mark_agent_runtime_failed, WarmStartFailure},
     memory_context_update,
     process::{
         classify_agent_output_activity, cleanup_failed_warm_start,
         configure_agent_context_tool_env, configure_agent_identity_env, load_runtime_thread_id,
-        terminate_process_group, upsert_runtime_thread_id, WarmStartFailure,
+        terminate_process_group, upsert_runtime_thread_id,
     },
     runtime_environment_changed,
     streaming::{
@@ -362,11 +363,7 @@ async fn spawn_warm_codex_runtime(
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(err) => {
-            sqlx::query("update agents set status = 'error' where id = $1")
-                .bind(agent_id)
-                .execute(pool)
-                .await
-                .map_err(to_string)?;
+            mark_agent_runtime_failed(pool, agent_id).await?;
             record_agent_activity(
                 pool,
                 Some(agent_id),

@@ -22,9 +22,8 @@ use crate::app::{to_string, CommandResult};
 use crate::events::activity::record_agent_activity;
 use crate::freshness::advance_agent_target_watermark_for_work_item;
 use crate::runtime::{
-    process::{cleanup_failed_warm_start, WarmStartFailure},
-    streaming::ensure_streaming_agent_message,
-    surface::same_codex_surface,
+    lifecycle::WarmStartFailure, process::cleanup_failed_warm_start,
+    streaming::ensure_streaming_agent_message, surface::same_codex_surface,
 };
 use crate::ui_notifications::{
     enqueue_ui_agent_run_changed_in_tx, enqueue_ui_work_item_changed_in_tx,

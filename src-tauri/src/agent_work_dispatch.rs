@@ -11,6 +11,9 @@ use crate::agent_routing::{resolve_agent_handle, upsert_agent_thread_subscriptio
 use crate::app::{to_string, AppState, CommandResult};
 use crate::channels::add_agent_to_channel;
 use crate::events::activity::record_agent_activity;
+use crate::runtime::lifecycle::{
+    cancel_queued_work_item_in_tx, finish_cancelling_work_item, mark_work_item_cancelling,
+};
 use crate::ui_notifications::{
     enqueue_ui_event_in_tx, enqueue_ui_work_item_changed_in_tx, notify_supervisor_wake,
     reconcile_work_item_change, UiEvent,
@@ -756,19 +759,6 @@ pub(crate) async fn cancel_agent_work_in_pool(
             let mut transaction = pool.begin().await.map_err(to_string)?;
             sqlx::query(
                 r#"
-                update agent_work_items
-                set status = 'cancelled',
-                    completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-                    updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-                where id = $1
-                "#,
-            )
-            .bind(work_item_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(to_string)?;
-            sqlx::query(
-                r#"
                 update supervisor_commands
                 set status = 'done',
                     error = 'cancelled',
@@ -780,12 +770,7 @@ pub(crate) async fn cancel_agent_work_in_pool(
             .execute(&mut *transaction)
             .await
             .map_err(to_string)?;
-            enqueue_ui_work_item_changed_in_tx(
-                &mut transaction,
-                work_item_id,
-                "work_item_cancelled",
-            )
-            .await?;
+            cancel_queued_work_item_in_tx(&mut transaction, work_item_id).await?;
             transaction.commit().await.map_err(to_string)?;
             reconcile_work_item_change(pool, work_item_id, "work_item_cancelled").await?;
         }
@@ -793,26 +778,7 @@ pub(crate) async fn cancel_agent_work_in_pool(
             let Some(run_id) = run_id else {
                 return Err("running agent request does not have a run id".to_owned());
             };
-            let mut transaction = pool.begin().await.map_err(to_string)?;
-            sqlx::query(
-                r#"
-                update agent_work_items
-                set status = 'cancelling',
-                    updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-                where id = $1
-                "#,
-            )
-            .bind(work_item_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(to_string)?;
-            enqueue_ui_work_item_changed_in_tx(
-                &mut transaction,
-                work_item_id,
-                "work_item_cancelling",
-            )
-            .await?;
-            transaction.commit().await.map_err(to_string)?;
+            mark_work_item_cancelling(pool, work_item_id).await?;
             reconcile_work_item_change(pool, work_item_id, "work_item_cancelling").await?;
             let pending_stop: Option<Uuid> = sqlx::query_scalar(
                 r#"
@@ -887,27 +853,7 @@ pub(crate) async fn cancel_agent_work_in_pool(
             if run_live || stop_pending {
                 return Ok(());
             }
-            let mut transaction = pool.begin().await.map_err(to_string)?;
-            sqlx::query(
-                r#"
-                update agent_work_items
-                set status = 'cancelled',
-                    completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-                    updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-                where id = $1 and status = 'cancelling'
-                "#,
-            )
-            .bind(work_item_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(to_string)?;
-            enqueue_ui_work_item_changed_in_tx(
-                &mut transaction,
-                work_item_id,
-                "work_item_cancelled",
-            )
-            .await?;
-            transaction.commit().await.map_err(to_string)?;
+            finish_cancelling_work_item(pool, work_item_id).await?;
             reconcile_work_item_change(pool, work_item_id, "work_item_cancelled").await?;
         }
         other => return Err(format!("cannot cancel agent request with status {other}")),

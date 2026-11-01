@@ -8,6 +8,7 @@ use crate::events::activity::{record_agent_activity, work_status_title};
 use crate::freshness::advance_agent_target_watermark_for_work_item;
 use crate::provider_auth::{record_provider_auth_failure, record_provider_turn_success};
 use crate::runtime::{
+    lifecycle::{end_turn, TurnEnd},
     process::{terminate_process_group, upsert_runtime_thread_id},
     streaming::{
         consume_streaming_agent_control_lines, delete_streaming_agent_message_by_key,
@@ -16,7 +17,6 @@ use crate::runtime::{
     },
     turn_outcome::{
         finished_work_status, keep_first_error, resolve_warm_turn_outcome, retry_transient_sqlite,
-        write_turn_terminal_state, TurnTerminalState,
     },
 };
 use crate::ui_notifications::{
@@ -289,9 +289,9 @@ pub(super) async fn finish_warm_codex_active_turn(
     // the run later; the remaining steps still run.
     keep_first_error(
         &mut first_error,
-        write_turn_terminal_state(
+        end_turn(
             pool,
-            &TurnTerminalState {
+            &TurnEnd {
                 agent_id,
                 agent_status: outcome.agent_status,
                 run_id: active.run_id,
