@@ -1,21 +1,13 @@
 use sqlx::SqlitePool;
-use tauri::State;
 use uuid::Uuid;
 
 use crate::{
     agent_work_dispatch::dispatch_agent_restart_backlog,
-    app::{to_string, AppState, CommandResult},
+    app::{to_string, CommandResult},
     events::activity::record_agent_activity,
-    launch_agent,
-    models::LaunchAgentStatus,
     runtime::lifecycle::mark_agent_queued_in_tx,
-    ui_notifications::{enqueue_ui_event, enqueue_ui_event_in_tx, notify_supervisor_wake, UiEvent},
+    ui_notifications::{enqueue_ui_event_in_tx, notify_supervisor_wake, UiEvent},
 };
-
-#[tauri::command]
-pub(crate) async fn start_agent(agent_id: Uuid, state: State<'_, AppState>) -> CommandResult<()> {
-    start_agent_in_pool(&state.pool, agent_id).await
-}
 
 pub(crate) async fn start_agent_in_pool(pool: &SqlitePool, agent_id: Uuid) -> CommandResult<()> {
     let active_run: Option<Uuid> = sqlx::query_scalar(
@@ -121,41 +113,4 @@ pub(crate) async fn start_agent_in_pool(pool: &SqlitePool, agent_id: Uuid) -> Co
     .await?;
 
     Ok(())
-}
-
-#[tauri::command]
-pub(crate) async fn install_supervisor_service(
-    state: State<'_, AppState>,
-) -> CommandResult<LaunchAgentStatus> {
-    let status = launch_agent::install_supervisor_service(state.db_url())?;
-    let _ = enqueue_ui_event(
-        &state.pool,
-        &UiEvent::Refresh {
-            reason: "supervisor_service_installed",
-        },
-    )
-    .await;
-    Ok(status)
-}
-
-#[tauri::command]
-pub(crate) async fn uninstall_supervisor_service(
-    state: State<'_, AppState>,
-) -> CommandResult<LaunchAgentStatus> {
-    let status = launch_agent::uninstall_supervisor_service()?;
-
-    let mut transaction = state.pool.begin().await.map_err(to_string)?;
-    sqlx::query("update supervisor_state set status = 'offline', updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where id = 1")
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-    enqueue_ui_event_in_tx(
-        &mut transaction,
-        &UiEvent::Refresh {
-            reason: "supervisor_service_uninstalled",
-        },
-    )
-    .await?;
-    transaction.commit().await.map_err(to_string)?;
-    Ok(status)
 }

@@ -6,12 +6,12 @@ use serde_json::Value;
 use sqlx::{
     sqlite::SqliteRow, Connection, Executor, Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
 };
-use tauri::{Emitter, State};
+use tauri::Emitter;
 use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::agent_inbox_wake::sync_inbox_for_work_item;
-use crate::app::{to_string, AppState, CommandResult};
+use crate::app::{to_string, CommandResult};
 use crate::message_store::load_message_patch_in_tx;
 use crate::models::{
     AgentActivity, AgentRunPatch, AgentSubscriptionStatus, AgentWorkItemPatch, Artifact,
@@ -416,14 +416,6 @@ pub(crate) async fn read_ui_event_replay(
             })
             .collect(),
     })
-}
-
-#[tauri::command]
-pub(crate) async fn replay_ui_events(
-    cursor: i64,
-    state: State<'_, AppState>,
-) -> CommandResult<UiEventReplay> {
-    load_ui_event_replay_from_cursor(&state.pool, cursor).await
 }
 
 pub(crate) fn spawn_ui_refresh_listener(app: tauri::AppHandle, pool: SqlitePool) {

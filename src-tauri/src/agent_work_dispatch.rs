@@ -1,6 +1,5 @@
 use serde_json::json;
 use sqlx::{Row, SqlitePool};
-use tauri::State;
 use uuid::Uuid;
 
 use crate::agent_inbox_wake::{
@@ -8,7 +7,7 @@ use crate::agent_inbox_wake::{
     ensure_agent_inbox_wake_work_item, AgentInboxItemInput,
 };
 use crate::agent_routing::{resolve_agent_handle, upsert_agent_thread_subscription};
-use crate::app::{to_string, AppState, CommandResult};
+use crate::app::{to_string, CommandResult};
 use crate::channels::add_agent_to_channel;
 use crate::events::activity::record_agent_activity;
 use crate::runtime::lifecycle::{
@@ -375,16 +374,6 @@ pub(crate) async fn try_claim_unassigned_task(
     Ok(Some(task_number))
 }
 
-#[tauri::command]
-pub(crate) async fn claim_task(
-    task_id: Uuid,
-    agent_id: Option<Uuid>,
-    expected_version: Option<i64>,
-    state: State<'_, AppState>,
-) -> CommandResult<()> {
-    claim_task_in_pool(&state.pool, task_id, agent_id, expected_version).await
-}
-
 pub(crate) async fn claim_task_in_pool(
     pool: &SqlitePool,
     task_id: Uuid,
@@ -548,14 +537,6 @@ pub(crate) async fn mark_task_after_work_item_finished(
     Ok(())
 }
 
-#[tauri::command]
-pub(crate) async fn cancel_agent_work(
-    work_item_id: Uuid,
-    state: State<'_, AppState>,
-) -> CommandResult<()> {
-    cancel_agent_work_in_pool(&state.pool, work_item_id).await
-}
-
 /// How many times a cancel rereads a request whose status keeps moving.
 const CANCEL_ATTEMPTS: usize = 3;
 
@@ -712,14 +693,6 @@ async fn try_cancel_agent_work(pool: &SqlitePool, work_item_id: Uuid) -> Command
     .await?;
 
     Ok(true)
-}
-
-#[tauri::command]
-pub(crate) async fn retry_agent_work(
-    work_item_id: Uuid,
-    state: State<'_, AppState>,
-) -> CommandResult<Uuid> {
-    retry_agent_work_in_pool(&state.pool, work_item_id).await
 }
 
 pub(crate) async fn retry_agent_work_in_pool(

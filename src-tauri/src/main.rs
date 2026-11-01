@@ -15,10 +15,10 @@ mod attachments;
 mod bootstrap;
 mod channel_wiki;
 mod channels;
-mod commands;
 mod context_tool;
 mod db;
 mod decision_store;
+mod desktop_api;
 mod domain;
 mod events;
 mod freshness;
@@ -57,51 +57,20 @@ use agent_inbox_wake::{
     load_inbox_wake_items_for_work_item, AgentInboxItemInput,
 };
 use agent_work_dispatch::{
-    cancel_agent_work, cancel_agent_work_in_pool, claim_task, claim_task_in_pool,
-    dispatch_task_assignment_to_agent, mark_task_after_work_item_finished, retry_agent_work,
-    retry_agent_work_in_pool, try_claim_unassigned_task,
+    cancel_agent_work_in_pool, claim_task_in_pool, dispatch_task_assignment_to_agent,
+    mark_task_after_work_item_finished, retry_agent_work_in_pool, try_claim_unassigned_task,
 };
-use agent_workspace::{agent_workspace_list, agent_workspace_read_file};
-use app::AppState;
 use attachments::spawn_attachment_garbage_collector;
-use commands::{
-    agents::{create_agent, delete_agent, update_agent, update_owner_profile},
-    artifacts::artifact_read,
-    bootstrap::bootstrap,
-    channels::{
-        create_channel, delete_channel, open_dm_with_agent, set_channel_agent_membership,
-        update_channel,
-    },
-    decisions::{answer_decision, dismiss_decision},
-    github::{
-        bind_github_repository, create_github_issue_task, create_github_review_task,
-        load_github_issue_detail, load_github_references, load_github_review_comparisons,
-        load_github_review_queue, lookup_github_references, mark_github_review_attention_read,
-        refresh_github_issue_queue, refresh_github_review_queue, rereview_github_pull_request,
-        set_github_reference_alias,
-    },
-    inbox::{dismiss_inbox_items, mark_all_inbox_read, mark_channel_read, mark_inbox_items_read},
-    messages::{
-        load_activity_messages, load_channel_messages, load_channel_previews, load_message,
-        load_older_channel_messages, search_messages, send_message, set_message_saved,
-    },
-    tasks::{update_task_status, update_task_title},
-    wiki::{load_channel_wiki, publish_channel_wiki, search_channel_wikis},
-};
 use context_tool::run_agent_context_tool;
 use db::{db_connect_with_url, db_url, migrate};
-use domain::{
-    reminders::{cancel_reminder, complete_reminder},
-    spawn_reminder_worker,
-};
-use lifecycle_commands::{install_supervisor_service, start_agent, uninstall_supervisor_service};
+use desktop_api::{api_request, DesktopApi};
+use domain::spawn_reminder_worker;
 use runtime::supervisor::run_supervisor;
 use system_commands::{
-    check_runtime, complete_startup_splash, download_attachment, open_external_url,
-    report_client_crash, reveal_in_file_manager, save_text_download,
+    complete_startup_splash, download_attachment, open_external_url, reveal_in_file_manager,
+    save_text_download,
 };
-use ui_notifications::{replay_ui_events, spawn_ui_events_pruner, spawn_ui_refresh_listener};
-use ui_state::{load_agent_detail, load_thread_messages, load_ui_state};
+use ui_notifications::{spawn_ui_events_pruner, spawn_ui_refresh_listener};
 
 const WINDOW_STATE_FILE: &str = "window-state.json";
 const MIN_RESTORED_WINDOW_WIDTH: f64 = 1180.0;
@@ -278,7 +247,7 @@ pub fn run() {
     let reminder_pool = pool.clone();
 
     tauri::Builder::default()
-        .manage(AppState::new(pool, state_db_url))
+        .manage(DesktopApi(web::desktop_api_router(pool, state_db_url)))
         .setup(move |app| {
             spawn_ui_refresh_listener(app.handle().clone(), reminder_pool.clone());
             spawn_shared_background_workers(reminder_pool.clone(), database_url.clone());
@@ -291,70 +260,12 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            agent_workspace_list,
-            agent_workspace_read_file,
-            bootstrap,
-            bind_github_repository,
-            artifact_read,
-            cancel_agent_work,
-            cancel_reminder,
-            check_runtime,
-            report_client_crash,
-            complete_reminder,
-            create_agent,
-            create_channel,
-            create_github_issue_task,
-            create_github_review_task,
-            claim_task,
-            delete_agent,
-            delete_channel,
-            install_supervisor_service,
-            dismiss_inbox_items,
-            mark_inbox_items_read,
-            mark_all_inbox_read,
-            mark_channel_read,
-            mark_github_review_attention_read,
-            open_dm_with_agent,
-            publish_channel_wiki,
+            api_request,
             complete_startup_splash,
             download_attachment,
-            save_text_download,
-            reveal_in_file_manager,
             open_external_url,
-            retry_agent_work,
-            replay_ui_events,
-            load_ui_state,
-            load_agent_detail,
-            load_thread_messages,
-            load_activity_messages,
-            load_channel_messages,
-            load_channel_previews,
-            load_channel_wiki,
-            load_message,
-            load_github_review_comparisons,
-            load_github_review_queue,
-            load_github_references,
-            lookup_github_references,
-            set_github_reference_alias,
-            load_github_issue_detail,
-            load_older_channel_messages,
-            search_messages,
-            search_channel_wikis,
-            refresh_github_review_queue,
-            refresh_github_issue_queue,
-            rereview_github_pull_request,
-            send_message,
-            set_message_saved,
-            set_channel_agent_membership,
-            start_agent,
-            uninstall_supervisor_service,
-            update_agent,
-            update_channel,
-            update_owner_profile,
-            update_task_title,
-            update_task_status,
-            answer_decision,
-            dismiss_decision
+            reveal_in_file_manager,
+            save_text_download
         ])
         .run(tauri::generate_context!())
         .expect("error while running Lantor");

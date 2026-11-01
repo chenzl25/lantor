@@ -1,9 +1,8 @@
 // Scoped invalidation reads: never load message history, run logs or artifact content.
-use crate::app::{to_string, AppState, CommandResult};
+use crate::app::{to_string, CommandResult};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use sqlx::SqlitePool;
-use tauri::State;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct UiStateRequest {
@@ -71,14 +70,6 @@ pub(crate) async fn load_ui_state_in_pool(
     Ok(Value::Object(patch))
 }
 
-#[tauri::command]
-pub(crate) async fn load_ui_state(
-    scopes: Vec<String>,
-    state: State<'_, AppState>,
-) -> CommandResult<Value> {
-    load_ui_state_in_pool(&state.pool, scopes).await
-}
-
 #[derive(serde::Serialize)]
 pub(crate) struct AgentDetail {
     agent: crate::models::Agent,
@@ -97,20 +88,4 @@ pub(crate) async fn load_agent_detail_in_pool(
         agent_work_items: crate::activity_store::load_agent_detail_work_items(pool, agent_id)
             .await?,
     })
-}
-
-#[tauri::command]
-pub(crate) async fn load_agent_detail(
-    agent_id: uuid::Uuid,
-    state: State<'_, AppState>,
-) -> CommandResult<AgentDetail> {
-    load_agent_detail_in_pool(&state.pool, agent_id).await
-}
-
-#[tauri::command]
-pub(crate) async fn load_thread_messages(
-    thread_root_id: uuid::Uuid,
-    state: State<'_, AppState>,
-) -> CommandResult<Vec<crate::models::Message>> {
-    crate::message_store::load_thread_messages_in_pool(&state.pool, thread_root_id).await
 }
