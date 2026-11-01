@@ -14,7 +14,8 @@ use uuid::Uuid;
 use crate::app::{to_string, CommandResult};
 use crate::runtime::turn_outcome::retry_transient_sqlite;
 use crate::ui_notifications::{
-    enqueue_ui_agent_run_changed_in_tx, enqueue_ui_work_item_changed_in_tx,
+    enqueue_ui_agent_run_changed_in_tx, enqueue_ui_event_in_tx, enqueue_ui_work_item_changed_in_tx,
+    UiEvent,
 };
 
 /// How a warm runtime start failed before its turn was actually sent.
@@ -235,17 +236,22 @@ pub(crate) async fn fail_work_item_before_run(
     transaction.commit().await.map_err(to_string)
 }
 
-/// A warm runtime process that could not be spawned flags its agent.
+/// A warm runtime process that could not be spawned flags its agent. No run
+/// exists yet to carry the change, so the UI is told to reload its agents.
 pub(crate) async fn mark_agent_runtime_failed(
     pool: &SqlitePool,
     agent_id: Uuid,
 ) -> CommandResult<()> {
-    sqlx::query("update agents set status = 'error' where id = $1")
-        .bind(agent_id)
-        .execute(pool)
-        .await
-        .map_err(to_string)?;
-    Ok(())
+    let mut transaction = pool.begin().await.map_err(to_string)?;
+    set_agent_status_in_tx(&mut transaction, agent_id, "error").await?;
+    enqueue_ui_event_in_tx(
+        &mut transaction,
+        &UiEvent::Refresh {
+            reason: "agent_updated",
+        },
+    )
+    .await?;
+    transaction.commit().await.map_err(to_string)
 }
 
 /// A queued agent whose provider needs a login goes back to idle; its request
