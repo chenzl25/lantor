@@ -28,10 +28,7 @@ pub(crate) async fn interrupt_warm_claude_run(
     agent_id: Uuid,
     run_id: Uuid,
 ) -> CommandResult<bool> {
-    let runtime = {
-        let runtimes = registry.runtimes.lock().await;
-        runtimes.get(&agent_id).cloned()
-    };
+    let runtime = registry.get(agent_id).await;
     let Some(runtime) = runtime else {
         return Ok(false);
     };

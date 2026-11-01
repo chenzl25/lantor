@@ -70,6 +70,9 @@ in [docs/development.md](docs/development.md).
   `src-tauri/src/runtime/lifecycle.rs`
   ([run lifecycle](docs/agent-runtime.md#run-lifecycle)); a test rejects
   status writes anywhere else.
+- Process handling shared by the Claude and Codex warm runtimes lives in
+  `src-tauri/src/runtime/warm.rs`; change it there rather than in each
+  provider.
 - A SQLite transaction that reads before it writes, and can run while
   another connection writes, begins with `BEGIN IMMEDIATE`. A deferred
   transaction can fail when it upgrades to a writer instead of waiting for the

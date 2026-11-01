@@ -9,6 +9,7 @@ use super::{
 };
 use crate::events::activity::{record_agent_activity, work_status_title};
 use crate::provider_auth::{record_provider_auth_failure, record_provider_turn_success};
+use crate::runtime::warm::load_work_item_status;
 use crate::runtime::{
     lifecycle::{end_turn, TurnEnd},
     process::{terminate_process_group, upsert_runtime_thread_id},
@@ -21,10 +22,7 @@ use crate::runtime::{
     },
 };
 use crate::ui_notifications::{notify_supervisor_wake, reconcile_work_item_change};
-use crate::{
-    app::{to_string, CommandResult},
-    mark_task_after_work_item_finished,
-};
+use crate::{app::CommandResult, mark_task_after_work_item_finished};
 
 pub(super) async fn finish_warm_claude_active_turn(
     pool: &SqlitePool,
@@ -282,15 +280,4 @@ pub(super) async fn finish_warm_claude_active_turn(
     );
     let _ = notify_supervisor_wake(pool).await;
     first_error.map_or(Ok(()), Err)
-}
-
-async fn load_work_item_status(
-    pool: &SqlitePool,
-    work_item_id: Uuid,
-) -> CommandResult<Option<String>> {
-    sqlx::query_scalar("select status from agent_work_items where id = $1")
-        .bind(work_item_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(to_string)
 }

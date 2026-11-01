@@ -1,4 +1,4 @@
-use std::{collections::HashMap, process::Stdio, sync::Arc, time::Instant};
+use std::{process::Stdio, sync::Arc, time::Instant};
 
 use serde_json::Value;
 use sqlx::{Row, SqlitePool};
@@ -24,20 +24,22 @@ use crate::runtime::{
     },
     memory_context_update,
     process::{
-        classify_agent_output_activity, cleanup_failed_warm_start,
-        configure_agent_context_tool_env, configure_agent_identity_env, terminate_process_group,
+        cleanup_failed_warm_start, configure_agent_context_tool_env, configure_agent_identity_env,
         truncate_activity_detail, upsert_runtime_thread_id,
     },
-    runtime_environment_changed,
     streaming::{
         append_streaming_agent_message, ensure_streaming_agent_message,
         reconcile_streaming_agent_message, start_streaming_agent_text_block,
+    },
+    warm::{
+        reusable_runtime, wait_for_warm_process, warm_stderr_reader, WarmProvider, WarmRegistry,
+        WarmRuntime, WarmState,
     },
 };
 use crate::subscription_status::{
     claude_subscription_status_from_event, persist_agent_subscription_status,
 };
-use crate::ui_notifications::{notify_supervisor_wake, reconcile_work_item_change};
+use crate::ui_notifications::reconcile_work_item_change;
 use crate::usage::{record_run_usage, usage_from_runtime_event};
 
 mod interrupt;
@@ -49,7 +51,7 @@ mod text;
 mod turn;
 
 pub(crate) use interrupt::interrupt_warm_claude_run;
-pub(crate) use steer::{claude_runtime_owns_turn, steerable_claude_turn_surface};
+pub(crate) use steer::steerable_claude_turn_surface;
 use steer::{
     note_claude_input_replayed, steer_warm_claude_turn_if_same_surface, ClaudePendingSteer,
     ClaudeSteerRequest,
@@ -97,19 +99,33 @@ fn configure_claude_process_environment(command: &mut Command) {
         .env(CLAUDE_MAX_RETRIES_ENV, DEFAULT_CLAUDE_MAX_RETRIES);
 }
 
-#[derive(Clone, Default)]
-pub(crate) struct WarmClaudeRegistry {
-    runtimes: Arc<AsyncMutex<HashMap<Uuid, Arc<WarmClaudeRuntime>>>>,
+/// The Claude CLI in stream-json mode as a warm runtime provider.
+pub(crate) struct ClaudeCli;
+
+pub(crate) type WarmClaudeRegistry = WarmRegistry<ClaudeCli>;
+type WarmClaudeRuntime = WarmRuntime<ClaudeCli>;
+
+impl WarmProvider for ClaudeCli {
+    type State = WarmClaudeState;
+    const RUNTIME: &'static str = "claude";
+    const PROCESS_TITLE: &'static str = "Claude warm stream-json";
+    const PROCESS_NAME: &'static str = "claude stream-json";
+
+    fn session_thread_id(&self) -> Option<&str> {
+        None
+    }
+
+    async fn finish_turn_after_exit(
+        pool: &SqlitePool,
+        agent_id: Uuid,
+        runtime: &Arc<WarmClaudeRuntime>,
+        detail: String,
+    ) {
+        let _ = finish_warm_claude_active_turn(pool, agent_id, runtime, false, Some(detail)).await;
+    }
 }
 
-struct WarmClaudeRuntime {
-    stdin: AsyncMutex<tokio::process::ChildStdin>,
-    state: AsyncMutex<WarmClaudeState>,
-    pid: Option<i32>,
-    environment_variables: String,
-}
-
-struct WarmClaudeState {
+pub(crate) struct WarmClaudeState {
     alive: bool,
     active: Option<ClaudeActiveTurn>,
     session_id: Option<String>,
@@ -131,6 +147,28 @@ impl WarmClaudeState {
     /// request written now would be answered after that turn, not as its own.
     fn is_busy(&self) -> bool {
         self.active.is_some() || !self.pending_steers.is_empty()
+    }
+}
+
+impl WarmState for WarmClaudeState {
+    fn alive(&self) -> bool {
+        self.alive
+    }
+
+    fn set_alive(&mut self, alive: bool) {
+        self.alive = alive;
+    }
+
+    fn touch(&mut self) {
+        self.last_activity = Instant::now();
+    }
+
+    fn active_run_id(&self) -> Option<Uuid> {
+        self.active.as_ref().map(|active| active.run_id)
+    }
+
+    fn is_busy(&self) -> bool {
+        WarmClaudeState::is_busy(self)
     }
 }
 
@@ -273,37 +311,14 @@ async fn get_or_spawn_warm_claude_runtime(
     agent_id: Uuid,
     config: ClaudeRuntimeConfig<'_>,
 ) -> CommandResult<Arc<WarmClaudeRuntime>> {
-    if let Some(runtime) = {
-        let runtimes = registry.runtimes.lock().await;
-        runtimes.get(&agent_id).cloned()
-    } {
-        let mut state = runtime.state.lock().await;
-        let environment_changed = runtime_environment_changed(
-            &runtime.environment_variables,
-            config.environment_variables,
-        );
-        if state.alive && environment_changed && !state.is_busy() {
-            state.alive = false;
-            drop(state);
-            if let Some(pid) = runtime.pid {
-                let _ = terminate_process_group(pid).await;
-            }
-            remove_warm_claude_runtime_if_same(registry, agent_id, &runtime).await;
-        } else if state.alive {
-            drop(state);
-            return Ok(runtime);
-        } else {
-            drop(state);
-            registry.runtimes.lock().await.remove(&agent_id);
-        }
+    if let Some(runtime) =
+        reusable_runtime(registry, agent_id, config.environment_variables, false).await
+    {
+        return Ok(runtime);
     }
 
     let runtime = spawn_warm_claude_runtime(pool, registry.clone(), agent_id, config).await?;
-    registry
-        .runtimes
-        .lock()
-        .await
-        .insert(agent_id, runtime.clone());
+    registry.insert(agent_id, runtime.clone()).await;
     Ok(runtime)
 }
 
@@ -414,6 +429,7 @@ async fn spawn_warm_claude_runtime(
         }),
         pid,
         environment_variables: config.environment_variables.to_owned(),
+        provider: ClaudeCli,
     });
 
     let provider_thread_id = session_id.unwrap_or_else(|| {
@@ -445,14 +461,14 @@ async fn spawn_warm_claude_runtime(
         stdout,
     ));
     if let Some(stderr) = stderr {
-        tokio::spawn(claude_warm_stderr_reader(
+        tokio::spawn(warm_stderr_reader(
             pool.clone(),
             agent_id,
             runtime.clone(),
             stderr,
         ));
     }
-    tokio::spawn(wait_for_warm_claude_process(
+    tokio::spawn(wait_for_warm_process(
         pool.clone(),
         registry,
         agent_id,
@@ -788,7 +804,7 @@ async fn claude_warm_stdout_reader<R>(
         Some("stdout closed".to_owned()),
     )
     .await;
-    remove_warm_claude_runtime_if_same(&registry, agent_id, &runtime).await;
+    registry.remove_if_same(agent_id, &runtime).await;
 }
 
 /// Whether the stdout line still needs the turn-ending check after its
@@ -1047,94 +1063,6 @@ async fn apply_claude_warm_stdout_line(
     Ok(ClaudeLineFlow::Continue)
 }
 
-async fn claude_warm_stderr_reader<R>(
-    pool: SqlitePool,
-    agent_id: Uuid,
-    runtime: Arc<WarmClaudeRuntime>,
-    stream: R,
-) where
-    R: AsyncRead + Unpin,
-{
-    let mut lines = BufReader::new(stream).lines();
-    while let Ok(Some(line)) = lines.next_line().await {
-        let active_run_id = {
-            runtime
-                .state
-                .lock()
-                .await
-                .active
-                .as_ref()
-                .map(|active| active.run_id)
-        };
-        if let Some(run_id) = active_run_id {
-            let _ = append_run_log(&pool, run_id, format!("[stderr] {line}\n")).await;
-            if let Some((kind, title, detail)) = classify_agent_output_activity("stderr", &line) {
-                let _ = record_agent_activity_throttled(
-                    &pool,
-                    Some(agent_id),
-                    Some(run_id),
-                    kind,
-                    title,
-                    detail,
-                )
-                .await;
-            }
-        }
-    }
-}
-
-async fn wait_for_warm_claude_process(
-    pool: SqlitePool,
-    registry: WarmClaudeRegistry,
-    agent_id: Uuid,
-    runtime: Arc<WarmClaudeRuntime>,
-    mut child: tokio::process::Child,
-) {
-    let wait_result = child.wait().await;
-    {
-        let mut state = runtime.state.lock().await;
-        state.alive = false;
-    }
-    let detail = match wait_result {
-        Ok(status) => format!("claude stream-json exited: {status}"),
-        Err(err) => format!("claude stream-json wait failed: {err}"),
-    };
-    let _ = finish_warm_claude_active_turn(&pool, agent_id, &runtime, false, Some(detail.clone()))
-        .await;
-    let _ = sqlx::query(
-        "update runtime_sessions set status = 'stopped', updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where agent_id = $1 and runtime = 'claude'",
-    )
-    .bind(agent_id)
-    .execute(&pool)
-    .await;
-    let _ = record_agent_activity(
-        &pool,
-        Some(agent_id),
-        None,
-        "run",
-        "Claude warm stream-json exited",
-        detail,
-    )
-    .await;
-    remove_warm_claude_runtime_if_same(&registry, agent_id, &runtime).await;
-    let _ = notify_supervisor_wake(&pool).await;
-}
-
-async fn remove_warm_claude_runtime_if_same(
-    registry: &WarmClaudeRegistry,
-    agent_id: Uuid,
-    runtime: &Arc<WarmClaudeRuntime>,
-) {
-    let mut runtimes = registry.runtimes.lock().await;
-    if runtimes
-        .get(&agent_id)
-        .map(|current| Arc::ptr_eq(current, runtime))
-        .unwrap_or(false)
-    {
-        runtimes.remove(&agent_id);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{process::Stdio, sync::Arc, time::Instant};
@@ -1216,6 +1144,7 @@ mod tests {
             }),
             pid: None,
             environment_variables: String::new(),
+            provider: super::ClaudeCli,
         }))
     }
 

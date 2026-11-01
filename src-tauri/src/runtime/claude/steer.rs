@@ -56,30 +56,11 @@ pub(super) struct ClaudeSteerRequest<'a> {
 }
 
 /// Surface of the active turn when it can take a follow-up.
-/// Whether the agent's warm Claude process still owns a turn (running, or
-/// owed for a written follow-up). Runs of an agent without one are orphans.
-pub(crate) async fn claude_runtime_owns_turn(
-    registry: &WarmClaudeRegistry,
-    agent_id: Uuid,
-) -> bool {
-    let runtime = {
-        let runtimes = registry.runtimes.lock().await;
-        runtimes.get(&agent_id).cloned()
-    };
-    match runtime {
-        Some(runtime) => runtime.state.lock().await.is_busy(),
-        None => false,
-    }
-}
-
 pub(crate) async fn steerable_claude_turn_surface(
     registry: &WarmClaudeRegistry,
     agent_id: Uuid,
 ) -> Option<(Option<Uuid>, Option<Uuid>)> {
-    let runtime = {
-        let runtimes = registry.runtimes.lock().await;
-        runtimes.get(&agent_id).cloned()
-    }?;
+    let runtime = registry.get(agent_id).await?;
     let state = runtime.state.lock().await;
     if !state.alive {
         return None;

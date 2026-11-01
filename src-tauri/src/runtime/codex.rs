@@ -8,7 +8,7 @@ use std::{
 use serde_json::{json, Value};
 use sqlx::{Row, SqlitePool};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, BufReader},
+    io::{AsyncBufReadExt, BufReader},
     process::Command,
     sync::Mutex as AsyncMutex,
 };
@@ -31,22 +31,24 @@ use crate::runtime::{
     },
     memory_context_update,
     process::{
-        classify_agent_output_activity, cleanup_failed_warm_start,
-        configure_agent_context_tool_env, configure_agent_identity_env, load_runtime_thread_id,
-        terminate_process_group, upsert_runtime_thread_id,
+        cleanup_failed_warm_start, configure_agent_context_tool_env, configure_agent_identity_env,
+        load_runtime_thread_id, upsert_runtime_thread_id,
     },
-    runtime_environment_changed,
     streaming::{
         adopt_streaming_agent_message_key, append_streaming_agent_message_deferred_completion,
         delete_streaming_agent_message_by_key, ensure_streaming_agent_message,
         streaming_message_body_is_empty,
     },
     surface::{codex_active_turn_schedule_state, same_codex_surface, CodexActiveTurnScheduleState},
+    warm::{
+        reusable_runtime, wait_for_warm_process, warm_stderr_reader, WarmProvider, WarmRegistry,
+        WarmRuntime, WarmState,
+    },
 };
 use crate::subscription_status::{
     codex_subscription_status_from_response, persist_agent_subscription_status,
 };
-use crate::ui_notifications::{notify_supervisor_wake, reconcile_work_item_change};
+use crate::ui_notifications::reconcile_work_item_change;
 use crate::usage::{record_run_usage, usage_from_runtime_event};
 use crate::{
     app::{to_string, CommandResult},
@@ -74,20 +76,36 @@ const CODEX_RATE_LIMIT_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(30);
 const CODEX_APP_SERVER_SHELL_COMMAND: &str =
     "exec codex app-server --listen stdio:// -c 'notify=[]' -c 'features.memories=false'";
 
-#[derive(Clone, Default)]
-pub(crate) struct WarmCodexRegistry {
-    runtimes: Arc<AsyncMutex<HashMap<Uuid, Arc<WarmCodexRuntime>>>>,
-}
-
-struct WarmCodexRuntime {
-    stdin: AsyncMutex<tokio::process::ChildStdin>,
-    state: AsyncMutex<WarmCodexState>,
+/// A `codex app-server` process as a warm runtime provider, bound to the
+/// Codex thread it was started or resumed on.
+pub(crate) struct CodexAppServer {
     thread_id: String,
-    pid: Option<i32>,
-    environment_variables: String,
 }
 
-struct WarmCodexState {
+pub(crate) type WarmCodexRegistry = WarmRegistry<CodexAppServer>;
+type WarmCodexRuntime = WarmRuntime<CodexAppServer>;
+
+impl WarmProvider for CodexAppServer {
+    type State = WarmCodexState;
+    const RUNTIME: &'static str = "codex";
+    const PROCESS_TITLE: &'static str = "Codex warm app-server";
+    const PROCESS_NAME: &'static str = "codex app-server";
+
+    fn session_thread_id(&self) -> Option<&str> {
+        Some(&self.thread_id)
+    }
+
+    async fn finish_turn_after_exit(
+        pool: &SqlitePool,
+        agent_id: Uuid,
+        runtime: &Arc<WarmCodexRuntime>,
+        detail: String,
+    ) {
+        let _ = finish_warm_codex_active_turn(pool, agent_id, runtime, false, Some(detail)).await;
+    }
+}
+
+pub(crate) struct WarmCodexState {
     alive: bool,
     active: Option<CodexActiveTurn>,
     next_request_id: i64,
@@ -96,6 +114,28 @@ struct WarmCodexState {
     pending_rotation_marker: Option<String>,
     injected_memory_context: Option<String>,
     last_activity: Instant,
+}
+
+impl WarmState for WarmCodexState {
+    fn alive(&self) -> bool {
+        self.alive
+    }
+
+    fn set_alive(&mut self, alive: bool) {
+        self.alive = alive;
+    }
+
+    fn touch(&mut self) {
+        self.last_activity = Instant::now();
+    }
+
+    fn active_run_id(&self) -> Option<Uuid> {
+        self.active.as_ref().map(|active| active.run_id)
+    }
+
+    fn is_busy(&self) -> bool {
+        self.active.is_some()
+    }
 }
 
 async fn request_codex_rate_limits(runtime: &Arc<WarmCodexRuntime>) -> CommandResult<()> {
@@ -289,30 +329,15 @@ async fn get_or_spawn_warm_codex_runtime(
     let context_rotate_threshold = codex_context_rotate_input_tokens();
     let rotation_candidate =
         codex_context_rotation_candidate(pool, agent_id, context_rotate_threshold).await?;
-    if let Some(runtime) = {
-        let runtimes = registry.runtimes.lock().await;
-        runtimes.get(&agent_id).cloned()
-    } {
-        let mut state = runtime.state.lock().await;
-        let environment_changed =
-            runtime_environment_changed(&runtime.environment_variables, environment_variables);
-        if state.alive
-            && (rotation_candidate.is_some() || environment_changed)
-            && state.active.is_none()
-        {
-            state.alive = false;
-            drop(state);
-            if let Some(pid) = runtime.pid {
-                let _ = terminate_process_group(pid).await;
-            }
-            remove_warm_codex_runtime_if_same(registry, agent_id, &runtime).await;
-        } else if state.alive {
-            drop(state);
-            return Ok(runtime);
-        } else {
-            drop(state);
-            registry.runtimes.lock().await.remove(&agent_id);
-        }
+    if let Some(runtime) = reusable_runtime(
+        registry,
+        agent_id,
+        environment_variables,
+        rotation_candidate.is_some(),
+    )
+    .await
+    {
+        return Ok(runtime);
     }
 
     let runtime = spawn_warm_codex_runtime(
@@ -327,11 +352,7 @@ async fn get_or_spawn_warm_codex_runtime(
         context_rotate_threshold,
     )
     .await?;
-    registry
-        .runtimes
-        .lock()
-        .await
-        .insert(agent_id, runtime.clone());
+    registry.insert(agent_id, runtime.clone()).await;
     Ok(runtime)
 }
 
@@ -568,9 +589,9 @@ async fn spawn_warm_codex_runtime(
             injected_memory_context: None,
             last_activity: Instant::now(),
         }),
-        thread_id,
         pid,
         environment_variables: environment_variables.to_owned(),
+        provider: CodexAppServer { thread_id },
     });
 
     tokio::spawn(codex_warm_stdout_reader(
@@ -581,14 +602,14 @@ async fn spawn_warm_codex_runtime(
         reader,
     ));
     if let Some(stderr) = stderr {
-        tokio::spawn(codex_warm_stderr_reader(
+        tokio::spawn(warm_stderr_reader(
             pool.clone(),
             agent_id,
             runtime.clone(),
             stderr,
         ));
     }
-    tokio::spawn(wait_for_warm_codex_process(
+    tokio::spawn(wait_for_warm_process(
         pool.clone(),
         registry.clone(),
         agent_id,
@@ -605,27 +626,11 @@ async fn spawn_warm_codex_runtime(
     Ok(runtime)
 }
 
-/// Whether the agent's warm Codex process still owns a turn. Runs of an
-/// agent without one are orphans.
-pub(crate) async fn codex_runtime_owns_turn(registry: &WarmCodexRegistry, agent_id: Uuid) -> bool {
-    let runtime = {
-        let runtimes = registry.runtimes.lock().await;
-        runtimes.get(&agent_id).cloned()
-    };
-    match runtime {
-        Some(runtime) => runtime.state.lock().await.active.is_some(),
-        None => false,
-    }
-}
-
 pub(crate) async fn active_codex_turn_surface(
     registry: &WarmCodexRegistry,
     agent_id: Uuid,
 ) -> Option<(Option<Uuid>, Option<Uuid>, CodexActiveTurnScheduleState)> {
-    let runtime = {
-        let runtimes = registry.runtimes.lock().await;
-        runtimes.get(&agent_id).cloned()
-    }?;
+    let runtime = registry.get(agent_id).await?;
     let state = runtime.state.lock().await;
     let active = state.active.as_ref()?;
     Some((
@@ -646,11 +651,7 @@ pub(crate) async fn interrupt_warm_codex_run(
     agent_id: Uuid,
     run_id: Uuid,
 ) -> CommandResult<bool> {
-    let runtime = {
-        let runtimes = registry.runtimes.lock().await;
-        runtimes.get(&agent_id).cloned()
-    };
-    let Some(runtime) = runtime else {
+    let Some(runtime) = registry.get(agent_id).await else {
         return Ok(false);
     };
     interrupt_warm_codex_turn(pool, agent_id, &runtime, run_id).await
@@ -695,7 +696,7 @@ async fn interrupt_warm_codex_turn(
                 "method": "turn/interrupt",
                 "id": request_id,
                 "params": {
-                    "threadId": runtime.thread_id.clone(),
+                    "threadId": runtime.provider.thread_id.clone(),
                     "turnId": turn_id
                 }
             }),
@@ -832,7 +833,7 @@ async fn steer_warm_codex_turn_if_same_surface(
                 "method": "turn/steer",
                 "id": request_id,
                 "params": {
-                    "threadId": runtime.thread_id.clone(),
+                    "threadId": runtime.provider.thread_id.clone(),
                     "expectedTurnId": turn_id,
                     "input": [{
                         "type": "text",
@@ -1027,8 +1028,8 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
         "Started working",
         runtime
             .pid
-            .map(|pid| format!("pid={pid}, thread_id={}", runtime.thread_id))
-            .unwrap_or_else(|| format!("thread_id={}", runtime.thread_id)),
+            .map(|pid| format!("pid={pid}, thread_id={}", runtime.provider.thread_id))
+            .unwrap_or_else(|| format!("thread_id={}", runtime.provider.thread_id)),
     )
     .await?;
 
@@ -1130,7 +1131,7 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
     let write_result = {
         let mut stdin = runtime.stdin.lock().await;
         let mut params = json!({
-            "threadId": runtime.thread_id.clone(),
+            "threadId": runtime.provider.thread_id.clone(),
             "input": [{
                 "type": "text",
                 "text": codex_turn_prompt,
@@ -1216,7 +1217,7 @@ async fn codex_warm_stdout_reader(
         Some("stdout closed".into()),
     )
     .await;
-    remove_warm_codex_runtime_if_same(&registry, agent_id, &runtime).await;
+    registry.remove_if_same(agent_id, &runtime).await;
 }
 
 async fn handle_codex_warm_stdout_line(
@@ -1370,7 +1371,7 @@ async fn handle_codex_warm_stdout_line(
         }
         Some("turn/started") => {
             if value.pointer("/params/threadId").and_then(Value::as_str)
-                != Some(runtime.thread_id.as_str())
+                != Some(runtime.provider.thread_id.as_str())
             {
                 return Ok(());
             }
@@ -1547,7 +1548,7 @@ async fn handle_codex_warm_stdout_line(
         }
         Some("turn/completed") => {
             if value.pointer("/params/threadId").and_then(Value::as_str)
-                == Some(runtime.thread_id.as_str())
+                == Some(runtime.provider.thread_id.as_str())
             {
                 if codex_auth_failure(&value) {
                     mark_codex_turn_auth_required(runtime).await;
@@ -1586,101 +1587,6 @@ async fn mark_codex_turn_auth_required(runtime: &Arc<WarmCodexRuntime>) {
     }
 }
 
-async fn codex_warm_stderr_reader<R>(
-    pool: SqlitePool,
-    agent_id: Uuid,
-    runtime: Arc<WarmCodexRuntime>,
-    stream: R,
-) where
-    R: AsyncRead + Unpin,
-{
-    let mut lines = BufReader::new(stream).lines();
-    while let Ok(Some(line)) = lines.next_line().await {
-        let active_run_id = {
-            runtime
-                .state
-                .lock()
-                .await
-                .active
-                .as_ref()
-                .map(|active| active.run_id)
-        };
-        if let Some(run_id) = active_run_id {
-            let _ = append_run_log(&pool, run_id, format!("[stderr] {line}\n")).await;
-            if let Some((kind, title, detail)) = classify_agent_output_activity("stderr", &line) {
-                let _ = record_agent_activity_throttled(
-                    &pool,
-                    Some(agent_id),
-                    Some(run_id),
-                    kind,
-                    title,
-                    detail,
-                )
-                .await;
-            }
-        }
-    }
-}
-
-async fn wait_for_warm_codex_process(
-    pool: SqlitePool,
-    registry: WarmCodexRegistry,
-    agent_id: Uuid,
-    runtime: Arc<WarmCodexRuntime>,
-    mut child: tokio::process::Child,
-) {
-    let wait_result = child.wait().await;
-    {
-        let mut state = runtime.state.lock().await;
-        state.alive = false;
-    }
-    let detail = match wait_result {
-        Ok(status) => format!("codex app-server exited: {status}"),
-        Err(err) => format!("codex app-server wait failed: {err}"),
-    };
-    let _ =
-        finish_warm_codex_active_turn(&pool, agent_id, &runtime, false, Some(detail.clone())).await;
-    let _ = sqlx::query(
-        r#"
-        update runtime_sessions
-        set status = 'stopped', updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where agent_id = $1
-          and runtime = 'codex'
-          and provider_thread_id = $2
-        "#,
-    )
-    .bind(agent_id)
-    .bind(&runtime.thread_id)
-    .execute(&pool)
-    .await;
-    let _ = record_agent_activity(
-        &pool,
-        Some(agent_id),
-        None,
-        "run",
-        "Codex warm app-server exited",
-        detail,
-    )
-    .await;
-    remove_warm_codex_runtime_if_same(&registry, agent_id, &runtime).await;
-    let _ = notify_supervisor_wake(&pool).await;
-}
-
-async fn remove_warm_codex_runtime_if_same(
-    registry: &WarmCodexRegistry,
-    agent_id: Uuid,
-    runtime: &Arc<WarmCodexRuntime>,
-) {
-    let mut runtimes = registry.runtimes.lock().await;
-    if runtimes
-        .get(&agent_id)
-        .map(|current| Arc::ptr_eq(current, runtime))
-        .unwrap_or(false)
-    {
-        runtimes.remove(&agent_id);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1705,7 +1611,7 @@ mod tests {
     use super::{
         codex_context_rotation_candidate, codex_rotation_marker, finish_warm_codex_active_turn,
         prepend_codex_rotation_marker, track_codex_agent_message_stream, CodexActiveTurn,
-        WarmCodexRuntime, CODEX_APP_SERVER_SHELL_COMMAND, CODEX_TURN_START_TIMEOUT,
+        CodexAppServer, WarmCodexRuntime, CODEX_APP_SERVER_SHELL_COMMAND, CODEX_TURN_START_TIMEOUT,
     };
 
     #[test]
@@ -1759,9 +1665,11 @@ mod tests {
                 injected_memory_context: None,
                 last_activity: Instant::now(),
             }),
-            thread_id: "test-codex-thread".to_owned(),
             pid: None,
             environment_variables: String::new(),
+            provider: CodexAppServer {
+                thread_id: "test-codex-thread".to_owned(),
+            },
         }))
     }
 
@@ -1860,9 +1768,11 @@ mod tests {
                 injected_memory_context: None,
                 last_activity: Instant::now(),
             }),
-            thread_id: "test-codex-thread".to_owned(),
             pid: child.id().map(|id| id as i32),
             environment_variables: String::new(),
+            provider: CodexAppServer {
+                thread_id: "test-codex-thread".to_owned(),
+            },
         });
         let pool =
             sqlx::SqlitePool::connect_lazy("sqlite::memory:").expect("create lazy sqlite pool");

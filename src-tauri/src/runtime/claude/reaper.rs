@@ -1,15 +1,11 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{sync::Arc, time::Duration};
 
 use sqlx::SqlitePool;
 use tokio::time::sleep;
 use uuid::Uuid;
 
 use super::WarmClaudeRuntime;
-use crate::events::activity::record_agent_activity;
-use crate::runtime::process::terminate_process_group;
+use crate::runtime::warm::stop_idle_process;
 
 const CLAUDE_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const CLAUDE_IDLE_REAPER_INTERVAL: Duration = Duration::from_secs(30);
@@ -38,44 +34,7 @@ pub(super) async fn claude_warm_idle_reaper(
             continue;
         }
 
-        let Some(pid) = runtime.pid else {
-            return;
-        };
-        match terminate_process_group(pid).await {
-            Ok(()) => {
-                let _ = sqlx::query(
-                    "update runtime_sessions set status = 'stopping', updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where agent_id = $1 and runtime = 'claude'",
-                )
-                .bind(agent_id)
-                .execute(&pool)
-                .await;
-                let _ = record_agent_activity(
-                    &pool,
-                    Some(agent_id),
-                    None,
-                    "run",
-                    "Claude warm stream-json idle timeout",
-                    format!("sent SIGTERM to process_group={pid}"),
-                )
-                .await;
-            }
-            Err(err) => {
-                {
-                    let mut state = runtime.state.lock().await;
-                    state.alive = true;
-                    state.last_activity = Instant::now();
-                }
-                let _ = record_agent_activity(
-                    &pool,
-                    Some(agent_id),
-                    None,
-                    "run_error",
-                    "Claude warm stream-json idle stop failed",
-                    err,
-                )
-                .await;
-            }
-        }
+        stop_idle_process(&pool, agent_id, &runtime).await;
         return;
     }
 }
