@@ -19,8 +19,9 @@ const message = (n, channel_id, body, extra = {}) => ({ id: id(n), seq: n, chann
   stream_key: "", task_number: null, task_status: null, attachments: [], artifacts: [], created_at: now, updated_at: now, ...extra });
 const alphaRoot = message(1, alphaId, "Alpha root");
 const betaRoot = message(3, betaId, "Beta root");
+const betaQuote = message(5, betaId, `Compare [[message:${alphaRoot.id}]] with [[thread:${alphaRoot.id}]]`);
 const messages = [alphaRoot, message(2, alphaId, "Alpha reply", { thread_root_id: alphaRoot.id }),
-  betaRoot, message(4, betaId, "Beta reply", { thread_root_id: betaRoot.id }), message(6, dmId, "Direct conversation")];
+  betaRoot, message(4, betaId, "Beta reply", { thread_root_id: betaRoot.id }), betaQuote, message(6, dmId, "Direct conversation")];
 const channels = [{ id: alphaId, name: "alpha", kind: "channel", dm_agent_id: null },
   { id: betaId, name: "beta", kind: "channel", dm_agent_id: null },
   { id: dmId, name: `dm:${agent.id}`, kind: "dm", dm_agent_id: agent.id }]
@@ -79,6 +80,8 @@ const view = page => page.evaluate(() => {
     modal: [...document.querySelectorAll("[role=dialog]")]
       .map(d => d.getAttribute("aria-label") ?? document.getElementById(d.getAttribute("aria-labelledby"))?.textContent).join(",") || null,
     home: document.querySelector("main.app")?.classList.contains("mobile-sidebar-open") ?? false,
+    jumped: [...document.querySelectorAll(".conversation [data-jump-focused=true]")]
+      .map(row => row.textContent.includes("Compare") ? "quote" : row.textContent.includes("Alpha root") ? "alpha" : "other").join(",") || null,
     index: history.state?.index ?? null,
     entries: history.length,
     back: document.querySelector("[aria-label='Go back']")?.disabled === false,
@@ -191,6 +194,31 @@ async function desktop(page, name) {
   console.log(`${name}: desktop back/forward/close/reload/panel swap passed`);
 }
 
+async function references(page, name) {
+  await page.goto(appUrl, { waitUntil: "domcontentloaded" });
+  await page.locator(`.conversation [data-message-id="${alphaRoot.id}"]`).waitFor();
+  await page.locator(".sidebar .channel").filter({ hasText: "beta" }).first().click();
+  await page.getByRole("button", { name: "Close thread", exact: true }).click();
+  await expectView(page, { channel: "beta", thread: null, index: 1 }, "start in the quoting channel");
+  const entries = (await view(page)).entries;
+  const quote = page.locator(`.conversation [data-message-id="${betaQuote.id}"]`);
+
+  // Opening a quote is one entry, and Back returns to the quoting message.
+  await quote.locator(".message-reference-card.reference-message").click();
+  await expectView(page, { channel: "alpha", thread: null, jumped: "alpha", index: 2, entries: entries + 1 }, "a quoted message is one entry");
+  await page.goBack();
+  await expectView(page, { channel: "beta", thread: null, jumped: "quote", index: 1 }, "one Back returns to the quote");
+  await page.goForward();
+  await expectView(page, { channel: "alpha", thread: null, index: 2, forward: false }, "Forward returns to the quoted message");
+  await page.goBack();
+  await expectView(page, { channel: "beta", index: 1 }, "back at the quote");
+  await quote.locator(".message-reference-card.reference-thread").click();
+  await expectView(page, { channel: "alpha", thread: "alpha", index: 2, entries: entries + 1 }, "a quoted thread is one entry");
+  await page.goBack();
+  await expectView(page, { channel: "beta", thread: null, index: 1 }, "one Back closes the quoted thread");
+  console.log(`${name}: desktop quote navigation passed`);
+}
+
 async function mobile(page, name) {
   await page.goto(appUrl, { waitUntil: "domcontentloaded" });
   await page.locator(".sidebar .channel").filter({ hasText: "beta" }).first().waitFor();
@@ -235,7 +263,7 @@ let browser;
 try {
   for (const [name, engine] of Object.entries({ chromium, webkit })) {
     browser = await engine.launch();
-    for (const [run, viewport] of [[desktop, { width: 1440, height: 960 }], [mobile, { width: 390, height: 844 }]]) {
+    for (const [run, viewport] of [[desktop, { width: 1440, height: 960 }], [references, { width: 1440, height: 960 }], [mobile, { width: 390, height: 844 }]]) {
       const context = await browser.newContext({ serviceWorkers: "block", viewport });
       const page = await context.newPage(); page.setDefaultTimeout(8000);
       const errors = []; page.on("pageerror", error => errors.push(error.message));
