@@ -5,14 +5,14 @@ use uuid::Uuid;
 use crate::{
     app::CommandResult,
     message_store::{
-        delete_message_in_pool, load_activity_messages_without_artifact_content,
+        load_activity_messages_without_artifact_content,
         load_channel_preview_messages_without_artifact_content,
         load_message_without_artifact_content,
         load_older_channel_messages_without_artifact_content,
         load_recent_channel_message_page_without_artifact_content,
         search_messages_without_artifact_content, send_owner_message_in_pool,
-        set_message_saved_in_pool, update_message_in_pool,
-        CHANNEL_PREVIEW_ROOT_MESSAGES_PER_CHANNEL, WEB_BOOTSTRAP_ROOT_MESSAGES_PER_CHANNEL,
+        set_message_saved_in_pool, CHANNEL_PREVIEW_ROOT_MESSAGES_PER_CHANNEL,
+        WEB_BOOTSTRAP_ROOT_MESSAGES_PER_CHANNEL,
     },
     models::{AttachmentUpload, ChannelMessagePage, Message},
 };
@@ -59,13 +59,6 @@ pub(crate) struct LoadOlderChannelMessagesRequest {
     pub(crate) limit: i64,
     #[serde(default)]
     pub(crate) roots_only: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct UpdateMessageRequest {
-    pub(crate) message_id: Uuid,
-    pub(crate) body: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -176,20 +169,6 @@ pub(crate) async fn load_older_channel_messages(
         request.limit,
     )
     .await
-}
-
-pub(crate) async fn update_message(
-    pool: &SqlitePool,
-    request: UpdateMessageRequest,
-) -> CommandResult<()> {
-    update_message_in_pool(pool, request.message_id, &request.body).await
-}
-
-pub(crate) async fn delete_message(
-    pool: &SqlitePool,
-    request: MessageIdRequest,
-) -> CommandResult<()> {
-    delete_message_in_pool(pool, request.message_id).await
 }
 
 pub(crate) async fn set_message_saved(

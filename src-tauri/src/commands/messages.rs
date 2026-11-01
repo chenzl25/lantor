@@ -6,7 +6,7 @@ use crate::{
     application::messages::{
         self as application, LoadActivityMessagesRequest, LoadChannelMessagesRequest,
         LoadOlderChannelMessagesRequest, MessageIdRequest, SearchMessagesRequest,
-        SendMessageRequest, SetMessageSavedRequest, UpdateMessageRequest,
+        SendMessageRequest, SetMessageSavedRequest,
     },
     models::{AttachmentUpload, ChannelMessagePage, Message},
 };
@@ -116,23 +116,6 @@ pub(crate) async fn load_older_channel_messages(
         },
     )
     .await
-}
-
-#[tauri::command]
-pub(crate) async fn update_message(
-    message_id: Uuid,
-    body: String,
-    state: State<'_, AppState>,
-) -> CommandResult<()> {
-    application::update_message(&state.pool, UpdateMessageRequest { message_id, body }).await
-}
-
-#[tauri::command]
-pub(crate) async fn delete_message(
-    message_id: Uuid,
-    state: State<'_, AppState>,
-) -> CommandResult<()> {
-    application::delete_message(&state.pool, MessageIdRequest { message_id }).await
 }
 
 #[tauri::command]

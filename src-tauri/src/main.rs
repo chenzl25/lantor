@@ -58,8 +58,8 @@ use agent_inbox_wake::{
 };
 use agent_work_dispatch::{
     cancel_agent_work, cancel_agent_work_in_pool, claim_task, claim_task_in_pool,
-    dispatch_agent_work, dispatch_task_assignment_to_agent, mark_task_after_work_item_finished,
-    retry_agent_work, retry_agent_work_in_pool, try_claim_unassigned_task,
+    dispatch_task_assignment_to_agent, mark_task_after_work_item_finished, retry_agent_work,
+    retry_agent_work_in_pool, try_claim_unassigned_task,
 };
 use agent_workspace::{agent_workspace_list, agent_workspace_read_file};
 use app::AppState;
@@ -80,14 +80,10 @@ use commands::{
         refresh_github_issue_queue, refresh_github_review_queue, rereview_github_pull_request,
         set_github_reference_alias,
     },
-    inbox::{
-        dismiss_inbox_items, mark_all_inbox_read, mark_channel_read, mark_inbox_items_read,
-        update_thread_followed,
-    },
+    inbox::{dismiss_inbox_items, mark_all_inbox_read, mark_channel_read, mark_inbox_items_read},
     messages::{
-        delete_message, load_activity_messages, load_channel_messages, load_channel_previews,
-        load_message, load_older_channel_messages, search_messages, send_message,
-        set_message_saved, update_message,
+        load_activity_messages, load_channel_messages, load_channel_previews, load_message,
+        load_older_channel_messages, search_messages, send_message, set_message_saved,
     },
     tasks::{update_task_status, update_task_title},
     wiki::{load_channel_wiki, publish_channel_wiki, search_channel_wikis},
@@ -95,12 +91,10 @@ use commands::{
 use context_tool::run_agent_context_tool;
 use db::{db_connect_with_url, db_url, migrate};
 use domain::{
-    reminders::{cancel_reminder, complete_reminder, create_reminder, snooze_reminder},
+    reminders::{cancel_reminder, complete_reminder},
     spawn_reminder_worker,
 };
-use lifecycle_commands::{
-    install_supervisor_service, start_agent, stop_agent, uninstall_supervisor_service,
-};
+use lifecycle_commands::{install_supervisor_service, start_agent, uninstall_supervisor_service};
 use runtime::supervisor::run_supervisor;
 use system_commands::{
     check_runtime, complete_startup_splash, download_attachment, open_external_url,
@@ -311,12 +305,9 @@ pub fn run() {
             create_channel,
             create_github_issue_task,
             create_github_review_task,
-            create_reminder,
             claim_task,
             delete_agent,
             delete_channel,
-            delete_message,
-            dispatch_agent_work,
             install_supervisor_service,
             dismiss_inbox_items,
             mark_inbox_items_read,
@@ -355,15 +346,11 @@ pub fn run() {
             send_message,
             set_message_saved,
             set_channel_agent_membership,
-            snooze_reminder,
             start_agent,
-            stop_agent,
             uninstall_supervisor_service,
             update_agent,
             update_channel,
-            update_message,
             update_owner_profile,
-            update_thread_followed,
             update_task_title,
             update_task_status,
             answer_decision,

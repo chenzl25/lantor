@@ -221,27 +221,6 @@ pub(crate) async fn mark_channel_read_through_in_pool(
     Ok(())
 }
 
-pub(crate) async fn update_thread_followed_in_pool(
-    pool: &SqlitePool,
-    thread_root_id: Uuid,
-    followed: bool,
-) -> CommandResult<()> {
-    sqlx::query(
-        r#"
-        update messages
-        set thread_followed = $2
-        where id = $1 and thread_root_id is null
-        "#,
-    )
-    .bind(thread_root_id)
-    .bind(followed)
-    .execute(pool)
-    .await
-    .map_err(to_string)?;
-
-    Ok(())
-}
-
 pub(crate) async fn load_dismissed_inbox_items(
     pool: &SqlitePool,
 ) -> CommandResult<HashMap<String, DateTime<Utc>>> {
