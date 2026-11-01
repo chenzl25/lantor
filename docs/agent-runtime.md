@@ -148,3 +148,18 @@ log, and `MEMORY.md` is periodically distilled into a restart-friendly map. When
 an agent compacts active work, it should preserve the fields that make the next
 turn recoverable: Goal, Constraints, Progress, Key Decisions, Critical Context,
 and Next Steps.
+
+## Agent Skills
+
+Claude and Codex both start in the agent's working directory. Besides the
+user's global skill folders, they load skills from that directory, so a skill
+meant for one agent goes there:
+
+- Claude agents: `<working directory>/.claude/skills/<skill>/SKILL.md`
+- Codex agents: `<working directory>/.agents/skills/<skill>/SKILL.md`
+
+Skills in `~/.claude/skills` and `~/.codex/skills` stay visible to every agent
+of that provider, so keep only shared skills there. Logins, MCP servers and
+other provider settings stay shared either way. A running process may not see a
+skill added after it started: use Restart in the agent panel, and the next turn
+runs in a fresh process.
