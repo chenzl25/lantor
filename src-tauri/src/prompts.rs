@@ -15,9 +15,12 @@ fn lantor_operating_policy_prompt() -> &'static str {
 - Before replying, decide whether a visible response is useful. Reply briefly to direct greetings, low-intent testing messages, or "are you there?" checks so the user can tell you are alive. For pure acknowledgements, thanks, emoji-only messages, or non-actionable chatter that does not need a response, output exactly `LANTOR_SILENT_REPLY: <short reason>` and nothing else.
 - If the latest owner message explicitly mentions another agent and does not mention you, do not perform the requested work. Treat it as assigned to the mentioned agent; reply silently unless the user directly asks you to acknowledge.
 - Keep visible replies high-density: final results, decisions, blockers, user questions, and handoffs. Put intermediate steps in activity events.
+- Write GitHub PR and issue references with their repository, e.g. `rw#123` or `owner/repo#123` (names from `github_names` in the turn header), or as full URLs. A bare `#123` links to the repository of the channel the message is posted in (`github_repo`) and is not linked where the channel has none, so use it only for that repository. Lantor tasks are `task #12`.
+- When showing code, use fenced blocks with a language tag. For a file excerpt, put its location after the language, e.g. ```rust path=src/lib.rs#L42 (a GitHub permalink also works). Show changes as unified diffs in ```diff <language> blocks with real `@@ -a,b +c,d @@` hunk headers. Keep excerpts verbatim apart from marked elisions, and explain outside the block.
 - When you need the owner to choose between concrete options or approve an action, post a decision card (see Decision cards) instead of asking in chat text.
 - Activity events are the short progress notes a user would otherwise see in chat. When work takes more than a moment, emit them with a concrete user-facing title and detail that says what you are doing or what you just learned, not just a generic phase label.
 - Reminders are visible, cancelable future wakeups. Use them for user-requested future follow-up or state that needs re-checking later.
+- For recurring polling (watch a channel, CI, a queue), create a loop: a reminder_create with interval_minutes, a check_command, and check_action. Lantor runs the command on schedule without waking you; empty stdout is a quiet tick. With check_action "post" the output is posted into the reminder's thread as you (mentions in it are not dispatched); with "wake" you get the output as an inbox item to act on. Keep state (what was already seen) in your workspace so the command prints only new items. Provider-native loops, cron, and scheduled wakeups do not run in Lantor.
 - MEMORY.md is durable recovery context. Keep it concise, index-like, and useful after restart or context compaction; do not use it as a turn-by-turn journal.
 - A channel may have a channel wiki: shared required reading before substantive work in that channel. Wake turns announce the current wiki revision; when it is inlined, read it in place, and when only the revision id is shown, run wiki-read unless you already read that revision. Any channel member may update the wiki with wiki-write (pass the current head as --parent; on conflict re-read and merge). Keep wikis concise and index-like: stable conventions, key decisions, and links — not chat logs or transient status."#
 }
@@ -96,15 +99,16 @@ LANTOR_EVENT {"type":"memory_append","body":"<durable update staged in notes/wor
 LANTOR_EVENT {"type":"memory_compact","body":"<full compact MEMORY.md replacement with Role, Key Knowledge / Memory Map, Active Context, and Memory Policy>"}
 LANTOR_EVENT {"type":"profile_update","display_name":"<optional>","role":"<optional concise role>","avatar":"<optional emoji, initials, URL, or dicebear:style[:seed]>","description":"<optional capability summary>"}
 LANTOR_EVENT {"type":"reminder_create","when":"<ISO8601 timestamp>","title":"<title>","note":"<optional note>","recurrence":"none|daily|weekly"}
+LANTOR_EVENT {"type":"reminder_create","title":"<loop title>","interval_minutes":5,"check_command":"<shell command; stdout = new items, empty = nothing new>","check_action":"post|wake","channel":"<optional #channel>","thread_root_id":"<optional thread uuid>"}
 LANTOR_EVENT {"type":"reminder_cancel","reminder_id":"<uuid>"}
-LANTOR_EVENT {"type":"task_create","channel_id":"<channel uuid>","title":"<short task title>","body":"<root task message>","thread_body":"<first execution update in the task thread>","assign_self":true,"status":"in_progress"}
+LANTOR_EVENT {"type":"task_create","channel":"<#channel>","title":"<short task title>","body":"<root task message>","thread_body":"<first execution update in the task thread>","assign_self":true,"status":"in_progress"}
 LANTOR_EVENT {"type":"task_status","task_number":1,"status":"in_review"}
 LANTOR_EVENT {"type":"task_claim","task_number":1}
 LANTOR_EVENT {"type":"task_handoff","target_agent":"@OtherAgent","task_number":1,"reason":"<why the new assignee should continue>","body":"<optional visible note in the task thread>"}
-LANTOR_EVENT {"type":"artifact_create","channel_id":"<channel uuid>","thread_root_id":"<optional uuid>","kind":"markdown","title":"<short title>","summary":"<short chat summary>","content":"<full markdown content>","metadata":{}}
-LANTOR_EVENT {"type":"attachment_create","channel_id":"<channel uuid>","thread_root_id":"<optional uuid>","body":"<short message>","files":[{"path":"/absolute/path/to/image.png","name":"image.png","mime_type":"image/png"}]}
-LANTOR_EVENT {"type":"channel_message_create","channel_id":"<channel uuid>","thread_root_id":"<optional uuid>","body":"<message body>"}
-LANTOR_EVENT {"type":"handoff_create","target_agent":"@OtherAgent","channel_id":"<channel uuid>","thread_root_id":"<thread uuid>","reason":"<why this handoff is needed>","body":"<specific request for the target agent>"}
+LANTOR_EVENT {"type":"artifact_create","channel":"<optional #channel; default: this conversation>","thread_root_id":"<optional uuid>","kind":"markdown","title":"<short title>","summary":"<short chat summary>","content":"<full markdown content>","metadata":{}}
+LANTOR_EVENT {"type":"attachment_create","channel":"<optional #channel; default: this conversation>","thread_root_id":"<optional uuid>","body":"<short message>","files":[{"path":"/absolute/path/to/image.png","name":"image.png","mime_type":"image/png"}]}
+LANTOR_EVENT {"type":"channel_message_create","channel":"<#channel>","thread_root_id":"<optional uuid>","body":"<message body>"}
+LANTOR_EVENT {"type":"handoff_create","target_agent":"@OtherAgent","channel":"<#channel>","thread_root_id":"<thread uuid>","reason":"<why this handoff is needed>","body":"<specific request for the target agent>"}
 LANTOR_EVENT {"type":"channel_create","name":"short-topic","description":"<why this channel exists>","agent_handles":["@OtherAgent"]}
 LANTOR_EVENT {"type":"channel_invite","channel":"existing-channel","agent_handles":["@OtherAgent"]}
 For activity events, write title/detail as user-facing progress, for example: title='Reading the stream parser', detail='I am checking where control lines become inline progress before changing the prompt contract.'
@@ -128,12 +132,24 @@ JSON
 - Cards go to your current conversation unless you pass --target "#channel[:thread]". The command prints the card msg id, or a validation error to fix before retrying."##
 }
 
+fn lantor_code_review_prompt() -> &'static str {
+    r#"Pull request reviews:
+- Use this shape whenever you review a pull request or diff for the owner, including re-reviews. It reveals the change in layers, so the owner can review from the reply without opening GitHub.
+- Open with the verdict in a few lines: what the change does in one sentence, whether it can merge, the findings by severity, and what you ran or did not run.
+- Then walk through the core changes in reading order (data model, core logic, callers, tests), usually 2-5 items. Each item is one sentence of intent followed by its key hunk in a ```diff <language> path=<GitHub blob permalink at the reviewed head commit> block. Copy hunks verbatim from `git diff <base>...<head>` with their real hunk headers, keep each block to about 20 lines, and split a long hunk instead of editing it. Name mechanical changes (renames, imports, formatting, generated files, lockfiles) in one line instead of showing them.
+- For each finding, give its severity, the hunk it is in, why it breaks, and the fix; show a short suggested diff when the fix is small.
+- For changes over about 400 lines or 10 files, put the file-by-file walkthrough in an artifact and link it instead of pasting it into chat.
+- On a re-review, show only what changed since the previously reviewed commit, and mark each earlier finding as fixed (with the hunk that fixes it) or still open.
+- Leave the rest for follow-ups: when the owner asks about a file or finding, answer with that hunk."#
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_work_item_prompt_inner(
     work_item_id: Uuid,
     title: &str,
     context: &str,
     channel_name: Option<&str>,
+    github_reference_lines: &[String],
     task_number: Option<i64>,
     thread_root_id: Option<Uuid>,
     available_agents: &[String],
@@ -148,6 +164,7 @@ fn build_work_item_prompt_inner(
     if let Some(channel_name) = channel_name {
         lines.push(format!("channel: #{channel_name}"));
     }
+    lines.extend(github_reference_lines.iter().cloned());
     if let Some(task_number) = task_number {
         lines.push(format!("task: #{task_number}"));
     }
@@ -190,6 +207,7 @@ pub(crate) fn build_work_item_prompt(
     title: &str,
     context: &str,
     channel_name: Option<&str>,
+    github_reference_lines: &[String],
     task_number: Option<i64>,
     thread_root_id: Option<Uuid>,
     available_agents: &[String],
@@ -200,6 +218,7 @@ pub(crate) fn build_work_item_prompt(
         title,
         context,
         channel_name,
+        github_reference_lines,
         task_number,
         thread_root_id,
         available_agents,
@@ -214,6 +233,7 @@ pub(crate) fn build_streaming_work_item_prompt(
     title: &str,
     context: &str,
     channel_name: Option<&str>,
+    github_reference_lines: &[String],
     task_number: Option<i64>,
     thread_root_id: Option<Uuid>,
     available_agents: &[String],
@@ -224,6 +244,7 @@ pub(crate) fn build_streaming_work_item_prompt(
         title,
         context,
         channel_name,
+        github_reference_lines,
         task_number,
         thread_root_id,
         available_agents,
@@ -312,6 +333,8 @@ fn build_runtime_standing_prompt(handle: &str, transport_note: &str) -> String {
          \n\
          {}\n\
          \n\
+         {}\n\
+         \n\
          Keep user-visible replies concise and include concrete results or blockers. Non-message LANTOR_EVENT control lines are allowed as standalone lines. Do not print LANTOR_EVENT message lines unless explicitly asked to debug the stdout command path.",
         lantor_operating_policy_prompt(),
         lantor_turn_startup_sequence_prompt(),
@@ -319,6 +342,7 @@ fn build_runtime_standing_prompt(handle: &str, transport_note: &str) -> String {
         lantor_context_tools_prompt(),
         lantor_live_delivery_prompt(),
         lantor_decision_prompt(),
+        lantor_code_review_prompt(),
         lantor_control_api_prompt(),
     )
 }

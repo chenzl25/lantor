@@ -56,15 +56,15 @@ export function MessageActionMenu({
     >
       <button type="button" onClick={onCopyThreadReference}>
         <MessageSquare size={18} />
-        <span>Copy thread reference</span>
+        <span>Copy thread link</span>
       </button>
       <button type="button" onClick={onCopyMarkdown}>
         <Copy size={18} />
-        <span>Copy markdown</span>
+        <span>Copy text</span>
       </button>
       <button type="button" onClick={onToggleSaved}>
         <Bookmark size={18} />
-        <span>{isSaved ? "Unsave message" : "Save message"}</span>
+        <span>{isSaved ? "Remove from Saved" : "Save"}</span>
       </button>
     </div>
   );

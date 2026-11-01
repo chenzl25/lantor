@@ -16,7 +16,7 @@ function compactReplyProgressText(value: string, limit: number) {
 function userFacingReplyProgressTitle(value: string) {
   const title = value.trim() || "Working";
   const lowered = title.toLowerCase();
-  if (lowered.includes("warm app-server ready") || lowered.includes("warm stream-json ready")) return "Runtime ready";
+  if (lowered.includes("warm app-server ready") || lowered.includes("warm stream-json ready")) return "Ready";
   if (lowered === "started working" || lowered === "run started" || lowered === "run created") return "Working";
   return title;
 }
@@ -95,7 +95,7 @@ export function MessageReplySummary({ reply, replyCount, unreadReplyCount, onOpe
         type="button"
         className={replySummaryClassName}
         data-active-menu-placement={hasActiveReplyProgress ? activeReplyMenuPlacement : undefined}
-        title="View thread replies"
+        title="View replies"
         aria-label={hasActiveReplyProgress
           ? `${activeReplyStatus}${replyingAgents ? `: ${replyingAgents}` : ""}. View thread`
           : `View ${replyCount} ${replyCount === 1 ? "reply" : "replies"} in thread`}

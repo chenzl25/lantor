@@ -13,6 +13,7 @@ use crate::{
     channel_wiki::channel_wiki_wake_block,
     context_tool::short_id,
     events::activity::record_agent_activity,
+    runtime::lifecycle::mark_agent_queued_in_tx,
     text::compact_chars_middle,
 };
 
@@ -756,20 +757,6 @@ async fn refresh_inbox_wake_work_item(
     Ok(())
 }
 
-pub(crate) fn prepend_inbox_context(inbox_item_id: Uuid, kind: &str, context: &str) -> String {
-    let mut lines = vec![
-        "Agent inbox item:".to_owned(),
-        format!("id: {inbox_item_id}"),
-        format!("kind: {kind}"),
-        "decision: decide whether this inbox item needs a visible reply, a task claim/create, a reminder, a handoff, or a silent_reply.".to_owned(),
-    ];
-    if !context.trim().is_empty() {
-        lines.push(String::new());
-        lines.push(context.trim().to_owned());
-    }
-    lines.join("\n")
-}
-
 pub(crate) async fn sync_inbox_for_work_item(
     pool: &SqlitePool,
     work_item_id: Uuid,
@@ -987,6 +974,36 @@ pub(crate) async fn agent_start_cooldown_active(
     Ok(recent_failure.is_some())
 }
 
+/// Whether a running (not stopping) run of the agent answers the same channel
+/// and thread as `work_item_id`.
+async fn active_run_shares_surface(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    work_item_id: Uuid,
+) -> CommandResult<bool> {
+    let shared: Option<i64> = sqlx::query_scalar(
+        r#"
+        select 1
+        from agent_runs r
+        join agent_work_items active_item on active_item.id = r.work_item_id
+        join agent_work_items item on item.id = $2
+        where r.agent_id = $1
+          and r.stopped_at is null
+          and r.status in ('starting', 'running')
+          and active_item.channel_id is not null
+          and active_item.channel_id = item.channel_id
+          and active_item.thread_root_id is item.thread_root_id
+        limit 1
+        "#,
+    )
+    .bind(agent_id)
+    .bind(work_item_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)?;
+    Ok(shared.is_some())
+}
+
 async fn agent_has_active_run(pool: &SqlitePool, agent_id: Uuid) -> CommandResult<bool> {
     let active_run: Option<Uuid> = sqlx::query_scalar(
         r#"
@@ -1054,8 +1071,16 @@ pub(crate) async fn enqueue_agent_work_if_available(
     let is_codex = runtime
         .as_deref()
         .is_some_and(|runtime| runtime.eq_ignore_ascii_case("codex"));
+    let is_claude = runtime
+        .as_deref()
+        .is_some_and(|runtime| runtime.eq_ignore_ascii_case("claude"));
     let has_active_run = agent_has_active_run(pool, agent_id).await?;
-    if !is_codex && agent_has_active_or_pending_start(pool, agent_id).await? {
+    // Codex decides per start whether to steer; Claude only takes follow-ups
+    // for the surface its running turn is answering.
+    let joins_active_turn = has_active_run
+        && (is_codex
+            || (is_claude && active_run_shares_surface(pool, agent_id, work_item_id).await?));
+    if !is_codex && !joins_active_turn && agent_has_active_or_pending_start(pool, agent_id).await? {
         return Ok(false);
     }
 
@@ -1076,6 +1101,12 @@ pub(crate) async fn enqueue_agent_work_if_available(
     if pending_for_work.is_some() {
         return Ok(true);
     }
+    // While the provider login is broken the request waits in the queue.
+    if !joins_active_turn
+        && !crate::provider_auth::provider_allows_start(pool, runtime.as_deref()).await?
+    {
+        return Ok(false);
+    }
 
     let mut transaction = pool.begin().await.map_err(to_string)?;
     sqlx::query(
@@ -1089,18 +1120,7 @@ pub(crate) async fn enqueue_agent_work_if_available(
     .execute(&mut *transaction)
     .await
     .map_err(to_string)?;
-    sqlx::query("update agents set status = 'queued' where id = $1")
-        .bind(agent_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-    if is_codex && has_active_run {
-        sqlx::query("update agents set status = 'running' where id = $1")
-            .bind(agent_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(to_string)?;
-    }
+    mark_agent_queued_in_tx(&mut transaction, agent_id, joins_active_turn).await?;
     enqueue_ui_event_in_tx(
         &mut transaction,
         &UiEvent::Refresh {

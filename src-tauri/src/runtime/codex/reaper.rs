@@ -5,12 +5,13 @@ use tokio::time::sleep;
 use uuid::Uuid;
 
 use super::{
-    remove_warm_codex_runtime_if_same, turn::finish_warm_codex_active_turn, WarmCodexRegistry,
-    WarmCodexRuntime, CODEX_TURN_START_TIMEOUT,
+    turn::finish_warm_codex_active_turn, WarmCodexRegistry, WarmCodexRuntime,
+    CODEX_TURN_START_TIMEOUT,
 };
 use crate::app::CommandResult;
 use crate::events::activity::record_agent_activity;
 use crate::runtime::process::terminate_process_group;
+use crate::runtime::warm::stop_idle_process;
 use crate::ui_notifications::notify_supervisor_wake;
 
 const CODEX_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -52,7 +53,7 @@ async fn recover_wedged_codex_runtime(
     .bind(agent_id)
     .execute(pool)
     .await;
-    remove_warm_codex_runtime_if_same(registry, agent_id, runtime).await;
+    registry.remove_if_same(agent_id, runtime).await;
     record_agent_activity(
         pool,
         Some(agent_id),
@@ -138,11 +139,7 @@ pub(crate) async fn reap_stuck_codex_turn(
     agent_id: Uuid,
     source: &str,
 ) -> CommandResult<bool> {
-    let runtime = {
-        let runtimes = registry.runtimes.lock().await;
-        runtimes.get(&agent_id).cloned()
-    };
-    let Some(runtime) = runtime else {
+    let Some(runtime) = registry.get(agent_id).await else {
         return Ok(false);
     };
     reap_stuck_codex_runtime(pool, registry, agent_id, &runtime, source).await
@@ -195,44 +192,7 @@ pub(super) async fn codex_warm_idle_reaper(
             return;
         }
 
-        let Some(pid) = runtime.pid else {
-            return;
-        };
-        match terminate_process_group(pid).await {
-            Ok(()) => {
-                let _ = sqlx::query(
-                    "update runtime_sessions set status = 'stopping', updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where agent_id = $1 and runtime = 'codex'",
-                )
-                .bind(agent_id)
-                .execute(&pool)
-                .await;
-                let _ = record_agent_activity(
-                    &pool,
-                    Some(agent_id),
-                    None,
-                    "run",
-                    "Codex warm app-server idle timeout",
-                    format!("sent SIGTERM to process_group={pid}"),
-                )
-                .await;
-            }
-            Err(err) => {
-                {
-                    let mut state = runtime.state.lock().await;
-                    state.alive = true;
-                    state.last_activity = std::time::Instant::now();
-                }
-                let _ = record_agent_activity(
-                    &pool,
-                    Some(agent_id),
-                    None,
-                    "run_error",
-                    "Codex warm app-server idle stop failed",
-                    err,
-                )
-                .await;
-            }
-        }
+        stop_idle_process(&pool, agent_id, &runtime).await;
         return;
     }
 }

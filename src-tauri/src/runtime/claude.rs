@@ -1,4 +1,4 @@
-use std::{collections::HashMap, process::Stdio, sync::Arc, time::Instant};
+use std::{process::Stdio, sync::Arc, time::Instant};
 
 use serde_json::Value;
 use sqlx::{Row, SqlitePool};
@@ -18,44 +18,61 @@ use crate::events::activity::{
 use crate::freshness::advance_agent_target_watermark_for_work_item;
 use crate::prompts::{build_claude_streaming_prompt, claude_system_prompt, prepend_memory_context};
 use crate::runtime::{
+    lifecycle::{
+        create_run_in_tx, fail_work_item_before_run, mark_agent_runtime_failed,
+        mark_run_running_in_tx, NewRun, WarmStartFailure,
+    },
     memory_context_update,
     process::{
-        classify_agent_output_activity, cleanup_failed_warm_start,
-        configure_agent_context_tool_env, configure_agent_identity_env, terminate_process_group,
-        upsert_runtime_thread_id, WarmStartFailure,
+        cleanup_failed_warm_start, configure_agent_context_tool_env, configure_agent_identity_env,
+        truncate_activity_detail, upsert_runtime_thread_id,
     },
-    runtime_environment_changed,
     streaming::{
         append_streaming_agent_message, ensure_streaming_agent_message,
         reconcile_streaming_agent_message, start_streaming_agent_text_block,
+    },
+    warm::{
+        reusable_runtime, wait_for_warm_process, warm_stderr_reader, WarmProvider, WarmRegistry,
+        WarmRuntime, WarmState,
     },
 };
 use crate::subscription_status::{
     claude_subscription_status_from_event, persist_agent_subscription_status,
 };
-use crate::ui_notifications::{
-    enqueue_ui_agent_run_changed_in_tx, enqueue_ui_work_item_changed_in_tx, notify_supervisor_wake,
-    reconcile_work_item_change,
-};
+use crate::ui_notifications::reconcile_work_item_change;
 use crate::usage::{record_run_usage, usage_from_runtime_event};
 
+mod interrupt;
 mod protocol;
 mod reaper;
 mod session;
+mod steer;
 mod text;
 mod turn;
 
+pub(crate) use interrupt::interrupt_warm_claude_run;
+pub(crate) use steer::steerable_claude_turn_surface;
+use steer::{
+    note_claude_input_replayed, steer_warm_claude_turn_if_same_surface, ClaudePendingSteer,
+    ClaudeSteerRequest,
+};
 use text::ClaudeTextState;
 
 #[cfg(test)]
+mod interrupt_tests;
+#[cfg(test)]
 mod recovery_tests;
+#[cfg(test)]
+mod steer_tests;
 
 use protocol::{
-    claude_context_tokens, claude_message_text_blocks, claude_result_error, claude_result_text,
-    claude_resume_session_missing, claude_session_id, claude_stream_event_activity,
-    claude_stream_key, claude_streaming_command_text, claude_surface_boundary_marker,
-    claude_text_delta, claude_user_input, claude_write_input, CLAUDE_DISABLE_BACKGROUND_TASKS_ENV,
-    CLAUDE_DISABLE_CRON_ENV, CLAUDE_MAX_RETRIES_ENV, DEFAULT_CLAUDE_MAX_RETRIES,
+    claude_auth_failure, claude_context_tokens, claude_main_tool_use_started,
+    claude_message_text_blocks, claude_replayed_input_uuid, claude_result_error,
+    claude_result_text, claude_resume_session_missing, claude_session_id,
+    claude_stream_event_activity, claude_stream_key, claude_streaming_command_text,
+    claude_surface_boundary_marker, claude_text_delta, claude_user_input, claude_write_input,
+    CLAUDE_DISABLE_BACKGROUND_TASKS_ENV, CLAUDE_DISABLE_CRON_ENV, CLAUDE_DISALLOWED_TOOLS,
+    CLAUDE_MAX_RETRIES_ENV, DEFAULT_CLAUDE_MAX_RETRIES,
 };
 use reaper::claude_warm_idle_reaper;
 use session::{
@@ -82,19 +99,33 @@ fn configure_claude_process_environment(command: &mut Command) {
         .env(CLAUDE_MAX_RETRIES_ENV, DEFAULT_CLAUDE_MAX_RETRIES);
 }
 
-#[derive(Clone, Default)]
-pub(crate) struct WarmClaudeRegistry {
-    runtimes: Arc<AsyncMutex<HashMap<Uuid, Arc<WarmClaudeRuntime>>>>,
+/// The Claude CLI in stream-json mode as a warm runtime provider.
+pub(crate) struct ClaudeCli;
+
+pub(crate) type WarmClaudeRegistry = WarmRegistry<ClaudeCli>;
+type WarmClaudeRuntime = WarmRuntime<ClaudeCli>;
+
+impl WarmProvider for ClaudeCli {
+    type State = WarmClaudeState;
+    const RUNTIME: &'static str = "claude";
+    const PROCESS_TITLE: &'static str = "Claude warm stream-json";
+    const PROCESS_NAME: &'static str = "claude stream-json";
+
+    fn session_thread_id(&self) -> Option<&str> {
+        None
+    }
+
+    async fn finish_turn_after_exit(
+        pool: &SqlitePool,
+        agent_id: Uuid,
+        runtime: &Arc<WarmClaudeRuntime>,
+        detail: String,
+    ) {
+        let _ = finish_warm_claude_active_turn(pool, agent_id, runtime, false, Some(detail)).await;
+    }
 }
 
-struct WarmClaudeRuntime {
-    stdin: AsyncMutex<tokio::process::ChildStdin>,
-    state: AsyncMutex<WarmClaudeState>,
-    pid: Option<i32>,
-    environment_variables: String,
-}
-
-struct WarmClaudeState {
+pub(crate) struct WarmClaudeState {
     alive: bool,
     active: Option<ClaudeActiveTurn>,
     session_id: Option<String>,
@@ -107,6 +138,38 @@ struct WarmClaudeState {
     last_surface: Option<ClaudeSurface>,
     injected_memory_context: Option<String>,
     last_activity: Instant,
+    /// Follow-ups written to the CLI that it has not replayed yet.
+    pending_steers: Vec<ClaudePendingSteer>,
+}
+
+impl WarmClaudeState {
+    /// A turn is running, or the CLI still owes a turn for a follow-up. A new
+    /// request written now would be answered after that turn, not as its own.
+    fn is_busy(&self) -> bool {
+        self.active.is_some() || !self.pending_steers.is_empty()
+    }
+}
+
+impl WarmState for WarmClaudeState {
+    fn alive(&self) -> bool {
+        self.alive
+    }
+
+    fn set_alive(&mut self, alive: bool) {
+        self.alive = alive;
+    }
+
+    fn touch(&mut self) {
+        self.last_activity = Instant::now();
+    }
+
+    fn active_run_id(&self) -> Option<Uuid> {
+        self.active.as_ref().map(|active| active.run_id)
+    }
+
+    fn is_busy(&self) -> bool {
+        WarmClaudeState::is_busy(self)
+    }
 }
 
 struct ClaudeActiveTurn {
@@ -119,6 +182,10 @@ struct ClaudeActiveTurn {
     stream_key: String,
     pending_memory_context: Option<Option<String>>,
     text: ClaudeTextState,
+    /// Lantor asked the CLI to interrupt this turn, so its error result is a stop.
+    interrupt_requested: bool,
+    /// The CLI reported that its login is no longer valid during this turn.
+    auth_required: bool,
 }
 
 /// Reconcile complete provider text before finalization flushes the control gate.
@@ -165,7 +232,7 @@ async fn reconcile_final_text(
                 channel_id,
                 thread_root_id,
                 &stream_key,
-                &text.blocks(),
+                &text.visible_blocks(),
             )
             .await?;
             record_agent_activity(
@@ -185,6 +252,42 @@ async fn reconcile_final_text(
         }
     }
     Ok(())
+}
+
+/// Rewrite the finished reply without progress notes written between tool
+/// calls. Their controls were already delivered live and replay idempotently.
+async fn drop_interim_progress_text(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    runtime: &Arc<WarmClaudeRuntime>,
+) -> CommandResult<()> {
+    let (blocks, channel_id, thread_root_id, stream_key) = {
+        let state = runtime.state.lock().await;
+        let Some(active) = state.active.as_ref() else {
+            return Ok(());
+        };
+        if !active.text.has_interim_prose() {
+            return Ok(());
+        }
+        (
+            active.text.visible_blocks(),
+            active.channel_id,
+            active.thread_root_id,
+            active.stream_key.clone(),
+        )
+    };
+    let Some(channel_id) = channel_id else {
+        return Ok(());
+    };
+    reconcile_streaming_agent_message(
+        pool,
+        agent_id,
+        channel_id,
+        thread_root_id,
+        &stream_key,
+        &blocks,
+    )
+    .await
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -208,37 +311,20 @@ async fn get_or_spawn_warm_claude_runtime(
     agent_id: Uuid,
     config: ClaudeRuntimeConfig<'_>,
 ) -> CommandResult<Arc<WarmClaudeRuntime>> {
-    if let Some(runtime) = {
-        let runtimes = registry.runtimes.lock().await;
-        runtimes.get(&agent_id).cloned()
-    } {
-        let mut state = runtime.state.lock().await;
-        let environment_changed = runtime_environment_changed(
-            &runtime.environment_variables,
-            config.environment_variables,
-        );
-        if state.alive && environment_changed && state.active.is_none() {
-            state.alive = false;
-            drop(state);
-            if let Some(pid) = runtime.pid {
-                let _ = terminate_process_group(pid).await;
-            }
-            remove_warm_claude_runtime_if_same(registry, agent_id, &runtime).await;
-        } else if state.alive {
-            drop(state);
-            return Ok(runtime);
-        } else {
-            drop(state);
-            registry.runtimes.lock().await.remove(&agent_id);
-        }
+    if let Some(runtime) = reusable_runtime(
+        pool,
+        registry,
+        agent_id,
+        config.environment_variables,
+        false,
+    )
+    .await?
+    {
+        return Ok(runtime);
     }
 
     let runtime = spawn_warm_claude_runtime(pool, registry.clone(), agent_id, config).await?;
-    registry
-        .runtimes
-        .lock()
-        .await
-        .insert(agent_id, runtime.clone());
+    registry.insert(agent_id, runtime.clone()).await;
     Ok(runtime)
 }
 
@@ -276,11 +362,15 @@ async fn spawn_warm_claude_runtime(
         .arg("--input-format")
         .arg("stream-json")
         .arg("--include-partial-messages")
+        // Echoes each input with its uuid when consumed; follow-ups need it.
+        .arg("--replay-user-messages")
         .arg("--verbose")
         // Monitor has its own enablement gate in Claude Code, independent of
         // CLAUDE_CODE_DISABLE_BACKGROUND_TASKS. It can also emit unsolicited turns.
+        // ScheduleWakeup stays visible with cron disabled and reports success
+        // although the wakeup never fires; Lantor loops replace it.
         .arg("--disallowedTools")
-        .arg("Monitor")
+        .arg(CLAUDE_DISALLOWED_TOOLS)
         .arg("--permission-mode")
         .arg("bypassPermissions");
     configure_claude_process_environment(&mut command);
@@ -299,11 +389,7 @@ async fn spawn_warm_claude_runtime(
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(err) => {
-            sqlx::query("update agents set status = 'error' where id = $1")
-                .bind(agent_id)
-                .execute(pool)
-                .await
-                .map_err(to_string)?;
+            mark_agent_runtime_failed(pool, agent_id).await?;
             record_agent_activity(
                 pool,
                 Some(agent_id),
@@ -345,9 +431,11 @@ async fn spawn_warm_claude_runtime(
             last_surface,
             injected_memory_context: None,
             last_activity: Instant::now(),
+            pending_steers: Vec::new(),
         }),
         pid,
         environment_variables: config.environment_variables.to_owned(),
+        provider: ClaudeCli,
     });
 
     let provider_thread_id = session_id.unwrap_or_else(|| {
@@ -379,14 +467,14 @@ async fn spawn_warm_claude_runtime(
         stdout,
     ));
     if let Some(stderr) = stderr {
-        tokio::spawn(claude_warm_stderr_reader(
+        tokio::spawn(warm_stderr_reader(
             pool.clone(),
             agent_id,
             runtime.clone(),
             stderr,
         ));
     }
-    tokio::spawn(wait_for_warm_claude_process(
+    tokio::spawn(wait_for_warm_process(
         pool.clone(),
         registry,
         agent_id,
@@ -442,27 +530,7 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
         Ok(runtime) => runtime,
         Err(err) => {
             if let Some(work_item_id) = work_item_id {
-                let mut transaction = pool.begin().await.map_err(to_string)?;
-                sqlx::query(
-                    r#"
-                    update agent_work_items
-                    set status = 'failed',
-                        completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-                        updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-                    where id = $1
-                    "#,
-                )
-                .bind(work_item_id)
-                .execute(&mut *transaction)
-                .await
-                .map_err(to_string)?;
-                enqueue_ui_work_item_changed_in_tx(
-                    &mut transaction,
-                    work_item_id,
-                    "work_item_failed",
-                )
-                .await?;
-                transaction.commit().await.map_err(to_string)?;
+                fail_work_item_before_run(pool, work_item_id, "work_item_failed").await?;
                 reconcile_work_item_change(pool, work_item_id, "work_item_failed").await?;
             }
             return Err(err);
@@ -474,8 +542,21 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
         if !state.alive {
             return Err("Claude warm runtime is not alive".to_owned());
         }
-        if state.active.is_some() {
+        if state.is_busy() {
             drop(state);
+            if let Some(work_item_id) = work_item_id {
+                let request = ClaudeSteerRequest {
+                    work_item_id,
+                    prompt: &claude_prompt,
+                    rendered_context_max_seq,
+                    command_text: &command_text,
+                    working_directory: &working_directory,
+                };
+                if steer_warm_claude_turn_if_same_surface(pool, agent_id, &runtime, request).await?
+                {
+                    return Ok(());
+                }
+            }
             record_agent_activity_throttled(
                 pool,
                 Some(agent_id),
@@ -551,54 +632,18 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
     };
 
     let mut transaction = pool.begin().await.map_err(to_string)?;
-    let run_id: Uuid = sqlx::query_scalar(
-        r#"
-        insert into agent_runs (agent_id, work_item_id, command, working_directory, status, log)
-        values ($1, $2, $3, $4, 'starting', $5)
-        returning id
-        "#,
+    let run_id = create_run_in_tx(
+        &mut transaction,
+        &NewRun {
+            agent_id,
+            work_item_id,
+            command: &command_text,
+            working_directory: &working_directory,
+            log: &initial_log,
+        },
     )
-    .bind(agent_id)
-    .bind(work_item_id)
-    .bind(&command_text)
-    .bind(&working_directory)
-    .bind(initial_log)
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-    enqueue_ui_agent_run_changed_in_tx(&mut transaction, run_id, "run_created").await?;
-
-    if let Some(work_item_id) = work_item_id {
-        sqlx::query(
-            r#"
-            update agent_work_items
-            set status = 'running',
-                run_id = $2,
-                updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-            where id = $1
-            "#,
-        )
-        .bind(work_item_id)
-        .bind(run_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-        enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "work_item_running")
-            .await?;
-    }
-
-    sqlx::query("update agent_runs set status = 'running', pid = $2 where id = $1")
-        .bind(run_id)
-        .bind(runtime.pid)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-    sqlx::query("update agents set status = 'running' where id = $1")
-        .bind(agent_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-    enqueue_ui_agent_run_changed_in_tx(&mut transaction, run_id, "run_running").await?;
+    .await?;
+    mark_run_running_in_tx(&mut transaction, agent_id, run_id, runtime.pid).await?;
     transaction.commit().await.map_err(to_string)?;
     if let Some(work_item_id) = work_item_id {
         reconcile_work_item_change(pool, work_item_id, "work_item_running").await?;
@@ -649,7 +694,7 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
         let mut state = runtime.state.lock().await;
         if !state.alive {
             Err("Claude warm runtime exited before turn start".to_owned())
-        } else if state.active.is_some() {
+        } else if state.is_busy() {
             Err(CLAUDE_BUSY_BEFORE_TURN_START.to_owned())
         } else {
             state.last_activity = Instant::now();
@@ -664,6 +709,8 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
                 stream_key,
                 pending_memory_context: next_injected_memory_context,
                 text: ClaudeTextState::default(),
+                interrupt_requested: false,
+                auth_required: false,
             });
             Ok(())
         }
@@ -763,7 +810,15 @@ async fn claude_warm_stdout_reader<R>(
         Some("stdout closed".to_owned()),
     )
     .await;
-    remove_warm_claude_runtime_if_same(&registry, agent_id, &runtime).await;
+    registry.remove_if_same(agent_id, &runtime).await;
+}
+
+/// Whether the stdout line still needs the turn-ending check after its
+/// effects were applied.
+enum ClaudeLineFlow {
+    Continue,
+    /// A special line (input replay, missing session) fully handled the turn.
+    Handled,
 }
 
 async fn handle_claude_warm_stdout_line(
@@ -772,6 +827,43 @@ async fn handle_claude_warm_stdout_line(
     runtime: &Arc<WarmClaudeRuntime>,
     line: &str,
 ) -> CommandResult<()> {
+    let parsed = serde_json::from_str::<Value>(line).ok();
+    if parsed.as_ref().is_some_and(claude_auth_failure) {
+        if let Some(active) = runtime.state.lock().await.active.as_mut() {
+            active.auth_required = true;
+        }
+    }
+    let applied = apply_claude_warm_stdout_line(pool, agent_id, runtime, line).await;
+    if matches!(applied, Ok(ClaudeLineFlow::Handled)) {
+        return Ok(());
+    }
+    // A `result` line ends the turn even when recording its effects failed;
+    // otherwise the turn would stay active forever and block the agent.
+    let Some(value) =
+        parsed.filter(|value| value.get("type").and_then(Value::as_str) == Some("result"))
+    else {
+        return applied.map(|_| ());
+    };
+    let finished = if let Some(error) = claude_result_error(&value) {
+        finish_warm_claude_active_turn(pool, agent_id, runtime, false, Some(error)).await
+    } else {
+        let dropped = if applied.is_ok() {
+            drop_interim_progress_text(pool, agent_id, runtime).await
+        } else {
+            Ok(())
+        };
+        let finished = finish_warm_claude_active_turn(pool, agent_id, runtime, true, None).await;
+        dropped.and(finished)
+    };
+    applied.and(finished)
+}
+
+async fn apply_claude_warm_stdout_line(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    runtime: &Arc<WarmClaudeRuntime>,
+    line: &str,
+) -> CommandResult<ClaudeLineFlow> {
     let active_run_id = {
         runtime
             .state
@@ -781,14 +873,32 @@ async fn handle_claude_warm_stdout_line(
             .as_ref()
             .map(|active| active.run_id)
     };
+    let value = serde_json::from_str::<Value>(line);
+    let replayed_uuid = value
+        .as_ref()
+        .ok()
+        .and_then(claude_replayed_input_uuid)
+        .map(str::to_owned);
     if let Some(run_id) = active_run_id {
-        append_run_log(pool, run_id, format!("[claude] {line}\n")).await?;
+        // A replay repeats the whole prompt; the uuid is enough for the log.
+        let entry = match &replayed_uuid {
+            Some(uuid) => format!("[claude] input replayed uuid={uuid}\n"),
+            None => format!("[claude] {line}\n"),
+        };
+        append_run_log(pool, run_id, entry).await?;
     }
-    let value: Value = serde_json::from_str(line).map_err(to_string)?;
+    let value = value.map_err(to_string)?;
+    if let Some(uuid) = replayed_uuid {
+        return note_claude_input_replayed(pool, agent_id, runtime, &uuid)
+            .await
+            .map(|_| ClaudeLineFlow::Handled);
+    }
 
     // Handle before the session-id capture below, which would store the missing ID again.
     if claude_resume_session_missing(&value) {
-        return restart_after_missing_session(pool, agent_id, runtime, &value).await;
+        return restart_after_missing_session(pool, agent_id, runtime, &value)
+            .await
+            .map(|_| ClaudeLineFlow::Handled);
     }
 
     if let Some(snapshot) = claude_subscription_status_from_event(&value) {
@@ -882,7 +992,7 @@ async fn handle_claude_warm_stdout_line(
             let mut state = runtime.state.lock().await;
             let (active, first_delta_elapsed) = {
                 let Some(active) = state.active.as_mut() else {
-                    return Ok(());
+                    return Ok(ClaudeLineFlow::Continue);
                 };
                 let first_delta_elapsed = if active.first_delta_at.is_none() {
                     let elapsed = active.started_at.elapsed();
@@ -918,106 +1028,45 @@ async fn handle_claude_warm_stdout_line(
             append_streaming_agent_message(pool, agent_id, channel_id, active.2, &active.3, delta)
                 .await?;
         }
-        return Ok(());
+        return Ok(ClaudeLineFlow::Continue);
     }
 
     reconcile_final_text(pool, agent_id, runtime, &value).await?;
 
-    if let Some(error) = claude_result_error(&value) {
-        finish_warm_claude_active_turn(pool, agent_id, runtime, false, Some(error)).await?;
-    } else if value.get("type").and_then(Value::as_str) == Some("result") {
-        finish_warm_claude_active_turn(pool, agent_id, runtime, true, None).await?;
-    }
-
-    Ok(())
-}
-
-async fn claude_warm_stderr_reader<R>(
-    pool: SqlitePool,
-    agent_id: Uuid,
-    runtime: Arc<WarmClaudeRuntime>,
-    stream: R,
-) where
-    R: AsyncRead + Unpin,
-{
-    let mut lines = BufReader::new(stream).lines();
-    while let Ok(Some(line)) = lines.next_line().await {
-        let active_run_id = {
-            runtime
-                .state
-                .lock()
-                .await
-                .active
-                .as_ref()
-                .map(|active| active.run_id)
-        };
+    // After reconciling, so text completed by this same `assistant` line counts
+    // as preceding the tool call.
+    if claude_main_tool_use_started(&value) {
+        let notes = runtime
+            .state
+            .lock()
+            .await
+            .active
+            .as_mut()
+            .map(|active| active.text.mark_tool_use())
+            .unwrap_or_default();
         if let Some(run_id) = active_run_id {
-            let _ = append_run_log(&pool, run_id, format!("[stderr] {line}\n")).await;
-            if let Some((kind, title, detail)) = classify_agent_output_activity("stderr", &line) {
-                let _ = record_agent_activity_throttled(
-                    &pool,
+            for note in notes {
+                let title: String = note
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(120)
+                    .collect();
+                record_agent_activity(
+                    pool,
                     Some(agent_id),
                     Some(run_id),
-                    kind,
+                    "thinking",
                     title,
-                    detail,
+                    truncate_activity_detail(&note),
                 )
-                .await;
+                .await?;
             }
         }
     }
-}
 
-async fn wait_for_warm_claude_process(
-    pool: SqlitePool,
-    registry: WarmClaudeRegistry,
-    agent_id: Uuid,
-    runtime: Arc<WarmClaudeRuntime>,
-    mut child: tokio::process::Child,
-) {
-    let wait_result = child.wait().await;
-    {
-        let mut state = runtime.state.lock().await;
-        state.alive = false;
-    }
-    let detail = match wait_result {
-        Ok(status) => format!("claude stream-json exited: {status}"),
-        Err(err) => format!("claude stream-json wait failed: {err}"),
-    };
-    let _ = finish_warm_claude_active_turn(&pool, agent_id, &runtime, false, Some(detail.clone()))
-        .await;
-    let _ = sqlx::query(
-        "update runtime_sessions set status = 'stopped', updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where agent_id = $1 and runtime = 'claude'",
-    )
-    .bind(agent_id)
-    .execute(&pool)
-    .await;
-    let _ = record_agent_activity(
-        &pool,
-        Some(agent_id),
-        None,
-        "run",
-        "Claude warm stream-json exited",
-        detail,
-    )
-    .await;
-    remove_warm_claude_runtime_if_same(&registry, agent_id, &runtime).await;
-    let _ = notify_supervisor_wake(&pool).await;
-}
-
-async fn remove_warm_claude_runtime_if_same(
-    registry: &WarmClaudeRegistry,
-    agent_id: Uuid,
-    runtime: &Arc<WarmClaudeRuntime>,
-) {
-    let mut runtimes = registry.runtimes.lock().await;
-    if runtimes
-        .get(&agent_id)
-        .map(|current| Arc::ptr_eq(current, runtime))
-        .unwrap_or(false)
-    {
-        runtimes.remove(&agent_id);
-    }
+    Ok(ClaudeLineFlow::Continue)
 }
 
 #[cfg(test)]
@@ -1042,7 +1091,7 @@ mod tests {
     async fn claude_child_enforces_turn_boundaries_over_environment_overrides() {
         let mut command = Command::new("sh");
         command.arg("-c").arg(
-            r#"printf '%s\n' "$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" "$CLAUDE_CODE_DISABLE_CRON" "$CLAUDE_CODE_DISABLE_AUTO_MEMORY" "$ANTHROPIC_MAX_RETRIES""#,
+            r#"printf '%s\n' "$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" "$CLAUDE_CODE_DISABLE_CRON" "$CLAUDE_CODE_DISABLE_AUTO_MEMORY" "$CLAUDE_CODE_MAX_RETRIES""#,
         );
         for key in [
             CLAUDE_DISABLE_BACKGROUND_TASKS_ENV,
@@ -1088,6 +1137,8 @@ mod tests {
                     stream_key,
                     pending_memory_context: None,
                     text: ClaudeTextState::default(),
+                    interrupt_requested: false,
+                    auth_required: false,
                 }),
                 session_id: Some("test-claude-session".to_owned()),
                 context_tokens: 0,
@@ -1095,9 +1146,11 @@ mod tests {
                 last_surface: None,
                 injected_memory_context: None,
                 last_activity: Instant::now(),
+                pending_steers: Vec::new(),
             }),
             pid: None,
             environment_variables: String::new(),
+            provider: super::ClaudeCli,
         }))
     }
 
@@ -1221,6 +1274,129 @@ mod tests {
             .await
             .map_err(|err| err.to_string())?;
             assert_eq!(run_error_count, 1);
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        result.unwrap();
+    }
+
+    async fn insert_running_turn_fixture(
+        pool: &sqlx::SqlitePool,
+        handle: &str,
+        runtime: &str,
+    ) -> Result<(Uuid, Uuid, Uuid, Uuid, String), String> {
+        let agent_id = insert_test_agent(pool, handle).await?;
+        sqlx::query("update agents set status = 'running', runtime = $2 where id = $1")
+            .bind(agent_id)
+            .bind(runtime)
+            .execute(pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let channel_id = insert_test_channel(pool, &format!("{handle}-channel")).await?;
+        let work_item_id: Uuid = sqlx::query_scalar(
+            r#"
+            insert into agent_work_items (agent_id, channel_id, title, status)
+            values ($1, $2, 'daily memory', 'running')
+            returning id
+            "#,
+        )
+        .bind(agent_id)
+        .bind(channel_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        let run_id: Uuid = sqlx::query_scalar(
+            r#"
+            insert into agent_runs (agent_id, work_item_id, command, status)
+            values ($1, $2, 'warm runtime', 'running')
+            returning id
+            "#,
+        )
+        .bind(agent_id)
+        .bind(work_item_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        sqlx::query("update agent_work_items set run_id = $2 where id = $1")
+            .bind(work_item_id)
+            .bind(run_id)
+            .execute(pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let stream_key = format!("{run_id}:warm");
+        sqlx::query(
+            r#"
+            insert into messages (
+                channel_id, sender_agent_id, sender_name, sender_role,
+                body, delivery_state, stream_key
+            )
+            values ($1, $2, $3, 'agent', '', 'streaming', $4)
+            "#,
+        )
+        .bind(channel_id)
+        .bind(agent_id)
+        .bind(handle)
+        .bind(&stream_key)
+        .execute(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        Ok((agent_id, channel_id, work_item_id, run_id, stream_key))
+    }
+
+    #[tokio::test]
+    async fn expired_claude_login_requeues_the_request_and_pauses_claude() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let (agent_id, channel_id, work_item_id, run_id, stream_key) =
+                insert_running_turn_fixture(&pool, "claude-login-agent", "claude").await?;
+            let runtime =
+                test_runtime_with_active_turn(run_id, work_item_id, channel_id, stream_key.clone())
+                    .await?;
+            // The lines Claude Code 2.1 prints when its OAuth session expired.
+            for line in [
+                r#"{"type":"assistant","message":{"id":"m1","model":"<synthetic>","role":"assistant","type":"message","content":[{"type":"text","text":"Failed to authenticate: OAuth session expired and could not be refreshed"}]},"session_id":"s1","uuid":"u1","error":"authentication_failed","is_api_error_message":true}"#,
+                r#"{"type":"result","subtype":"success","is_error":true,"api_error_status":null,"terminal_reason":"api_error","result":"Failed to authenticate: OAuth session expired and could not be refreshed","session_id":"s1","uuid":"u2"}"#,
+            ] {
+                super::handle_claude_warm_stdout_line(&pool, agent_id, &runtime, line).await?;
+            }
+
+            let work = sqlx::query("select status, run_id, completed_at from agent_work_items where id = $1")
+                .bind(work_item_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+            assert_eq!(work.get::<String, _>("status"), "queued");
+            assert!(work.get::<Option<Uuid>, _>("run_id").is_none());
+            assert!(work.get::<Option<String>, _>("completed_at").is_none());
+            let run_status: String = sqlx::query_scalar("select status from agent_runs where id = $1")
+                .bind(run_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+            assert_eq!(run_status, "failed");
+            let replies: i64 = sqlx::query_scalar("select count(*) from messages where stream_key = $1")
+                .bind(&stream_key)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+            assert_eq!(replies, 0, "the CLI's error text is not posted as a reply");
+            let auth: String =
+                sqlx::query_scalar("select status from provider_auth_state where runtime = 'claude'")
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            assert_eq!(auth, "needs_login");
+            let cards: i64 = sqlx::query_scalar(
+                "select count(*) from decisions where status = 'open' and requester_agent_id is null",
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            assert_eq!(cards, 1);
+            assert!(runtime.state.lock().await.active.is_none());
             Ok(())
         }
         .await;

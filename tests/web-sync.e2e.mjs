@@ -20,7 +20,7 @@ const state = {
     unread_count: 1, github_unread_count: 0, github_review_synced_at: null }],
   messages: [root], channel_message_history: [{ channel_id: channelId, before_seq: null, has_more: false }],
   thread_activities: [], channel_members: [], agents: [], saved_messages: [], dismissed_inbox_items: {},
-  read_inbox_items: {}, artifacts: [], reminders: [], agent_schedules: [], agent_runs: [], agent_work_items: [], agent_activities: [],
+  read_inbox_items: {}, artifacts: [], reminders: [], agent_runs: [], agent_work_items: [], agent_activities: [],
   tasks: [{ id: id(900), number: 1, message_id: root.id, channel_id: channelId, title: "Sync task", status: "todo",
     version: 1, channel_name: "sync-test", assignee_id: null, assignee_name: null, created_at: now, updated_at: now }],
   supervisor: { pid: null, status: "stopped", updated_at: null },
@@ -139,23 +139,23 @@ try {
   assert.equal(count("load_agent_detail"), 0, "agent detail stays lazy");
   assert.equal(count("load_thread_messages"), 0, "history stays lazy");
   await page.locator(".message-agent-avatar-trigger").click();
-  await page.getByRole("tab", { name: /^Workspace/ }).click();
+  await page.getByRole("tab", { name: /^Files/ }).click();
   await page.getByText("hydrated-workspace.txt", { exact: true }).waitFor();
   assert.equal(count("load_agent_detail"), 1);
   await page.getByRole("button", { name: "Edit @LazyAgent", exact: true }).click();
   await page.locator(".agent-env-textarea").waitFor();
   assert.equal(await page.locator(".agent-env-textarea").inputValue(), "LAZY_FIXTURE=restored");
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
-  await page.getByRole("tab", { name: /^Activity/ }).click();
+  await page.getByRole("tab", { name: /^Work log/ }).click();
   await page.locator(".activity-run-open").click();
   await page.locator(".thread .markdown-body").filter({ hasText: archivedRoot.body }).waitFor();
   assert.equal(count("load_message"), 1, "work source outside bootstrap is fetched, not treated as deleted");
-  await page.getByRole("button", { name: "Close thread panel", exact: true }).click();
+  await page.getByRole("button", { name: "Close thread", exact: true }).click();
   await page.locator(`[data-message-id="${root.id}"]`).hover();
-  await page.locator(`.conversation [data-message-id="${root.id}"]`).getByRole("button", { name: "View thread replies", exact: true }).click();
+  await page.locator(`.conversation [data-message-id="${root.id}"]`).getByRole("button", { name: "View replies", exact: true }).click();
   await page.getByText("Historical reply loaded on expansion", { exact: true }).waitFor();
   assert.equal(count("load_thread_messages"), 2);
-  await page.getByRole("button", { name: "Close thread panel", exact: true }).click();
+  await page.getByRole("button", { name: "Close thread", exact: true }).click();
   assert.equal(count("bootstrap"), 1, "lazy hydration must not bootstrap");
   await page.locator("textarea").first().fill("Sent without bootstrap");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
@@ -232,7 +232,7 @@ try {
   await page.waitForTimeout(500);
   assert.equal(count("load_ui_state"), unchangedScopes, "up-to-date foreground does not reload collections");
   await page.locator(`[data-message-id="${root.id}"]`).hover();
-  await page.locator(`.conversation [data-message-id="${root.id}"]`).getByRole("button", { name: "View thread replies", exact: true }).click();
+  await page.locator(`.conversation [data-message-id="${root.id}"]`).getByRole("button", { name: "View replies", exact: true }).click();
   await page.getByText("Historical reply loaded on expansion", { exact: true }).waitFor();
   const threadRequestsBeforeGap = count("load_thread_messages");
   threadHistory.push(message("Reply recovered beyond compact snapshot", { thread_root_id: root.id }));

@@ -1,10 +1,13 @@
-use super::{claim_agent_event, extract_agent_event_json, handle_agent_event, AgentEvent};
+use super::{
+    claim_agent_event, extract_agent_event_json, handle_agent_event,
+    handle_streaming_agent_event_json, parse_agent_event, AgentEvent,
+};
 use crate::attachments::AgentAttachmentFile;
 use crate::channels::open_dm_with_agent_in_pool;
 use crate::context_tool::agent_context_artifact_read_in_pool;
 use crate::message_store::load_messages;
 use crate::test_support::{drop_test_schema, insert_test_agent, insert_test_channel, test_pool};
-use serde_json::json;
+use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -85,6 +88,128 @@ async fn artifact_create_event_persists_artifact_and_message_card() {
         .await?;
         assert!(tool_output.contains("kind=markdown"));
         assert!(tool_output.contains("# Review report"));
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    assert!(result.is_ok(), "{:?}", result.err());
+}
+
+#[test]
+fn parse_agent_event_reads_channel_fields_by_their_form() {
+    let id = Uuid::new_v4();
+    let channel_of = |event: Value| match parse_agent_event(&event.to_string()) {
+        Ok(AgentEvent::ChannelMessageCreate {
+            channel,
+            channel_id,
+            ..
+        }) => (channel, channel_id),
+        other => panic!("unexpected parse result {other:?}"),
+    };
+    let message = |fields: Value| {
+        let mut event = json!({"type": "channel_message_create", "body": "hello"});
+        event
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        event
+    };
+
+    assert_eq!(channel_of(message(json!({"channel_id": ""}))), (None, None));
+    assert_eq!(
+        channel_of(message(json!({"channel_id": "#all"}))),
+        (Some("#all".to_owned()), None)
+    );
+    assert_eq!(
+        channel_of(message(json!({"channel": id.to_string()}))),
+        (None, Some(id))
+    );
+    assert_eq!(
+        channel_of(message(
+            json!({"channel": "#all", "channel_id": id.to_string()})
+        )),
+        (Some("#all".to_owned()), Some(id))
+    );
+    // Two names leave the event as written, so it is still rejected.
+    assert!(parse_agent_event(
+        &message(json!({"channel": "#all", "channel_id": "#design"})).to_string()
+    )
+    .is_err());
+}
+
+#[tokio::test]
+async fn artifact_with_a_blank_or_named_channel_still_lands() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "channel-guesser").await?;
+        let turn_channel_id = insert_test_channel(&pool, "turn-channel").await?;
+        let named_channel_id = insert_test_channel(&pool, "named-channel").await?;
+        let root_id: Uuid = sqlx::query_scalar(
+            "insert into messages (channel_id, sender_name, sender_role, body) values ($1, 'Dylan', 'owner', 'make a report') returning id",
+        )
+        .bind(turn_channel_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        let work_item_id: Uuid = sqlx::query_scalar(
+            r#"
+            insert into agent_work_items (
+                agent_id, channel_id, thread_root_id, source_message_id,
+                source_kind, title, context, status
+            )
+            values ($1, $2, $3, $3, 'mention', 'report', 'context', 'running')
+            returning id
+            "#,
+        )
+        .bind(agent_id)
+        .bind(turn_channel_id)
+        .bind(root_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        let run_id: Uuid = sqlx::query_scalar(
+            "insert into agent_runs (agent_id, work_item_id, command, status) values ($1, $2, 'claude', 'running') returning id",
+        )
+        .bind(agent_id)
+        .bind(work_item_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+
+        for (channel_id, title) in [("", "Turn report"), ("#named-channel", "Named report")] {
+            let event = json!({
+                "type": "artifact_create",
+                "channel_id": channel_id,
+                "kind": "markdown",
+                "title": title,
+                "content": format!("# {title}"),
+            });
+            handle_streaming_agent_event_json(&pool, agent_id, run_id, &event.to_string()).await?;
+        }
+
+        let placed: Vec<(String, Uuid, Option<Uuid>)> = sqlx::query(
+            r#"
+            select a.title, m.channel_id, m.thread_root_id
+            from artifacts a
+            join messages m on m.id = a.message_id
+            order by a.title
+            "#,
+        )
+        .fetch_all(&pool)
+        .await
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        .map(|row| (row.get("title"), row.get("channel_id"), row.get("thread_root_id")))
+        .collect();
+        assert_eq!(
+            placed,
+            vec![
+                ("Named report".to_owned(), named_channel_id, None),
+                ("Turn report".to_owned(), turn_channel_id, Some(root_id)),
+            ]
+        );
         Ok(())
     }
     .await;
@@ -1494,6 +1619,63 @@ async fn activity_event_records_progress_without_chat_message() {
             .await
             .map_err(|err| err.to_string())?;
         assert_eq!(messages, 0);
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    assert!(result.is_ok(), "{:?}", result.err());
+}
+
+#[tokio::test]
+async fn reminder_create_event_with_interval_minutes_creates_a_loop() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "loop-event-agent").await?;
+        let channel_id = insert_test_channel(&pool, "loop-events").await?;
+        sqlx::query("insert into channel_members (channel_id, agent_id) values ($1, $2)")
+            .bind(channel_id)
+            .bind(agent_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        let run_id: Uuid = sqlx::query_scalar(
+            r#"
+            insert into agent_runs (agent_id, command, status)
+            values ($1, 'claude', 'running')
+            returning id
+            "#,
+        )
+        .bind(agent_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        let line = format!(
+            r#"LANTOR_EVENT {{"type":"reminder_create","channel_id":"{channel_id}","title":"Forward #github-pulls","interval_minutes":5,"check_command":"./poll.sh","check_action":"post"}}"#
+        );
+        let json = extract_agent_event_json(&line).ok_or("event line should parse")?;
+        let event: AgentEvent = serde_json::from_str(json).map_err(|err| err.to_string())?;
+        handle_agent_event(&pool, agent_id, run_id, event).await?;
+
+        let row = sqlx::query(
+            r#"
+            select recurrence, interval_seconds, check_command, check_action, status,
+                   abs(julianday(due_at) - julianday('now')) * 86400.0 as due_delta
+            from reminders
+            where creator_agent_id = $1
+            "#,
+        )
+        .bind(agent_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(row.get::<String, _>("recurrence"), "interval");
+        assert_eq!(row.get::<Option<i64>, _>("interval_seconds"), Some(300));
+        assert_eq!(row.get::<String, _>("check_command"), "./poll.sh");
+        assert_eq!(row.get::<String, _>("check_action"), "post");
+        assert_eq!(row.get::<String, _>("status"), "scheduled");
+        assert!(row.get::<f64, _>("due_delta") < 10.0, "first tick should be due now");
         Ok(())
     }
     .await;

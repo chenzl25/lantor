@@ -1,10 +1,11 @@
-import { CheckCircle2, ClipboardCheck, Hand, Hourglass, MessageSquare, X } from "lucide-react";
+import { CheckCircle2, ClipboardCheck, Hand, Hourglass, MessageSquare } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { formatIdle, type NeedsYou, type NeedsYouTask } from "../decisions";
 import type { Agent, Decision, Task } from "../types";
 import { formatTime } from "../ui-utils";
 import { AgentAvatar } from "./AgentAvatar";
 import { DecisionCard } from "./DecisionCard";
+import { DialogHeader } from "./DialogHeader";
 import { DialogSurface } from "./DialogSurface";
 import { PushNotificationsRow } from "./PushNotificationsRow";
 
@@ -103,21 +104,14 @@ export function NeedsYouModal({
   const empty = decisions.length + reviews.length + stalled.length === 0;
   const summary = [
     decisions.length ? `${decisions.length} ${decisions.length === 1 ? "decision" : "decisions"}` : null,
-    reviews.length ? `${reviews.length} in review` : null,
-    stalled.length ? `${stalled.length} stalled` : null,
+    reviews.length ? `${reviews.length} to review` : null,
+    stalled.length ? `${stalled.length} stuck` : null,
   ].filter(Boolean).join(" · ");
 
   return (
     <DialogSurface label="Needs you" backdropClassName="search-backdrop" className="activity-feed-panel needs-you-panel" onClose={onClose}>
-      <header className="activity-feed-head">
-        <div>
-          <h2>Needs you</h2>
-          <p>{empty ? "Nothing is waiting on you" : summary}</p>
-        </div>
-        <button className="activity-feed-back" onClick={onClose} aria-label="Close Needs you">
-          <X size={18} />
-        </button>
-      </header>
+      <DialogHeader title="Needs you" subtitle={empty ? "Nothing is waiting on you" : summary}
+        closeLabel="Close Needs you" onClose={onClose} />
 
       <div className="activity-feed-body needs-you-body">
         <PushNotificationsRow />
@@ -125,11 +119,11 @@ export function NeedsYouModal({
           <div className="search-empty">
             <Hand size={34} />
             <h3>All clear</h3>
-            <p>Agent decisions, tasks waiting for your review, and stalled tasks show up here.</p>
+            <p>Decisions and reviews for you show up here.</p>
           </div>
         )}
 
-        <Section icon={<Hand size={16} />} title="Decisions" hint="Agents are blocked until you choose" count={decisions.length}>
+        <Section icon={<Hand size={16} />} title="Decisions" hint="Agents wait for your answer" count={decisions.length}>
           {decisions.map((decision) => {
             const requester = agents.find((agent) => agent.id === decision.requester_agent_id) ?? null;
             return (
@@ -137,7 +131,7 @@ export function NeedsYouModal({
                 <button type="button" className="needs-you-decision-meta" onClick={() => onOpenDecision(decision)}
                   aria-label={`Open the conversation for ${decision.title}`}>
                   {requester && <AgentAvatar agent={requester} size="sm" showStatus={false} />}
-                  <strong>{decision.requester_handle ? `@${decision.requester_handle}` : "Agent"}</strong>
+                  <strong>{decision.requester_handle ? `@${decision.requester_handle}` : decision.requester_agent_id ? "Agent" : "Lantor"}</strong>
                   <span>#{decision.channel_name}</span>
                   <time dateTime={decision.created_at}>{formatTime(decision.created_at)}</time>
                   <MessageSquare size={14} />
@@ -148,13 +142,13 @@ export function NeedsYouModal({
           })}
         </Section>
 
-        <Section icon={<ClipboardCheck size={16} />} title="Awaiting your review" hint="Agents marked these ready" count={reviews.length}>
+        <Section icon={<ClipboardCheck size={16} />} title="To review" hint="Agents say these are done" count={reviews.length}>
           {reviews.map((item) => (
             <TaskRow key={item.task.id} item={item} agents={agents} onOpen={onOpenTask} onDone={markDone} />
           ))}
         </Section>
 
-        <Section icon={<Hourglass size={16} />} title="Stalled" hint="Active tasks with no movement for 3+ days" count={stalled.length}>
+        <Section icon={<Hourglass size={16} />} title="Stuck" hint="No progress in 3+ days" count={stalled.length}>
           {stalled.map((item) => (
             <TaskRow key={item.task.id} item={item} agents={agents} onOpen={onOpenTask} />
           ))}

@@ -12,7 +12,7 @@ function titleCaseIdentifier(value: string) {
 function subscriptionStatusLabel(status: string) {
   if (status === "available") return "Available";
   if (status === "warning") return "Near limit";
-  if (status === "limited") return "Rate limited";
+  if (status === "limited") return "Limit reached";
   if (status === "unavailable") return "Unavailable";
   return titleCaseIdentifier(status || "unknown");
 }
@@ -31,11 +31,11 @@ function formatSubscriptionPercent(value: number) {
 }
 
 function formatSubscriptionReset(resetsAt: number | null) {
-  if (resetsAt === null || !Number.isFinite(resetsAt)) return "Reset time unavailable";
+  if (resetsAt === null || !Number.isFinite(resetsAt)) return "Reset time unknown";
   const date = new Date(resetsAt * 1000);
-  if (Number.isNaN(date.getTime())) return "Reset time unavailable";
+  if (Number.isNaN(date.getTime())) return "Reset time unknown";
   const remainingMs = date.getTime() - Date.now();
-  if (remainingMs <= 0) return "Reset pending";
+  if (remainingMs <= 0) return "Resetting soon";
   const totalMinutes = Math.max(1, Math.ceil(remainingMs / 60_000));
   if (totalMinutes < 60) return `Resets in ${totalMinutes}m`;
   const totalHours = Math.floor(totalMinutes / 60);
@@ -73,7 +73,7 @@ export function AgentSubscriptionUsage({ agent, compact = false }: {
   return (
     <section className={compact ? "detail-section agent-avatar-subscription" : "detail-section subscription-section"}>
       <div className="detail-section-head">
-        <h4>Subscription</h4>
+        <h4>Plan usage</h4>
         <span>
           {subscription?.plan
             ? `${runtimeLabel(subscription.provider)} · ${titleCaseIdentifier(subscription.plan)}`
@@ -124,15 +124,15 @@ export function AgentSubscriptionUsage({ agent, compact = false }: {
             </div>
           ) : (
             <div className="subscription-empty">
-              <strong>No quota windows reported</strong>
-              <span>This account or provider does not expose subscription usage.</span>
+              <strong>No usage info</strong>
+              <span>This account doesn’t share usage.</span>
             </div>
           )}
         </>
       ) : (
         <div className="subscription-empty">
-          <strong>Waiting for usage data</strong>
-          <span>Usage appears after this agent's next provider turn.</span>
+          <strong>No usage yet</strong>
+          <span>Shows after the agent’s next reply.</span>
         </div>
       )}
     </section>

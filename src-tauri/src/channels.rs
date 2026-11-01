@@ -91,6 +91,20 @@ pub(crate) async fn load_channels(pool: &SqlitePool) -> CommandResult<Vec<Channe
                   select 1 from artifacts ar where ar.message_id = m.id
                 )
               )
+              -- A thread receipt (from a thread shown without the
+              -- conversation, e.g. expanded) also reads those replies here.
+              and not exists (
+                select 1 from owner_inbox_read_state thread_read
+                where m.thread_root_id is not null
+                  and thread_read.item_id = 'thread:' || lower(
+                    substr(hex(m.thread_root_id), 1, 8) || '-' ||
+                    substr(hex(m.thread_root_id), 9, 4) || '-' ||
+                    substr(hex(m.thread_root_id), 13, 4) || '-' ||
+                    substr(hex(m.thread_root_id), 17, 4) || '-' ||
+                    substr(hex(m.thread_root_id), 21, 12)
+                  )
+                  and julianday(m.created_at) <= julianday(thread_read.read_until)
+              )
         ), unread_counts as (
             select channel_id, count(*) as unread_count,
                    sum(case when sender_role not in ('owner', 'system') then 1 else 0 end) as agent_unread_count,
@@ -748,6 +762,7 @@ pub(crate) fn normalize_channel_name(name: &str) -> String {
 mod tests {
     use std::fs as std_fs;
 
+    use chrono::{DateTime, Utc};
     use sqlx::{Row, SqlitePool};
     use uuid::Uuid;
 
@@ -946,6 +961,71 @@ mod tests {
             crate::owner_inbox::mark_channel_read_through_in_pool(&pool, channel_id, Some(first_root_seq))
                 .await?;
             assert!(first_unread(&pool, channel_id).await?.is_some_and(|seq| seq > first_root_seq));
+
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn channel_unread_count_skips_replies_read_through_their_thread() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let channel_id = insert_test_channel(&pool, "thread-receipt-unread").await?;
+            async fn insert(
+                pool: &SqlitePool,
+                channel_id: Uuid,
+                thread_root_id: Option<Uuid>,
+                created_at: &str,
+            ) -> Result<Uuid, String> {
+                sqlx::query_scalar(
+                    r#"
+                    insert into messages (channel_id, thread_root_id, sender_name, sender_role, body, created_at)
+                    values ($1, $2, 'arch', 'agent', 'body', $3)
+                    returning id
+                    "#,
+                )
+                .bind(channel_id)
+                .bind(thread_root_id)
+                .bind(created_at)
+                .fetch_one(pool)
+                .await
+                .map_err(|err| err.to_string())
+            }
+            async fn unread(pool: &SqlitePool, channel_id: Uuid) -> Result<(i32, i32), String> {
+                let channel = load_channels(pool)
+                    .await?
+                    .into_iter()
+                    .find(|channel| channel.id == channel_id)
+                    .ok_or_else(|| "missing test channel".to_owned())?;
+                Ok((channel.unread_count, channel.agent_unread_count))
+            }
+
+            let root = insert(&pool, channel_id, None, "2026-10-23T06:00:00+00:00").await?;
+            crate::owner_inbox::mark_channel_read_through_in_pool(&pool, channel_id, None).await?;
+            insert(&pool, channel_id, Some(root), "2026-10-23T06:10:00+00:00").await?;
+            insert(&pool, channel_id, Some(root), "2026-10-23T06:20:00+00:00").await?;
+            insert(&pool, channel_id, None, "2026-10-23T06:25:00+00:00").await?;
+            assert_eq!(unread(&pool, channel_id).await?, (3, 3));
+
+            // An expanded thread receipts its replies without moving the channel watermark.
+            let cutoff = DateTime::parse_from_rfc3339("2026-10-23T06:20:00+00:00")
+                .map_err(|err| err.to_string())?
+                .with_timezone(&Utc);
+            crate::owner_inbox::mark_inbox_items_read_in_pool(&pool, [(format!("thread:{root}"), cutoff)])
+                .await?;
+            assert_eq!(
+                unread(&pool, channel_id).await?,
+                (1, 1),
+                "read replies stop counting; the unseen top-level message still does"
+            );
+
+            insert(&pool, channel_id, Some(root), "2026-10-23T06:30:00+00:00").await?;
+            assert_eq!(unread(&pool, channel_id).await?, (2, 2), "a reply after the receipt is unread");
 
             Ok(())
         }

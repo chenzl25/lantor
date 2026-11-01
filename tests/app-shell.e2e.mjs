@@ -19,7 +19,7 @@ const state = {
   db_url:"synthetic://shell", web_base_url:null, owner_profile:{display_name:"Owner",avatar:"O",description:""},
   channels:[{id:channelId,name:"shell-test",description:"",kind:"channel",dm_agent_id:null,unread_count:0,github_unread_count:0,github_review_synced_at:null}],
   messages:[message(2,"Online workspace data")], channel_message_history:[{channel_id:channelId,before_seq:null,has_more:false}],
-  thread_activities:[], channel_members:[], agents:[], saved_messages:[], dismissed_inbox_items:{}, read_inbox_items:{}, artifacts:[], tasks:[], reminders:[], agent_schedules:[], agent_runs:[], agent_work_items:[], agent_activities:[],
+  thread_activities:[], channel_members:[], agents:[], saved_messages:[], dismissed_inbox_items:{}, read_inbox_items:{}, artifacts:[], tasks:[], reminders:[], agent_runs:[], agent_work_items:[], agent_activities:[],
   supervisor:{pid:null,status:"stopped",updated_at:null}, launch_agent:{label:"",plist_path:"",installed:false,loaded:false}, ui_event_cursor:0,
 };
 const clients = new Set(), events = [], requests = [];
@@ -190,7 +190,7 @@ try {
   if (isWebKit) await offline.addInitScript(connectionSignal,false);
   assert.equal((await offline.goto(origin+"/?offline-open=1")).fromServiceWorker(),true);
   await offline.locator(".boot.offline").waitFor();
-  await offline.getByText("Offline — reconnect to sync your workspace.",{exact:true}).waitFor();
+  await offline.getByText("Offline. Reconnect to catch up.",{exact:true}).waitFor();
   assert.equal(await offline.getByText("Online workspace data",{exact:true}).count(),0,"offline shell does not cache workspace content");
   await offline.setViewportSize({width:390,height:844});
   if (process.env.SHELL_SCREENSHOT) await offline.screenshot({path:process.env.SHELL_SCREENSHOT+"-offline.png"});
@@ -230,7 +230,7 @@ try {
   await page.getByText(stream.body,{exact:true}).waitFor();
   brokenAsset=null;
   await page.evaluate(async()=> (await navigator.serviceWorker.getRegistration()).update());
-  await page.getByText("A new version is available.",{exact:true}).waitFor();
+  await page.getByText("New version ready.",{exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>window.__shellFixtureBuild),"a","activation never reloads an open page");
   assert.equal(await draft.inputValue(),"Keep my unsent draft");
   stream.body+=" — still streaming after deploy";

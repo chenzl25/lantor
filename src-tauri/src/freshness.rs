@@ -6,6 +6,7 @@ use crate::agent_inbox_wake::enqueue_agent_work_if_available;
 use crate::app::{to_string, CommandResult};
 use crate::events::activity::record_agent_activity;
 use crate::message_store::load_message_patch_in_tx;
+use crate::runtime::lifecycle::mark_work_item_held_in_tx;
 use crate::ui_notifications::{
     enqueue_ui_event_in_tx, enqueue_ui_work_item_changed_in_tx, reconcile_work_item_change, UiEvent,
 };
@@ -376,21 +377,7 @@ pub(crate) async fn hold_work_item_output_if_stale(
     .await
     .map_err(to_string)?;
 
-    sqlx::query(
-        r#"
-        update agent_work_items
-        set status = 'held',
-            completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id = $1
-          and status not in ('cancelled', 'failed', 'silent')
-        "#,
-    )
-    .bind(work_item_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-    enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "work_item_held").await?;
+    mark_work_item_held_in_tx(&mut transaction, work_item_id).await?;
     transaction.commit().await.map_err(to_string)?;
     reconcile_work_item_change(pool, work_item_id, "work_item_held").await?;
 

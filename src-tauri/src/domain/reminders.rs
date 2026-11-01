@@ -1,18 +1,18 @@
 use chrono::{DateTime, Utc};
 use serde_json::json;
 use sqlx::{Executor, Row, Sqlite, SqlitePool};
-use tauri::State;
 use uuid::Uuid;
 
+use crate::agent_routing::ensure_agent_channel_member;
 use crate::events::activity::record_agent_activity;
 use crate::models::Reminder;
 use crate::ui_notifications::{enqueue_ui_event_in_tx, insert_system_message, UiEvent};
 use crate::{
-    app::{to_string, AppState, CommandResult},
+    app::{to_string, CommandResult},
     create_agent_inbox_item, ensure_agent_inbox_wake_work_item, AgentInboxItemInput,
 };
 
-use super::parse_due_at;
+use super::reminder_checks::{check_timeout, spawn_reminder_check, ReminderCheckJob};
 
 pub(super) async fn process_due_reminders(pool: &SqlitePool) -> CommandResult<()> {
     let mut transaction = pool.begin().await.map_err(to_string)?;
@@ -57,6 +57,26 @@ pub(super) async fn process_due_reminders(pool: &SqlitePool) -> CommandResult<()
                                 ) * 7
                             ) || ' days')
                     end
+                -- Loops keep a fixed cadence from their anchor and skip
+                -- missed ticks instead of firing a burst after sleep.
+                when recurrence = 'interval' then
+                    case
+                        when julianday(coalesce(recurrence_anchor_at, due_at)) > julianday('now')
+                            then coalesce(recurrence_anchor_at, due_at)
+                        else strftime('%Y-%m-%dT%H:%M:%f+00:00',
+                            coalesce(recurrence_anchor_at, due_at),
+                            '+' || (
+                                (
+                                    cast(
+                                        (
+                                            julianday('now')
+                                                - julianday(coalesce(recurrence_anchor_at, due_at))
+                                        ) * 86400.0 / max(coalesce(interval_seconds, 0), 60)
+                                        as integer
+                                    ) + 1
+                                ) * max(coalesce(interval_seconds, 0), 60)
+                            ) || ' seconds')
+                    end
                 else due_at
             end,
             updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
@@ -68,7 +88,8 @@ pub(super) async fn process_due_reminders(pool: &SqlitePool) -> CommandResult<()
             order by due_at asc
             limit 12
         )
-        returning id, channel_id, creator_agent_id, thread_root_id, title, note, recurrence, status, due_at
+        returning id, channel_id, creator_agent_id, thread_root_id, title, note, recurrence, status, due_at,
+            interval_seconds, check_command, check_action
         "#,
     )
     .fetch_all(&mut *transaction)
@@ -95,6 +116,33 @@ pub(super) async fn process_due_reminders(pool: &SqlitePool) -> CommandResult<()
         let recurrence: String = row.get("recurrence");
         let status: String = row.get("status");
         let next_due_at: DateTime<Utc> = row.get("due_at");
+        let check_command: String = row.get("check_command");
+        if !check_command.trim().is_empty() {
+            let interval_seconds = row.get::<Option<i64>, _>("interval_seconds").unwrap_or(
+                match recurrence.as_str() {
+                    "weekly" => 7 * 24 * 60 * 60,
+                    "daily" => 24 * 60 * 60,
+                    _ => MIN_INTERVAL_SECONDS,
+                },
+            );
+            // A loop runs its check command first; only output reaches the
+            // thread or the agent, so quiet ticks leave no message or event.
+            spawn_reminder_check(
+                pool.clone(),
+                ReminderCheckJob {
+                    reminder_id,
+                    creator_agent_id,
+                    channel_id,
+                    thread_root_id,
+                    title,
+                    check_command,
+                    check_action: row.get("check_action"),
+                    interval_seconds,
+                    timeout: check_timeout(interval_seconds),
+                },
+            );
+            continue;
+        }
         let fired_detail = if recurrence == "none" {
             String::new()
         } else {
@@ -138,7 +186,10 @@ pub(crate) async fn complete_successful_agent_reminders(
     pool: &SqlitePool,
     work_item_id: Option<Uuid>,
 ) -> CommandResult<()> {
-    let mut transaction = pool.begin().await.map_err(to_string)?;
+    let mut transaction = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(to_string)?;
     let rows = sqlx::query(
         r#"
         with completed_work as materialized (
@@ -260,9 +311,83 @@ async fn dispatch_due_reminder_to_agent(
     Ok(())
 }
 
+pub(crate) const MIN_INTERVAL_SECONDS: i64 = 60;
+pub(crate) const MAX_INTERVAL_SECONDS: i64 = 7 * 24 * 60 * 60;
+const MAX_CHECK_COMMAND_CHARS: usize = 4_000;
+
+/// Optional loop settings for a reminder: a minute-level cadence and a check
+/// command whose output is either posted as the agent or handed to the agent.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ReminderLoopOptions {
+    pub(crate) interval_seconds: Option<i64>,
+    pub(crate) check_command: String,
+    pub(crate) check_action: String,
+}
+
+struct ValidatedLoop {
+    interval_seconds: Option<i64>,
+    check_command: String,
+    check_action: String,
+}
+
+fn validate_loop_options(
+    recurrence: &str,
+    creator_agent_id: Option<Uuid>,
+    channel_id: Option<Uuid>,
+    options: ReminderLoopOptions,
+) -> CommandResult<ValidatedLoop> {
+    let interval_seconds = match (recurrence, options.interval_seconds) {
+        ("interval", Some(seconds))
+            if (MIN_INTERVAL_SECONDS..=MAX_INTERVAL_SECONDS).contains(&seconds) =>
+        {
+            Some(seconds)
+        }
+        ("interval", Some(_)) => {
+            return Err("loop interval must be between 1 minute and 7 days".to_owned())
+        }
+        ("interval", None) => return Err("interval reminders require interval_minutes".to_owned()),
+        (_, Some(_)) => return Err("interval_minutes requires recurrence interval".to_owned()),
+        (_, None) => None,
+    };
+    let check_command = options.check_command.trim().to_owned();
+    let check_action = options.check_action.trim().to_ascii_lowercase();
+    if check_command.is_empty() {
+        if !check_action.is_empty() {
+            return Err("check_action requires check_command".to_owned());
+        }
+        return Ok(ValidatedLoop {
+            interval_seconds,
+            check_command,
+            check_action,
+        });
+    }
+    if check_command.chars().count() > MAX_CHECK_COMMAND_CHARS {
+        return Err(format!(
+            "check_command is longer than {MAX_CHECK_COMMAND_CHARS} characters"
+        ));
+    }
+    if !matches!(check_action.as_str(), "post" | "wake") {
+        return Err("check_command requires check_action post or wake".to_owned());
+    }
+    if recurrence == "none" {
+        return Err("check_command requires a repeating reminder".to_owned());
+    }
+    if creator_agent_id.is_none() {
+        return Err("check_command reminders must be created by an agent".to_owned());
+    }
+    if channel_id.is_none() {
+        return Err("check_command reminders require a channel".to_owned());
+    }
+    Ok(ValidatedLoop {
+        interval_seconds,
+        check_command,
+        check_action,
+    })
+}
+
 fn normalize_recurrence(value: &str) -> CommandResult<String> {
     let recurrence = value.trim();
-    if matches!(recurrence, "none" | "daily" | "weekly") {
+    if matches!(recurrence, "none" | "daily" | "weekly" | "interval") {
         Ok(recurrence.to_owned())
     } else if matches!(recurrence, "one_shot" | "one-shot" | "once") {
         Ok("none".to_owned())
@@ -306,12 +431,23 @@ pub(crate) async fn create_reminder_in_pool(
     note: &str,
     due_at: DateTime<Utc>,
     recurrence: &str,
+    loop_options: ReminderLoopOptions,
 ) -> CommandResult<Uuid> {
     let title = title.trim();
     if title.is_empty() {
         return Err("reminder title is empty".to_owned());
     }
     let recurrence = normalize_recurrence(recurrence)?;
+    let loop_options =
+        validate_loop_options(&recurrence, creator_agent_id, channel_id, loop_options)?;
+    if let (Some(agent_id), Some(channel_id), false) = (
+        creator_agent_id,
+        channel_id,
+        loop_options.check_command.is_empty(),
+    ) {
+        ensure_agent_channel_member(pool, agent_id, channel_id, "reminder_create check_command")
+            .await?;
+    }
 
     if let Some(thread_root_id) = thread_root_id {
         let exists: bool = sqlx::query_scalar(
@@ -331,9 +467,10 @@ pub(crate) async fn create_reminder_in_pool(
         r#"
         insert into reminders (
             channel_id, creator_agent_id, thread_root_id, message_id, title, note,
-            due_at, recurrence_anchor_at, recurrence, status
+            due_at, recurrence_anchor_at, recurrence, status,
+            interval_seconds, check_command, check_action
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $7, $8, 'scheduled')
+        values ($1, $2, $3, $4, $5, $6, $7, $7, $8, 'scheduled', $9, $10, $11)
         returning id
         "#,
     )
@@ -345,6 +482,9 @@ pub(crate) async fn create_reminder_in_pool(
     .bind(note.trim())
     .bind(due_at)
     .bind(&recurrence)
+    .bind(loop_options.interval_seconds)
+    .bind(&loop_options.check_command)
+    .bind(&loop_options.check_action)
     .fetch_one(&mut *transaction)
     .await
     .map_err(to_string)?;
@@ -395,78 +535,6 @@ pub(crate) async fn cancel_reminder_in_pool(
     Ok(())
 }
 
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn create_reminder(
-    channel_id: Option<Uuid>,
-    thread_root_id: Option<Uuid>,
-    message_id: Option<Uuid>,
-    title: String,
-    note: String,
-    due_at: String,
-    recurrence: String,
-    state: State<'_, AppState>,
-) -> CommandResult<Uuid> {
-    let due_at = parse_due_at(&due_at)?;
-    create_reminder_in_pool(
-        &state.pool,
-        None,
-        channel_id,
-        thread_root_id,
-        message_id,
-        &title,
-        &note,
-        due_at,
-        &recurrence,
-    )
-    .await
-}
-
-#[tauri::command]
-pub(crate) async fn snooze_reminder(
-    reminder_id: Uuid,
-    minutes: i64,
-    state: State<'_, AppState>,
-) -> CommandResult<()> {
-    if !(1..=10_080).contains(&minutes) {
-        return Err("snooze minutes must be between 1 and 10080".to_owned());
-    }
-    let mut transaction = state.pool.begin().await.map_err(to_string)?;
-    sqlx::query(
-        r#"
-        update reminders
-        set status = 'scheduled',
-            due_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now','+' || $2 || ' minutes'),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id = $1 and status in ('scheduled', 'fired')
-        "#,
-    )
-    .bind(reminder_id)
-    .bind(minutes)
-    .execute(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-    let snooze_detail = format!("{minutes} minutes");
-    insert_reminder_event(&mut *transaction, reminder_id, "snoozed", &snooze_detail).await?;
-    enqueue_ui_event_in_tx(
-        &mut transaction,
-        &UiEvent::Refresh {
-            reason: "reminder_snoozed",
-        },
-    )
-    .await?;
-    transaction.commit().await.map_err(to_string)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub(crate) async fn complete_reminder(
-    reminder_id: Uuid,
-    state: State<'_, AppState>,
-) -> CommandResult<()> {
-    complete_reminder_in_pool(&state.pool, reminder_id).await
-}
-
 pub(crate) async fn complete_reminder_in_pool(
     pool: &SqlitePool,
     reminder_id: Uuid,
@@ -497,14 +565,6 @@ pub(crate) async fn complete_reminder_in_pool(
     Ok(())
 }
 
-#[tauri::command]
-pub(crate) async fn cancel_reminder(
-    reminder_id: Uuid,
-    state: State<'_, AppState>,
-) -> CommandResult<()> {
-    cancel_reminder_in_pool(&state.pool, reminder_id).await
-}
-
 pub(crate) async fn load_reminders(pool: &SqlitePool) -> CommandResult<Vec<Reminder>> {
     let rows = sqlx::query(
         r#"
@@ -520,6 +580,13 @@ pub(crate) async fn load_reminders(pool: &SqlitePool) -> CommandResult<Vec<Remin
             r.note,
             r.status,
             r.recurrence,
+            r.interval_seconds,
+            r.check_command,
+            r.check_action,
+            r.last_checked_at,
+            r.last_check_status,
+            r.last_check_detail,
+            r.check_failures,
             r.due_at,
             r.fired_at,
             r.completed_at,
@@ -553,6 +620,13 @@ pub(crate) async fn load_reminders(pool: &SqlitePool) -> CommandResult<Vec<Remin
             note: row.get("note"),
             status: row.get("status"),
             recurrence: row.get("recurrence"),
+            interval_seconds: row.get("interval_seconds"),
+            check_command: row.get("check_command"),
+            check_action: row.get("check_action"),
+            last_checked_at: row.get("last_checked_at"),
+            last_check_status: row.get("last_check_status"),
+            last_check_detail: row.get("last_check_detail"),
+            check_failures: row.get("check_failures"),
             due_at: row.get("due_at"),
             fired_at: row.get("fired_at"),
             completed_at: row.get("completed_at"),

@@ -6,23 +6,22 @@ use uuid::Uuid;
 use super::{CodexSteerRequest, WarmCodexRuntime};
 use crate::events::activity::{record_agent_activity, work_status_title};
 use crate::freshness::advance_agent_target_watermark_for_work_item;
+use crate::provider_auth::{record_provider_auth_failure, record_provider_turn_success};
+use crate::runtime::warm::load_work_item_status;
 use crate::runtime::{
+    lifecycle::{end_turn, settle_codex_steer, TurnEnd},
     process::{terminate_process_group, upsert_runtime_thread_id},
     streaming::{
         consume_streaming_agent_control_lines, delete_streaming_agent_message_by_key,
         dispatch_streaming_agent_message_mentions, finish_streaming_agent_message,
         finish_streaming_agent_message_deferred_mentions,
     },
-    turn_outcome::resolve_warm_turn_outcome,
+    turn_outcome::{
+        finished_work_status, keep_first_error, resolve_warm_turn_outcome, retry_transient_sqlite,
+    },
 };
-use crate::ui_notifications::{
-    enqueue_ui_agent_run_changed_in_tx, enqueue_ui_work_item_changed_in_tx, notify_supervisor_wake,
-    reconcile_work_item_change,
-};
-use crate::{
-    app::{to_string, CommandResult},
-    mark_task_after_work_item_finished,
-};
+use crate::ui_notifications::{notify_supervisor_wake, reconcile_work_item_change};
+use crate::{app::CommandResult, mark_task_after_work_item_finished};
 
 pub(super) async fn finish_codex_steer_request(
     pool: &SqlitePool,
@@ -32,47 +31,16 @@ pub(super) async fn finish_codex_steer_request(
     cancelled: bool,
     error: Option<String>,
 ) -> CommandResult<()> {
-    let (status, completed_at, run_id) = if success {
-        (
-            "done",
-            "strftime('%Y-%m-%dT%H:%M:%f+00:00','now')",
-            Some(steer.run_id),
-        )
+    let (status, completed, run_id) = if success {
+        ("done", true, Some(steer.run_id))
     } else if cancelled {
         // The user stopped this turn; follow-ups merged into it must not
         // requeue and revive the agent.
-        (
-            "cancelled",
-            "strftime('%Y-%m-%dT%H:%M:%f+00:00','now')",
-            Some(steer.run_id),
-        )
+        ("cancelled", true, Some(steer.run_id))
     } else {
-        ("queued", "null", None)
+        ("queued", false, None)
     };
-    let mut transaction = pool.begin().await.map_err(to_string)?;
-    sqlx::query(&format!(
-        r#"
-        update agent_work_items
-        set status = $2,
-            run_id = $3,
-            completed_at = {completed_at},
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id = $1
-        "#
-    ))
-    .bind(steer.work_item_id)
-    .bind(status)
-    .bind(run_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-    enqueue_ui_work_item_changed_in_tx(
-        &mut transaction,
-        steer.work_item_id,
-        "codex_turn_steer_result",
-    )
-    .await?;
-    transaction.commit().await.map_err(to_string)?;
+    settle_codex_steer(pool, steer.work_item_id, status, run_id, completed).await?;
     reconcile_work_item_change(pool, steer.work_item_id, "codex_turn_steer_result").await?;
     if success {
         advance_agent_target_watermark_for_work_item(pool, agent_id, steer.work_item_id, 0).await?;
@@ -133,43 +101,57 @@ pub(super) async fn finish_warm_codex_active_turn(
     let Some(active) = active else {
         return Ok(());
     };
+    // The turn has left memory: every step below is best effort except the
+    // terminal write, so a failed step cannot leave the run open.
+    let mut first_error = None;
     let elapsed_ms = active.started_at.elapsed().as_millis();
     let current_work_status: Option<String> = match active.work_item_id {
-        Some(work_item_id) => {
-            sqlx::query_scalar("select status from agent_work_items where id = $1")
-                .bind(work_item_id)
-                .fetch_optional(pool)
-                .await
-                .map_err(to_string)?
-        }
+        Some(work_item_id) => keep_first_error(
+            &mut first_error,
+            load_work_item_status(pool, work_item_id).await,
+        )
+        .flatten(),
         None => None,
     };
     let was_cancelled = current_work_status.as_deref() == Some("cancelling");
+    let auth_required = !success && !was_cancelled && active.auth_required;
 
     let final_stream_key = active.latest_agent_message_stream_key.clone();
     for stream_key in active.stream_keys {
-        if final_stream_key
-            .as_ref()
-            .is_some_and(|final_key| final_key != &stream_key)
+        if auth_required
+            || final_stream_key
+                .as_ref()
+                .is_some_and(|final_key| final_key != &stream_key)
         {
-            delete_streaming_agent_message_by_key(
-                pool,
-                &stream_key,
-                "superseded_intermediate_reply",
-            )
-            .await?;
+            keep_first_error(
+                &mut first_error,
+                delete_streaming_agent_message_by_key(
+                    pool,
+                    &stream_key,
+                    if auth_required {
+                        "provider_auth_required"
+                    } else {
+                        "superseded_intermediate_reply"
+                    },
+                )
+                .await,
+            );
             continue;
         }
 
         let hidden = if success && !was_cancelled {
-            consume_streaming_agent_control_lines(
-                pool,
-                agent_id,
-                active.run_id,
-                active.work_item_id,
-                &stream_key,
+            keep_first_error(
+                &mut first_error,
+                consume_streaming_agent_control_lines(
+                    pool,
+                    agent_id,
+                    active.run_id,
+                    active.work_item_id,
+                    &stream_key,
+                )
+                .await,
             )
-            .await?
+            .unwrap_or(false)
         } else {
             false
         };
@@ -180,43 +162,65 @@ pub(super) async fn finish_warm_codex_active_turn(
                     .completed_agent_message_stream_keys
                     .contains(&stream_key)
             {
-                finish_streaming_agent_message_deferred_mentions(pool, &stream_key, "complete")
-                    .await?;
-                dispatch_streaming_agent_message_mentions(pool, &stream_key).await?;
+                keep_first_error(
+                    &mut first_error,
+                    retry_transient_sqlite(|| {
+                        finish_streaming_agent_message_deferred_mentions(
+                            pool,
+                            &stream_key,
+                            "complete",
+                        )
+                    })
+                    .await,
+                );
+                keep_first_error(
+                    &mut first_error,
+                    dispatch_streaming_agent_message_mentions(pool, &stream_key).await,
+                );
             } else {
-                finish_streaming_agent_message(
-                    pool,
-                    &stream_key,
-                    if success && !was_cancelled {
-                        "complete"
-                    } else {
-                        "error"
-                    },
-                )
-                .await?;
+                let delivery_state = if success && !was_cancelled {
+                    "complete"
+                } else {
+                    "error"
+                };
+                keep_first_error(
+                    &mut first_error,
+                    retry_transient_sqlite(|| {
+                        finish_streaming_agent_message(pool, &stream_key, delivery_state)
+                    })
+                    .await,
+                );
             }
         }
     }
 
     for steer in active.steer_requests.into_values() {
-        finish_codex_steer_request(
-            pool,
-            agent_id,
-            steer,
-            success && !was_cancelled,
-            was_cancelled,
-            if was_cancelled {
-                Some("cancelled".to_owned())
-            } else {
-                error.clone()
-            },
-        )
-        .await?;
+        keep_first_error(
+            &mut first_error,
+            finish_codex_steer_request(
+                pool,
+                agent_id,
+                steer,
+                success && !was_cancelled,
+                was_cancelled,
+                if was_cancelled {
+                    Some("cancelled".to_owned())
+                } else {
+                    error.clone()
+                },
+            )
+            .await,
+        );
     }
 
     let outcome = resolve_warm_turn_outcome(success, was_cancelled);
     let log_line = if was_cancelled {
         "codex warm turn cancelled\n".to_owned()
+    } else if auth_required {
+        format!(
+            "codex warm turn needs login; request requeued: {}\n",
+            error.as_deref().unwrap_or("unauthorized")
+        )
     } else {
         error
             .as_ref()
@@ -232,120 +236,127 @@ pub(super) async fn finish_warm_codex_active_turn(
             let _ = terminate_process_group(pid).await;
         }
     }
-    let final_work_status = if let Some(work_item_id) = active.work_item_id {
-        let current_work_status: Option<String> =
-            sqlx::query_scalar("select status from agent_work_items where id = $1")
-                .bind(work_item_id)
-                .fetch_optional(pool)
-                .await
-                .map_err(to_string)?;
-        let was_silent = current_work_status.as_deref() == Some("silent");
-        let was_held = current_work_status.as_deref() == Some("held");
-        Some((
-            work_item_id,
-            if was_cancelled {
-                "cancelled"
-            } else if was_silent && success {
-                "silent"
-            } else if was_held && success {
-                "held"
-            } else if success {
-                "done"
-            } else {
-                "failed"
-            },
-        ))
-    } else {
-        None
+    let final_work_status = match active.work_item_id {
+        Some(work_item_id) => {
+            let current = keep_first_error(
+                &mut first_error,
+                load_work_item_status(pool, work_item_id).await,
+            )
+            .flatten();
+            Some((
+                work_item_id,
+                finished_work_status(success, was_cancelled, auth_required, current.as_deref()),
+            ))
+        }
+        None => None,
     };
-    let mut transaction = pool.begin().await.map_err(to_string)?;
-    sqlx::query(
-        r#"
-        update agent_runs
-        set status = $2,
-            exit_code = null,
-            log = substr(log || $3, -20000),
-            stopped_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id = $1
-        "#,
-    )
-    .bind(active.run_id)
-    .bind(outcome.run_status)
-    .bind(&log_line)
-    .execute(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-
-    sqlx::query("update agents set status = $2 where id = $1")
-        .bind(agent_id)
-        .bind(outcome.agent_status)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-    enqueue_ui_agent_run_changed_in_tx(&mut transaction, active.run_id, "codex_turn_finished")
-        .await?;
-
-    if let Some((work_item_id, work_status)) = final_work_status {
-        sqlx::query(
-            r#"
-            update agent_work_items
-            set status = $2,
-                completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-                updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-            where id = $1
-            "#,
-        )
-        .bind(work_item_id)
-        .bind(work_status)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-        enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "work_item_finished")
-            .await?;
-    }
-    transaction.commit().await.map_err(to_string)?;
-    if let Some((work_item_id, work_status)) = final_work_status {
-        mark_task_after_work_item_finished(
+    // If even the retried write fails, the supervisor's orphan sweep closes
+    // the run later; the remaining steps still run.
+    keep_first_error(
+        &mut first_error,
+        end_turn(
             pool,
-            work_item_id,
-            agent_id,
-            active.run_id,
-            work_status,
+            &TurnEnd {
+                agent_id,
+                agent_status: outcome.agent_status,
+                run_id: active.run_id,
+                run_status: outcome.run_status,
+                log_line: &log_line,
+                run_reason: "codex_turn_finished",
+                work: final_work_status,
+            },
         )
-        .await?;
-        reconcile_work_item_change(pool, work_item_id, "work_item_finished").await?;
+        .await,
+    );
+    if let Some((work_item_id, work_status)) = final_work_status {
+        if work_status == "queued" {
+            keep_first_error(
+                &mut first_error,
+                reconcile_work_item_change(pool, work_item_id, "work_item_requeued").await,
+            );
+        } else {
+            keep_first_error(
+                &mut first_error,
+                mark_task_after_work_item_finished(
+                    pool,
+                    work_item_id,
+                    agent_id,
+                    active.run_id,
+                    work_status,
+                )
+                .await,
+            );
+            keep_first_error(
+                &mut first_error,
+                reconcile_work_item_change(pool, work_item_id, "work_item_finished").await,
+            );
+        }
+        keep_first_error(
+            &mut first_error,
+            record_agent_activity(
+                pool,
+                Some(agent_id),
+                Some(active.run_id),
+                "dispatch",
+                if auth_required {
+                    "Request requeued until login works"
+                } else {
+                    work_status_title(work_status)
+                },
+                work_item_id.to_string(),
+            )
+            .await,
+        );
+    }
+
+    keep_first_error(
+        &mut first_error,
+        upsert_runtime_thread_id(
+            pool,
+            agent_id,
+            "codex",
+            &runtime.provider.thread_id,
+            outcome.runtime_session_status,
+        )
+        .await,
+    );
+    keep_first_error(
+        &mut first_error,
         record_agent_activity(
             pool,
             Some(agent_id),
             Some(active.run_id),
-            "dispatch",
-            work_status_title(work_status),
-            work_item_id.to_string(),
+            outcome.activity_kind,
+            if auth_required {
+                "Login required"
+            } else {
+                outcome.activity_title
+            },
+            if success || was_cancelled {
+                format!("duration={elapsed_ms} ms")
+            } else {
+                log_line.trim().to_owned()
+            },
         )
-        .await?;
+        .await,
+    );
+    if auth_required {
+        keep_first_error(
+            &mut first_error,
+            record_provider_auth_failure(
+                pool,
+                "codex",
+                active.channel_id,
+                error.as_deref().unwrap_or_default(),
+            )
+            .await,
+        );
+    } else if success && !was_cancelled {
+        keep_first_error(
+            &mut first_error,
+            record_provider_turn_success(pool, "codex", active.run_id).await,
+        );
     }
-
-    upsert_runtime_thread_id(
-        pool,
-        agent_id,
-        "codex",
-        &runtime.thread_id,
-        outcome.runtime_session_status,
-    )
-    .await?;
-    record_agent_activity(
-        pool,
-        Some(agent_id),
-        Some(active.run_id),
-        outcome.activity_kind,
-        outcome.activity_title,
-        if success || was_cancelled {
-            format!("duration={elapsed_ms} ms")
-        } else {
-            log_line.trim().to_owned()
-        },
-    )
-    .await?;
     let _ = notify_supervisor_wake(pool).await;
-    Ok(())
+    first_error.map_or(Ok(()), Err)
 }

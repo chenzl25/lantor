@@ -5,23 +5,23 @@ import { disablePush, enablePush, readPushState, sendTestPush, type PushState } 
 const COPY: Record<Exclude<PushState, "unsupported">, { icon: ReactNode; title: string; hint: string }> = {
   install: {
     icon: <Smartphone size={18} />,
-    title: "Get notified on this phone",
-    hint: "Add Lantor to your Home Screen (Share → Add to Home Screen), then open it from there.",
+    title: "Notifications on this phone",
+    hint: "Share → Add to Home Screen, then open it there.",
   },
   denied: {
     icon: <BellOff size={18} />,
     title: "Notifications are blocked",
-    hint: "Allow notifications for Lantor in system settings to get alerts here.",
+    hint: "Allow them for Lantor in Settings.",
   },
   off: {
     icon: <Bell size={18} />,
     title: "Notify this device",
-    hint: "Get an alert when an agent needs your call or a task is ready for review.",
+    hint: "Know when an agent needs you.",
   },
   on: {
     icon: <BellRing size={18} />,
     title: "Notifications are on",
-    hint: "This device gets an alert for new decisions and reviews.",
+    hint: "You’ll hear about decisions and reviews.",
   },
 };
 
@@ -61,7 +61,7 @@ export function PushNotificationsRow() {
 
   async function test() {
     const result = await sendTestPush();
-    return result.delivered ? "Test sent. It should arrive in a few seconds." : result.error ?? "The test was not delivered.";
+    return result.delivered ? "Test sent. It should arrive in a few seconds." : result.error ?? "Couldn’t send the test.";
   }
 
   return (

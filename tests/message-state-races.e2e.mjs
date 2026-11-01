@@ -28,7 +28,7 @@ const state = { db_url: "synthetic://message-state-races", web_base_url: null,
   messages: [root, message("Existing reply", { thread_root_id: root.id }), message("Agent status fixture", { sender_agent_id: agentId, sender_name: agent.display_name, sender_role: "agent" })],
   channel_message_history: [{ channel_id: channelId, before_seq: null, has_more: false }],
   agents: [agent], agent_runs: [run("running")], thread_activities: [], channel_members: [], saved_messages: [],
-  dismissed_inbox_items: {}, read_inbox_items: {}, tasks: [], artifacts: [], reminders: [], agent_schedules: [],
+  dismissed_inbox_items: {}, read_inbox_items: {}, tasks: [], artifacts: [], reminders: [],
   agent_work_items: [], agent_activities: [], supervisor: { pid: null, status: "stopped", updated_at: null },
   launch_agent: { label: "", plist_path: "", installed: false, loaded: false }, ui_event_cursor: 0 };
 const clients = new Set(), events = [], requests = [], pendingSends = [];
@@ -149,7 +149,7 @@ try {
     sent.release(false); await page.waitForTimeout(100);
     const rootRow = page.locator(`.conversation [data-message-id="${root.id}"]`);
     if (mobile) await rootRow.locator(".markdown-body").click();
-    else { await rootRow.hover(); await rootRow.getByRole("button", { name: "View thread replies", exact: true }).click(); }
+    else { await rootRow.hover(); await rootRow.getByRole("button", { name: "View replies", exact: true }).click(); }
     await page.locator(".thread textarea").waitFor();
     const reply = await send(".thread", "Reply response held");
     assert.equal(await bodyCount(".thread", reply.row.body), 1, "reply must have one row before HTTP response");
@@ -221,7 +221,7 @@ try {
       if (surface === ".thread" && !await page.locator(".thread textarea").isVisible()) {
         const rootRow = page.locator(`.conversation [data-message-id="${root.id}"]`);
         if (mobile) await rootRow.locator(".markdown-body").click();
-        else { await rootRow.hover(); await rootRow.getByRole("button", { name: "View thread replies", exact: true }).click(); }
+        else { await rootRow.hover(); await rootRow.getByRole("button", { name: "View replies", exact: true }).click(); }
         await page.locator(".thread textarea").waitFor();
       }
       for (const terminal of ["exited", "unknown", "failed"]) {

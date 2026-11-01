@@ -66,6 +66,39 @@ pub(crate) struct CreateGithubIssueTaskRequest {
     pub(crate) agent_id: Uuid,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SetGithubReferenceAliasRequest {
+    pub(crate) channel_id: Uuid,
+    pub(crate) alias: String,
+}
+
+pub(crate) async fn load_github_references(
+    pool: &SqlitePool,
+) -> CommandResult<crate::github::GithubReferences> {
+    crate::github::load_github_references(pool).await
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LookupGithubReferencesRequest {
+    pub(crate) references: Vec<crate::github::GithubReferenceKey>,
+}
+
+pub(crate) async fn lookup_github_references(
+    pool: &SqlitePool,
+    request: LookupGithubReferencesRequest,
+) -> CommandResult<crate::github::GithubReferenceLookup> {
+    crate::github::lookup_github_reference_states(pool, request.references).await
+}
+
+pub(crate) async fn set_github_reference_alias(
+    pool: &SqlitePool,
+    request: SetGithubReferenceAliasRequest,
+) -> CommandResult<crate::github::GithubReferences> {
+    crate::github::set_github_reference_alias(pool, request.channel_id, &request.alias).await
+}
+
 pub(crate) async fn load_github_review_queue(
     pool: &SqlitePool,
     request: GithubChannelRequest,

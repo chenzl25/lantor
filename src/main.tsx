@@ -16,6 +16,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
 } from "react";
@@ -38,12 +39,20 @@ import { APP_DISPLAY_NAME } from "./branding";
 import startupLogo from "../public/lantor-icon-v2.png";
 import "../public/startup.css";
 import {
+  isAppModal,
   resolveAppModalHistoryPop,
   shouldPopAppModalHistory,
   shouldReplaceActiveAppModalHistory,
-  shouldReplaceAppModalHistory,
   type AppModal,
 } from "./app-modal-history";
+import {
+  initialNavigationState,
+  navigate,
+  type ActiveTab,
+  type ChannelThreadMemory,
+  type HistoryMode,
+  type NavigationAction,
+} from "./navigation";
 import { AgentDetailDrawer } from "./components/AgentDetailDrawer";
 import type { AgentPerformance } from "./components/AgentDetailDrawer";
 import { AgentFormModal } from "./components/AgentFormModal";
@@ -69,6 +78,7 @@ import { WebAppStatus } from "./components/WebAppStatus";
 import { isWebSessionExpired, subscribeWebSession } from "./web-session";
 import { useWebOnline } from "./hooks/useWebOnline";
 import { useVisibleChannelRead } from "./hooks/useVisibleChannelRead";
+import { useVisibleThreadRead } from "./hooks/useVisibleThreadRead";
 import type { ChannelReadLocation } from "./hooks/useChannelMessageScroll";
 import { UnreadBadge } from "./components/UnreadBadge";
 import { isProgressOnlyMessage, messageHasVisibleContent } from "./message-grouping";
@@ -95,6 +105,7 @@ import {
   MessageAttachment,
   normalizeCodexReasoningEffortForModel,
   RUNTIME_PRESETS,
+  Reminder,
   RuntimeCheck,
   SavedMessage,
   SearchResult,
@@ -106,6 +117,8 @@ import {
   ThreadReplySummary,
 } from "./types";
 import { agentRequestSourceLabel, buildPresetCommand, firstLines, formatTime, visibleChannelDescription } from "./ui-utils";
+import { markdownPreviewText } from "./markdown-preview";
+import { loadGithubReferences } from "./github-references";
 import {
   createPerfDraft,
   initPerfTelemetry,
@@ -123,7 +136,6 @@ import {
   reconcileHydratedMessageDelta,
   reconcileHydration,
   reconcileThreadHydration,
-  resolveActiveChannelId,
   type MessageDelta,
   type UiBackendEvent,
 } from "./state-sync";
@@ -192,15 +204,15 @@ const ACTIVITY_PHASE_LABELS: Record<string, string> = {
   thinking: "Thinking",
   command: "Running command",
   file_edit: "Editing file",
-  runtime: "Runtime",
-  work: "Work",
+  runtime: "Status",
+  work: "Working",
   profile: "Profile",
-  acting: "Acting",
+  acting: "Working",
   tools: "Using tools",
   error: "Error",
-  event: "Acting",
-  message: "Acting",
-  task: "Acting",
+  event: "Working",
+  message: "Working",
+  task: "Working",
   event_error: "Error",
   run_error: "Error",
   run_retry: "Retrying",
@@ -307,8 +319,6 @@ type ArtifactViewerState = {
   error: string | null;
 };
 
-type ActiveTab = "chat" | "tasks" | "github" | "wiki";
-
 type AppHistoryState = {
   __lantorUiHistory?: true;
   __lantorMobileUi?: true;
@@ -378,13 +388,7 @@ function isAppHistoryState(value: unknown): value is AppHistoryState {
     && typeof state.showMobileSidebar === "boolean"
     && (state.selectedAgentId === null || typeof state.selectedAgentId === "string")
     && (state.focusedMessageId === undefined || state.focusedMessageId === null || typeof state.focusedMessageId === "string")
-    && (
-      state.activeModal === null ||
-      state.activeModal === "search" ||
-      state.activeModal === "activity" ||
-      state.activeModal === "saved" ||
-      state.activeModal === "needs"
-    );
+    && (state.activeModal === null || isAppModal(state.activeModal));
 }
 
 function appHistoryKey(state: AppHistoryState) {
@@ -417,7 +421,7 @@ function BootSplash({ appError, onRetry }: { appError: string | null; onRetry: (
         </div>
         <div className="boot-copy">
           <strong>{APP_DISPLAY_NAME}</strong>
-          {!online ? <div className="boot-offline" role="status">Connect to the internet to load your workspace.</div> : !appError ? (
+          {!online ? <div className="boot-offline" role="status">You’re offline. Connect to open Lantor.</div> : !appError ? (
             <div className="boot-status" role="status">
               <span>Opening your workspace</span>
               <span className="boot-pips" aria-hidden="true"><i /><i /><i /></span>
@@ -445,7 +449,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, AppErrorBounda
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error(`${APP_DISPLAY_NAME} UI crashed`, error, info);
+    console.error(`${APP_DISPLAY_NAME} hit a problem`, error, info);
     reportClientCrash(error, info.componentStack, "render");
     this.setState({ info });
   }
@@ -460,8 +464,8 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, AppErrorBounda
     return (
       <main className="fatal-shell">
         <section className="fatal-card" role="alert">
-          <p className="eyebrow">{APP_DISPLAY_NAME} UI crashed</p>
-          <h1>Frontend render failed</h1>
+          <p className="eyebrow">{APP_DISPLAY_NAME} hit a problem</p>
+          <h1>This screen stopped working</h1>
           <p>
             The backend is still running. Reload the app to recover; the details below are kept
             visible so this does not become a blank window, and were also recorded in the activity log.
@@ -567,8 +571,6 @@ type ComposerDraftState = {
   text: string;
   attachments: DraftAttachment[];
 };
-
-type ChannelThreadMemory = Record<string, string | null>;
 
 const EMPTY_COMPOSER_DRAFT: ComposerDraftState = {
   text: "",
@@ -767,13 +769,41 @@ function App() {
       setData(update);
     });
   }, []);
-  const [activeChannelId, setActiveChannelId] = useState<string>(() => getStoredActiveChannelId());
+  // The history effect records the intent id it wrote; steps dispatched
+  // after that open a new intent. withHistoryMode sets the override.
+  const historyWrittenIdRef = useRef(0);
+  const historyModeOverrideRef = useRef<HistoryMode | undefined>(undefined);
+  const [navigation, dispatchNavigationInput] = useReducer(
+    navigate,
+    null,
+    () => initialNavigationState({
+      activeChannelId: getStoredActiveChannelId(),
+      channelThreadMemory: loadChannelThreadMemory(),
+      showMobileSidebar: isMobileViewport(),
+    }),
+  );
+  const { activeChannelId, activeThreadId, activeTab, channelThreadMemory } = navigation;
+  const dispatchNavigation = useCallback((action: NavigationAction, historyMode?: HistoryMode) => {
+    dispatchNavigationInput({
+      action,
+      writtenHistoryId: historyWrittenIdRef.current,
+      historyMode: historyMode ?? historyModeOverrideRef.current,
+    });
+  }, []);
+  /** Runs `run` with its navigation steps writing history as `mode`. */
+  function withHistoryMode(mode: HistoryMode | undefined, run: () => void) {
+    const previous = historyModeOverrideRef.current;
+    historyModeOverrideRef.current = mode ?? previous;
+    try {
+      run();
+    } finally {
+      historyModeOverrideRef.current = previous;
+    }
+  }
+  const switchTab = useCallback((tab: ActiveTab) => dispatchNavigation({ type: "switchTab", tab }), []);
   // Backend event subscriptions are long-lived; refresh callbacks must read the
   // latest channel instead of the value captured when the listener was created.
   const activeChannelIdRef = useRef(activeChannelId);
-  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
-  const [channelThreadMemory, setChannelThreadMemory] = useState<ChannelThreadMemory>(() => loadChannelThreadMemory());
-  const [activeTab, setActiveTab] = useState<ActiveTab>("chat");
   const [rootComposerDrafts, setRootComposerDrafts] = useState<Record<string, ComposerDraftState>>({});
   const [replyComposerDrafts, setReplyComposerDrafts] = useState<Record<string, ComposerDraftState>>({});
   const [taskTitleDrafts, setTaskTitleDrafts] = useState<Record<string, string>>({});
@@ -797,8 +827,10 @@ function App() {
   const [agentDraft, setAgentDraft] = useState<AgentForm>(() => newAgentDraft());
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [agentEdit, setAgentEdit] = useState<AgentForm>(EMPTY_AGENT_FORM);
-  const [threadRequested, setShowThread] = useState(false);
-  const showThread = threadRequested && Boolean(activeThreadId);
+  const selectedAgentId = navigation.selectedAgentId;
+  const activeAppModal = navigation.activeModal;
+  const showMobileSidebar = navigation.showMobileSidebar;
+  const showThread = navigation.threadRequested && Boolean(activeThreadId);
   const [showCreateChannelModal, setShowCreateChannelModal] = useState(false);
   const [showChannelSettingsModal, setShowChannelSettingsModal] = useState(false);
   const [showChannelAgentsModal, setShowChannelAgentsModal] = useState(false);
@@ -808,22 +840,24 @@ function App() {
   const createChannelSubmittingRef = useRef(false);
   const createChannelOpenedFromMobileHomeRef = useRef(false);
   const createAgentOpenedFromMobileHomeRef = useRef(false);
-  const [showSearchModal, setShowSearchModal] = useState(false);
-  const [showActivityFeedModal, setShowActivityFeedModal] = useState(false);
-  const [showSavedModal, setShowSavedModal] = useState(false);
-  const [showNeedsYouModal, setShowNeedsYouModal] = useState(false);
+  const showSearchModal = activeAppModal === "search";
+  const showActivityFeedModal = activeAppModal === "activity";
+  const showSavedModal = activeAppModal === "saved";
+  const showNeedsYouModal = activeAppModal === "needs";
+  /** Closes `modal` if it is the open panel. */
+  function dismissAppModal(modal: AppModal) {
+    dispatchNavigation({ type: "closePanel", modal });
+  }
   const [showOwnerProfileModal, setShowOwnerProfileModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => getStoredThemePreference());
   const [chatTextSize, setChatTextSize] = useState<ChatTextSize>(() => getStoredChatTextSize());
   const [fontPreset, setFontPreset] = useState<FontPreset>(() => getStoredFontPreset());
   const [showImageThumbnails, setShowImageThumbnails] = useState(() => getStoredShowImageThumbnails());
-  const [showMobileSidebar, setShowMobileSidebar] = useState(() => isMobileViewport());
   const [mobileSidebarFocus, setMobileSidebarFocus] = useState<"home" | "dms">("home");
   const [mobileSidebarDragPx, setMobileSidebarDragPx] = useState(0);
   const [mobileDragSurface, setMobileDragSurface] = useState<"sidebar" | "panel" | null>(null);
   const [mobileComposerFocused, setMobileComposerFocused] = useState(false);
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null);
   const openPushTargetRef = useRef<(target: PushTarget) => void>(() => {});
   const [appError, setAppError] = useState<string | null>(null);
@@ -997,23 +1031,12 @@ function App() {
   const appHistoryMaxIndexRef = useRef(0);
   const appModalHistoryBackPendingRef = useRef(false);
   const appHistorySnapshotRef = useRef<AppHistoryState | null>(null);
-  const restoringAppHistoryRef = useRef(false);
-  const replaceNextAppHistoryEntryRef = useRef(false);
   const lastAppHistoryKeyRef = useRef<string | null>(null);
   const historyFocusedMessageIdRef = useRef<string | null>(null);
   const searchResultThreadIdRef = useRef<string | null>(null);
   const searchResultAgentIdRef = useRef<string | null>(null);
   const [appHistoryIndex, setAppHistoryIndex] = useState(0);
   const [appHistoryMaxIndex, setAppHistoryMaxIndex] = useState(0);
-  const activeAppModal: AppModal | null = showSearchModal
-    ? "search"
-    : showActivityFeedModal
-      ? "activity"
-      : showSavedModal
-        ? "saved"
-        : showNeedsYouModal
-          ? "needs"
-          : null;
   const appSurfaceStateRef = useRef({
     activeModal: activeAppModal,
     blockingModalOpen: false,
@@ -1249,15 +1272,13 @@ function App() {
         .map(([scope]) => [scope, current[scope]]));
       return { ...reconciled.data, ...liveScopes };
     });
-    setActiveChannelId((prev) => {
-      // Use the merged list so a still-optimistic channel keeps the active
-      // selection instead of falling back to channels[0] when a stale bootstrap
-      // that predates its creation lands.
-      return resolveActiveChannelId(
-        refreshed.channels,
-        prev,
-        preferredActiveChannelId,
-      );
+    // Use the merged list so a still-optimistic channel keeps the active
+    // selection instead of falling back to channels[0] when a stale bootstrap
+    // that predates its creation lands.
+    dispatchNavigation({
+      type: "resolveChannel",
+      channels: refreshed.channels,
+      preferredChannelId: preferredActiveChannelId,
     });
     const applyEndedAt = performance.now();
     if (perf) {
@@ -1356,7 +1377,7 @@ function App() {
           for (const channel of optimistic.channels.values()) {
             if (!selectable.some((item) => item.id === channel.id) && !optimistic.removedChannelIds.has(channel.id)) selectable.push(channel);
           }
-          setActiveChannelId((current) => resolveActiveChannelId(selectable, current));
+          dispatchNavigation({ type: "resolveChannel", channels: selectable });
         }
       }
     })().finally(() => {
@@ -1390,7 +1411,7 @@ function App() {
         return;
       }
       void flushUiState().catch((err) => {
-        setAppError(errorMessage(err, "Failed to synchronize updates"));
+        setAppError(errorMessage(err, "Couldn’t sync"));
         console.error(err);
       });
     }, Math.max(UI_REFRESH_DEBOUNCE_MS, UI_STATE_REFRESH_MIN_INTERVAL_MS - (performance.now() - uiStateLastStartedRef.current)));
@@ -1427,7 +1448,7 @@ function App() {
   useEffect(() => {
     if (!selectedAgentId || data?.agents.find((agent) => agent.id === selectedAgentId)?.details_loaded !== false) return;
     void hydrateAgentDetail(selectedAgentId).catch((err) => {
-      setAppError(errorMessage(err, "Failed to load agent details"));
+      setAppError(errorMessage(err, "Couldn’t load agent"));
     });
   }, [selectedAgentId, data?.agents.find((agent) => agent.id === selectedAgentId)?.details_loaded]);
 
@@ -1447,7 +1468,7 @@ function App() {
       setData((current) => current ? { ...current, messages: mergeMessages([], mergeHydratedRows(current.messages, messages, baseline)) } : current);
       requestUiState(["thread_activities", "read_inbox_items", "dismissed_inbox_items"]);
     }).catch((err) => {
-      if (!cancelled) setAppError(errorMessage(err, "Failed to load thread messages"));
+      if (!cancelled) setAppError(errorMessage(err, "Couldn’t load thread"));
     }).finally(() => {
       if (!cancelled) loadingThreadIdsRef.current.delete(threadId);
     });
@@ -1484,7 +1505,7 @@ function App() {
       setActivityFeedSnapshotVersion((current) => current + 1);
     } catch (err) {
       if (activityFeedRequestRef.current !== requestId) return;
-      setAppError(errorMessage(err, "Failed to load Activity"));
+      setAppError(errorMessage(err, "Couldn’t load Activity"));
       console.error(err);
     }
   }
@@ -1539,7 +1560,7 @@ function App() {
       }
     } catch (err) {
       if (olderChannelRequestEpochRef.current.get(channelId) === requestEpoch) {
-        setAppError(errorMessage(err, "Failed to load channel messages"));
+        setAppError(errorMessage(err, "Couldn’t load messages"));
         console.error(err);
       }
     } finally {
@@ -1577,7 +1598,7 @@ function App() {
       });
       if (olderChannelRequestEpochRef.current.get(channelId) !== requestEpoch) return false;
       if (page.has_more && (page.next_before_seq === null || page.next_before_seq >= beforeSeq)) {
-        throw new Error("History pagination did not advance");
+        throw new Error("Couldn’t load older messages");
       }
       if (page.has_more && page.next_before_seq !== null) {
         olderChannelBeforeSeqRef.current.set(channelId, page.next_before_seq);
@@ -1605,7 +1626,7 @@ function App() {
       return page.messages.length > 0 || !page.has_more;
     } catch (err) {
       if (olderChannelRequestEpochRef.current.get(channelId) === requestEpoch) {
-        setAppError(errorMessage(err, "Failed to load earlier messages"));
+        setAppError(errorMessage(err, "Couldn’t load older messages"));
         console.error(err);
       }
       return false;
@@ -1746,7 +1767,7 @@ function App() {
       if (messageHydrationEpochRef.current.get(messageId) === hydrationEpoch) {
         messageDeltaBufferRef.current.delete(messageId);
         messageHydrationAttemptsRef.current.delete(messageId);
-        requestRefresh("Failed to hydrate streaming message");
+        requestRefresh("Couldn’t load reply");
         console.error(err);
       }
     } finally {
@@ -1949,7 +1970,7 @@ function App() {
       setArtifactViewer({
         artifact,
         loading: false,
-        error: errorMessage(err, "Failed to load artifact"),
+        error: errorMessage(err, "Couldn’t open report"),
       });
     }
   }
@@ -2079,7 +2100,7 @@ function App() {
       console.error(err);
     });
     refreshRuntimeChecks().catch((err) => {
-      setAppError(errorMessage(err, "Failed to check local runtimes"));
+      setAppError(errorMessage(err, "Couldn’t check Codex or Claude"));
       console.error(err);
     });
   }, []);
@@ -2188,6 +2209,16 @@ function App() {
     };
   }, [bootReady, data?.channels]);
 
+  // Reload `#123` reference data whenever a channel's GitHub queue syncs.
+  const githubSyncStamp = useMemo(
+    () => data?.channels.map((channel) => `${channel.id}:${channel.github_review_synced_at ?? ""}`).join("|") ?? "",
+    [data?.channels],
+  );
+  useEffect(() => {
+    if (!bootReady) return;
+    void loadGithubReferences();
+  }, [bootReady, githubSyncStamp]);
+
   useEffect(() => {
     const requestId = messageSearchRequestRef.current + 1;
     messageSearchRequestRef.current = requestId;
@@ -2212,7 +2243,7 @@ function App() {
         if (messageSearchRequestRef.current !== requestId) return;
         setMessageSearchResults([]);
         setMessageSearchLoading(false);
-        setAppError(errorMessage(err, "Failed to search messages"));
+        setAppError(errorMessage(err, "Search failed"));
         console.error(err);
       });
     }, 180);
@@ -2290,7 +2321,7 @@ function App() {
         if (disposed || connectionGeneration !== generation) { subscription(); return; }
         backendSubscriptionRef.current = subscription;
       } catch (err) {
-        if (!disposed) console.error("Failed to subscribe to backend updates", err);
+        if (!disposed) console.error("Live updates stopped", err);
       } finally {
         if (connectionGeneration === generation) connecting = false;
       }
@@ -2349,7 +2380,7 @@ function App() {
         resumePending = false;
         void reconcile()
           .then(() => resume === null ? undefined : waitForPendingRefresh())
-          .catch((err) => console.error("Failed to reconcile foreground state", err))
+          .catch((err) => console.error("Couldn’t sync", err))
           .finally(() => { if (resume !== null) endResumeSync(resume); });
       }, 100);
     }
@@ -2561,12 +2592,9 @@ function App() {
         event.preventDefault();
         navigateBack(() => {
           if (artifactViewer) closeArtifactViewer();
-          else if (showSearchModal) setShowSearchModal(false);
-          else if (showActivityFeedModal) setShowActivityFeedModal(false);
-          else if (showSavedModal) setShowSavedModal(false);
-          else if (showNeedsYouModal) setShowNeedsYouModal(false);
-          else if (selectedAgentId) setSelectedAgentId(null);
-          else if (showThread) setShowThread(false);
+          else if (activeAppModal) dispatchNavigation({ type: "closePanel" });
+          else if (selectedAgentId) dispatchNavigation({ type: "closeAgent" });
+          else if (showThread) dispatchNavigation({ type: "hideThread" });
         });
         return;
       }
@@ -2580,30 +2608,16 @@ function App() {
       if (event.key === "Escape") {
         const surface = appSurfaceStateRef.current;
         if (!shouldDismissOnEscape(event) || activeDialog() || surface.blockingModalOpen) return;
-        if (surface.activeModal === "search") {
+        if (surface.activeModal) {
+          const modal = surface.activeModal;
           event.preventDefault();
-          closeAppModal("search", () => setShowSearchModal(false));
-          return;
-        }
-        if (surface.activeModal === "activity") {
-          event.preventDefault();
-          closeAppModal("activity", () => setShowActivityFeedModal(false));
-          return;
-        }
-        if (surface.activeModal === "saved") {
-          event.preventDefault();
-          closeAppModal("saved", () => setShowSavedModal(false));
-          return;
-        }
-        if (surface.activeModal === "needs") {
-          event.preventDefault();
-          closeAppModal("needs", () => setShowNeedsYouModal(false));
+          closeAppModal(modal, () => dismissAppModal(modal));
           return;
         }
         if (isTextInput(event.target)) return;
         if (surface.selectedAgentId) {
           event.preventDefault();
-          setSelectedAgentId(null);
+          closeSelectedAgent();
         } else if (surface.showThread) {
           event.preventDefault();
           closeThreadPanel();
@@ -2663,7 +2677,7 @@ function App() {
     selectChannel(message.channel_id);
     revealThread(message.thread_root_id ?? message.id, message.channel_id);
     setFocusedMessageId(message.id);
-    setActiveTab("chat");
+    dispatchNavigation({ type: "switchTab", tab: "chat" });
     window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}`);
   }, [data]);
 
@@ -2686,7 +2700,6 @@ function App() {
         lastAppHistoryKeyRef.current = null;
         return;
       }
-      restoringAppHistoryRef.current = true;
       appHistoryReadyRef.current = true;
       setAppHistoryPosition(historyState.index);
       const activeChannelIdFromState = historyState.activeChannelId ?? null;
@@ -2699,35 +2712,39 @@ function App() {
         activeThreadId: activeThreadIdFromState,
         activeTab: activeTabFromState,
       });
-      if (activeChannelIdFromState) {
-        setActiveChannelId(activeChannelIdFromState);
-        setActiveThreadId(activeThreadIdFromState);
-        rememberChannelThread(activeChannelIdFromState, activeThreadIdFromState);
-      }
-      setActiveTab(activeTabFromState);
-      setShowThread(historyState.showThread);
-      setShowMobileSidebar(historyState.showMobileSidebar);
+      dispatchNavigation({
+        type: "restore",
+        activeChannelId: activeChannelIdFromState,
+        activeThreadId: activeThreadIdFromState,
+        activeTab: activeTabFromState,
+        selectedAgentId: historyState.selectedAgentId,
+        threadRequested: historyState.showThread,
+        showMobileSidebar: historyState.showMobileSidebar,
+        activeModal: historyState.activeModal,
+      });
       setMobileSidebarDragPx(0);
-      setSelectedAgentId(historyState.selectedAgentId);
       setFocusedMessageId(historyState.focusedMessageId ?? null);
-      setShowSearchModal(historyState.activeModal === "search");
-      setShowActivityFeedModal(historyState.activeModal === "activity");
-      setShowSavedModal(historyState.activeModal === "saved");
-      setShowNeedsYouModal(historyState.activeModal === "needs");
     }
 
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  useEffect(() => {
+  // A layout effect, so the entry for a view is written while React commits
+  // it. As a passive effect it could still be pending when a Back arrived;
+  // popstate then marked the restore, the pending run took that mark for
+  // itself, and the restored view was pushed as a new entry.
+  useLayoutEffect(() => {
+    // Steps dispatched from here on open a new intent, whether or not this
+    // run writes anything for the current one.
+    const intent = navigation.history.id !== historyWrittenIdRef.current ? navigation.history.mode : null;
+    historyWrittenIdRef.current = navigation.history.id;
     if (!data || !activeChannelId) return;
     if (isMobileViewport()) {
       if (isAppHistoryState(window.history.state)) {
         window.history.replaceState(null, "");
       }
       appHistoryReadyRef.current = false;
-      replaceNextAppHistoryEntryRef.current = false;
       lastAppHistoryKeyRef.current = null;
       setAppHistoryPosition(0, 0);
       return;
@@ -2736,8 +2753,7 @@ function App() {
     const currentState = buildAppHistoryState(appHistoryIndexRef.current);
     const currentKey = appHistoryKey(currentState);
 
-    if (restoringAppHistoryRef.current) {
-      restoringAppHistoryRef.current = false;
+    if (intent === "none") {
       lastAppHistoryKeyRef.current = currentKey;
       return;
     }
@@ -2782,8 +2798,7 @@ function App() {
       historyState,
     });
 
-    if (replaceNextAppHistoryEntryRef.current || shouldReplaceActiveModal) {
-      replaceNextAppHistoryEntryRef.current = false;
+    if (intent === "replace" || shouldReplaceActiveModal) {
       const nextState = { ...currentState, index: appHistoryIndexRef.current };
       window.history.replaceState(nextState, "");
       setAppHistoryPosition(nextState.index);
@@ -2804,6 +2819,8 @@ function App() {
     activeAppModal,
     showMobileSidebar,
     showThread,
+    navigation.history.id,
+    navigation.history.mode,
   ]);
 
   useEffect(() => {
@@ -3025,7 +3042,7 @@ function App() {
     pendingChannelRestoreRef.current.delete(activeChannelId);
     openThread(hydration.threadId, activeChannelId);
     if (!isMobileViewport()) {
-      setShowThread(Boolean(hydration.threadId));
+      dispatchNavigation({ type: "restoreThreadPanel", open: Boolean(hydration.threadId) });
     }
   }, [activeChannelId, data?.messages, loadingOlderChannelIds]);
 
@@ -3040,8 +3057,7 @@ function App() {
       && !message.thread_root_id
     ));
     if (rootExists || loadingThreadIdsRef.current.has(activeThreadId)) return;
-    setActiveThreadId(null);
-    rememberChannelThread(activeChannelId, null);
+    dispatchNavigation({ type: "selectThread", threadId: null, channelId: activeChannelId });
   }, [activeChannelId, activeThreadId, data]);
 
   const replies = useMemo(() => {
@@ -3220,6 +3236,13 @@ function App() {
     return data.agents.find((agent) => agent.id === selectedAgentId) ?? null;
   }, [data, selectedAgentId]);
 
+  const visibleThreadId = showThread && !selectedAgent ? activeThreadId : null;
+  const visibleThreadActivity = visibleThreadId ? threadActivitiesByRoot.get(visibleThreadId) : undefined;
+  useVisibleThreadRead({
+    threadId: visibleThreadId, unreadCount: visibleThreadActivity?.unread_count ?? 0,
+    latestActivityAt: visibleThreadActivity?.latest_activity_at ?? null,
+  });
+
   const selectedAgentRun = useMemo(() => {
     if (!selectedAgent) return null;
     return activeRunFor(selectedAgent.id);
@@ -3251,12 +3274,12 @@ function App() {
     ? {
         kind: selectedAgentLiveActivity?.phase ?? selectedAgentLiveActivity?.kind ?? "run",
         label: selectedAgentLiveActivity ? phaseForActivity(selectedAgentLiveActivity.phase || selectedAgentLiveActivity.kind) : "Running",
-        detail: selectedAgentLiveActivity?.summary || selectedAgentLiveActivity?.detail || "Waiting for observable output from the agent.",
+        detail: selectedAgentLiveActivity?.summary || selectedAgentLiveActivity?.detail || "Waiting for the agent…",
       }
     : {
         kind: selectedAgent.status,
         label: selectedAgent.status,
-        detail: "No active run.",
+        detail: "Idle.",
       }) : null;
 
   const selectedAgentWorkItems = useMemo(() => {
@@ -3336,7 +3359,7 @@ function App() {
         kind: item.thread_root_id ? "reply" : "message",
         title: item.sender_name,
         detail: `${channelLabel(item.channel_id)} · ${item.thread_root_id ? "thread reply" : "message"} · ${formatTime(item.created_at)}`,
-        excerpt: firstLines(item.body, 2),
+        excerpt: firstLines(markdownPreviewText(item.body), 2),
         createdAt: item.created_at,
         channelId: item.channel_id,
         threadId: item.thread_root_id ?? item.id,
@@ -3356,7 +3379,7 @@ function App() {
         kind: "artifact",
         title: item.title,
         detail: `${item.kind} · ${channelLabel(item.channel_id)} · ${formatTime(item.created_at)}`,
-        excerpt: firstLines(item.summary || item.content, 2),
+        excerpt: firstLines(markdownPreviewText(item.summary || item.content), 2),
         createdAt: item.created_at,
         channelId: item.channel_id,
         threadId: item.thread_root_id ?? item.message_id,
@@ -3425,7 +3448,7 @@ function App() {
           kind: "wiki",
           title: item.channel_kind === "dm" ? "DM wiki" : `#${item.channel_name} wiki`,
           detail: `rev ${item.rev_short_id} · ${item.author} · ${formatTime(item.updated_at)}`,
-          excerpt: item.snippet,
+          excerpt: markdownPreviewText(item.snippet),
           createdAt: item.updated_at,
           channelId: item.channel_id,
           threadId: null,
@@ -3452,7 +3475,7 @@ function App() {
   }
 
   function duplicateChannelNameMessage(normalizedName: string) {
-    return `Channel #${normalizedName} already exists`;
+    return `#${normalizedName} already exists`;
   }
 
   function isDuplicateChannelNameError(message: string) {
@@ -3472,7 +3495,7 @@ function App() {
 
   useEffect(() => {
     if (channel?.kind !== "dm") return;
-    setActiveTab("chat");
+    dispatchNavigation({ type: "switchTab", tab: "chat" });
     setShowChannelSettingsModal(false);
     setShowChannelAgentsModal(false);
   }, [channel?.id, channel?.kind]);
@@ -3571,8 +3594,8 @@ function App() {
     if (shouldReturnToMobileHome) {
       returnToMobileHome();
     } else if (result.channelId) {
-      setActiveChannelId(result.channelId);
-      setShowMobileSidebar(false);
+      dispatchNavigation({ type: "goToChannel", channelId: result.channelId });
+      dispatchNavigation({ type: "hideHome" });
       openThread(null, result.channelId);
     }
     requestUiState(["channels", "channel_members"]);
@@ -3583,12 +3606,12 @@ function App() {
     const name = normalizedChannelNameInput(channelNameDraft);
     if (!name) return;
     if (channel.kind === "dm") {
-      setAppError("Direct message settings are managed by the agent profile");
+      setAppError("Edit the agent to change this chat");
       setShowChannelSettingsModal(false);
       return;
     }
     if (channelNameExists(name, channel.id)) {
-      setAppError(`Channel #${name} already exists`);
+      setAppError(`#${name} already exists`);
       return;
     }
     await mutate("update_channel", {
@@ -3615,7 +3638,7 @@ function App() {
     const fallbackChannelId = data?.channels.find((item) => item.id !== channelToDelete.id)?.id ?? "";
     setConfirmRequest({
       title: `Delete #${channelToDelete.name}?`,
-      body: "This removes the channel timeline, tasks, threads, agent memberships, schedules, and attachments for this channel. This cannot be undone.",
+      body: "Deletes all messages, tasks and files here. Agents are kept.",
       confirmLabel: "Delete channel",
       onConfirm: async () => {
         // Delete on the backend first, then update the UI optimistically instead
@@ -3651,7 +3674,7 @@ function App() {
         setShowChannelSettingsModal(false);
         forgetChannelThread(channelToDelete.id);
         if (activeChannelId === channelToDelete.id) {
-          setActiveChannelId(fallbackChannelId);
+          dispatchNavigation({ type: "goToChannel", channelId: fallbackChannelId });
           openThread(rememberedThreadForChannel(fallbackChannelId), fallbackChannelId);
           if (isMobileViewport()) {
             returnToMobileHome();
@@ -3694,14 +3717,6 @@ function App() {
   function rememberedThreadForChannel(channelId: string) {
     const hydration = threadHydrationForChannel(channelId);
     return hydration.status === "ready" ? hydration.threadId : null;
-  }
-
-  function rememberChannelThread(channelId: string | null | undefined, threadId: string | null) {
-    if (!channelId) return;
-    setChannelThreadMemory((current) => {
-      if (current[channelId] === threadId) return current;
-      return { ...current, [channelId]: threadId };
-    });
   }
 
   function latestThreadActivity(threadId: string): ThreadActivity | null {
@@ -3747,19 +3762,14 @@ function App() {
 
   function forgetChannelThread(channelId: string | null | undefined) {
     if (!channelId) return;
-    setChannelThreadMemory((current) => {
-      if (!Object.prototype.hasOwnProperty.call(current, channelId)) return current;
-      const next = { ...current };
-      delete next[channelId];
-      return next;
-    });
+    dispatchNavigation({ type: "forgetChannelThread", channelId });
   }
 
   function restoreRememberedThreadForChannel(channelId: string) {
     const nextThreadId = rememberedThreadForChannel(channelId);
     openThread(nextThreadId, channelId);
     if (!isMobileViewport()) {
-      setShowThread(Boolean(nextThreadId));
+      dispatchNavigation({ type: "restoreThreadPanel", open: Boolean(nextThreadId) });
     }
   }
 
@@ -3767,15 +3777,11 @@ function App() {
     const nextChannel = data?.channels.find((item) => item.id === channelId) ?? null;
     const needsMessageLoad = !initializedOlderChannelIdsRef.current.has(channelId);
     historyFocusedMessageIdRef.current = null;
-    setSelectedAgentId(null);
-    setActiveChannelId(channelId);
-    setShowMobileSidebar(false);
-    if (nextChannel?.kind === "dm") {
-      setActiveTab("chat");
-    }
+    dispatchNavigation({ type: "showChannel" });
+    dispatchNavigation({ type: "goToChannel", channelId, tab: nextChannel?.kind === "dm" ? "chat" : undefined });
     if (needsMessageLoad) {
       pendingChannelRestoreRef.current.add(channelId);
-      setActiveThreadId(null);
+      dispatchNavigation({ type: "clearThread" });
       setFocusedMessageId(null);
     } else {
       restoreRememberedThreadForChannel(channelId);
@@ -3784,8 +3790,7 @@ function App() {
 
   function openThread(threadId: string | null, channelId = activeChannelId) {
     historyFocusedMessageIdRef.current = null;
-    setActiveThreadId(threadId);
-    rememberChannelThread(channelId, threadId);
+    dispatchNavigation({ type: "selectThread", threadId, channelId });
     setFocusedMessageId(null);
     if (!threadId) return;
     setThreadUnreadCounts((current) => {
@@ -3800,19 +3805,17 @@ function App() {
   function revealThread(threadId: string | null, channelId = activeChannelId) {
     openThread(threadId, channelId);
     if (threadId) {
-      setSelectedAgentId(null);
-      setShowThread(true);
+      dispatchNavigation({ type: "revealThread" });
     }
   }
 
   function revealThreadRootInChannel(message: Message) {
-    setSelectedAgentId(null);
+    dispatchNavigation({ type: "closeAgent" });
     // An expanded thread hides the channel column, so locating must bring it back.
     setThreadExpanded(false);
-    setActiveTab("chat");
-    setActiveChannelId(message.channel_id);
+    dispatchNavigation({ type: "goToChannel", channelId: message.channel_id, tab: "chat" });
     if (isMobileViewport()) {
-      setShowThread(false);
+      dispatchNavigation({ type: "hideThread" });
     }
     setFocusedMessageId(null);
     window.requestAnimationFrame(() => {
@@ -3909,12 +3912,10 @@ function App() {
     const threadId = target.thread_root_id ?? target.id;
     pendingChannelRestoreRef.current.delete(channelId);
     historyFocusedMessageIdRef.current = target.id;
-    setSelectedAgentId(null);
-    setActiveChannelId(channelId);
-    setShowMobileSidebar(false);
-    setActiveTab("chat");
+    dispatchNavigation({ type: "showChannel" });
+    dispatchNavigation({ type: "goToChannel", channelId, tab: "chat" });
     openThread(threadId, channelId);
-    setShowThread(true);
+    dispatchNavigation({ type: "revealThread" });
     setFocusedMessageId(null);
     window.requestAnimationFrame(() => setFocusedMessageId(target.id));
     return { target, threadId };
@@ -3931,14 +3932,13 @@ function App() {
       const targetMessage = await loadReferencedMessage(targetMessageId);
       if (referenceNavigationRequestRef.current !== requestId) return;
       const target = messageReferenceLocation(kind, targetMessage);
-      pushReferenceMessageHistory(originMessageId, target);
       pendingChannelRestoreRef.current.delete(target.channelId);
-      setSelectedAgentId(null);
-      setActiveTab("chat");
-      setShowMobileSidebar(false);
-      setActiveChannelId(target.channelId);
+      dispatchNavigation({ type: "showChannel" });
+      dispatchNavigation({ type: "goToChannel", channelId: target.channelId, tab: "chat" });
       openThread(target.threadId, target.channelId);
-      setShowThread(target.showThread);
+      dispatchNavigation({ type: target.showThread ? "revealThread" : "hideThread" });
+      // After openThread, which clears the history focus this entry records.
+      pushReferenceMessageHistory(originMessageId, target);
       setFocusedMessageId(null);
       window.requestAnimationFrame(() => {
         if (referenceNavigationRequestRef.current === requestId) {
@@ -3961,7 +3961,7 @@ function App() {
   }
 
   const openAgentDetail = useCallback((agent: Agent) => {
-    setSelectedAgentId(agent.id);
+    dispatchNavigation({ type: "openAgent", agentId: agent.id });
   }, []);
   const navigateToReferencedMessageRef = useRef(navigateToReferencedMessage);
   const navigateToReferencedThreadRef = useRef(navigateToReferencedThread);
@@ -3985,13 +3985,11 @@ function App() {
   function openMobileSidebarFromContent() {
     setMobileSidebarFocus("home");
     if (isMobileViewport()) {
-      setShowThread(false);
-      setSelectedAgentId(null);
-      setShowMobileSidebar(true);
+      dispatchNavigation({ type: "showHome" });
       setMobileSidebarDragPx(0);
       return;
     }
-    setShowMobileSidebar(true);
+    dispatchNavigation({ type: "showSidebar" });
   }
 
   function openMobileHome() {
@@ -4003,99 +4001,62 @@ function App() {
   }
 
   function returnToMobileHome() {
-    setShowSearchModal(false);
-    setShowActivityFeedModal(false);
-    setShowSavedModal(false);
-    setShowNeedsYouModal(false);
-    setSelectedAgentId(null);
-    setShowThread(false);
-    setShowMobileSidebar(true);
+    dispatchNavigation({ type: "returnHome" });
     setMobileSidebarDragPx(0);
     setMobileSidebarFocus("home");
   }
 
   function openSearchModal() {
-    if (shouldReplaceAppModalHistory(appSurfaceStateRef.current.activeModal, "search")) {
-      replaceNextAppHistoryEntryRef.current = true;
-    }
-    setShowMobileSidebar(false);
     setMobileSidebarFocus("home");
-    setShowActivityFeedModal(false);
-    setShowSavedModal(false);
-    setShowNeedsYouModal(false);
-    setShowSearchModal(true);
+    dispatchNavigation({ type: "openPanel", modal: "search" });
     void reloadUiState(["agent_work_items", "agent_activities", "thread_activities", "read_inbox_items", "dismissed_inbox_items"])
-      .catch((err) => setAppError(errorMessage(err, "Failed to load search context")));
+      .catch((err) => setAppError(errorMessage(err, "Couldn’t open this")));
   }
 
   function openActivityFeedModal() {
-    if (shouldReplaceAppModalHistory(appSurfaceStateRef.current.activeModal, "activity")) {
-      replaceNextAppHistoryEntryRef.current = true;
-    }
-    setShowMobileSidebar(false);
     setMobileSidebarFocus("home");
-    setShowSearchModal(false);
-    setShowSavedModal(false);
-    setShowNeedsYouModal(false);
-    setShowActivityFeedModal(true);
+    dispatchNavigation({ type: "openPanel", modal: "activity" });
     void Promise.all([
       hydrateActivityFeedMessages(),
       reloadUiState(["thread_activities", "read_inbox_items", "dismissed_inbox_items"]),
-    ]).catch((err) => setAppError(errorMessage(err, "Failed to load Activity context")));
+    ]).catch((err) => setAppError(errorMessage(err, "Couldn’t open this")));
   }
 
   function openSavedModal() {
-    if (shouldReplaceAppModalHistory(appSurfaceStateRef.current.activeModal, "saved")) {
-      replaceNextAppHistoryEntryRef.current = true;
-    }
-    setShowMobileSidebar(false);
     setMobileSidebarFocus("home");
-    setShowSearchModal(false);
-    setShowActivityFeedModal(false);
-    setShowNeedsYouModal(false);
-    setShowSavedModal(true);
+    dispatchNavigation({ type: "openPanel", modal: "saved" });
     void markSavedMessagesRead();
   }
 
   function openNeedsYouModal() {
-    if (shouldReplaceAppModalHistory(appSurfaceStateRef.current.activeModal, "needs")) {
-      replaceNextAppHistoryEntryRef.current = true;
-    }
-    setShowMobileSidebar(false);
     setMobileSidebarFocus("home");
-    setShowSearchModal(false);
-    setShowActivityFeedModal(false);
-    setShowSavedModal(false);
-    setShowNeedsYouModal(true);
+    dispatchNavigation({ type: "openPanel", modal: "needs" });
     void reloadUiState(["decisions", "tasks", "thread_activities"])
-      .catch((err) => setAppError(errorMessage(err, "Failed to load Needs you")));
+      .catch((err) => setAppError(errorMessage(err, "Couldn’t load Needs you")));
   }
 
   function openDecision(decision: Decision) {
     selectChannel(decision.channel_id);
     revealThread(decision.thread_root_id ?? decision.message_id, decision.channel_id);
     setFocusedMessageId(decision.message_id);
-    setActiveTab("chat");
-    setShowNeedsYouModal(false);
+    dispatchNavigation({ type: "switchTab", tab: "chat" });
+    dismissAppModal("needs");
   }
 
   /** A notification tap: land in the conversation, whatever was open. */
   function openPushTarget(target: PushTarget) {
     if (!data?.channels.some((item) => item.id === target.channel_id)) return;
-    setShowMobileSidebar(false);
-    setShowSearchModal(false);
-    setShowActivityFeedModal(false);
-    setShowSavedModal(false);
-    setShowNeedsYouModal(false);
+    dispatchNavigation({ type: "hideHome" });
+    dispatchNavigation({ type: "closePanel" });
     selectChannel(target.channel_id);
     revealThread(target.thread_root_id ?? target.message_id, target.channel_id);
     setFocusedMessageId(target.message_id);
-    setActiveTab("chat");
+    dispatchNavigation({ type: "switchTab", tab: "chat" });
   }
   openPushTargetRef.current = openPushTarget;
 
   function openNeedsYouTask(task: Task) {
-    setShowNeedsYouModal(false);
+    dismissAppModal("needs");
     openTask(task);
   }
 
@@ -4136,29 +4097,30 @@ function App() {
       window.history.back();
       return;
     }
-    if (appHistoryReadyRef.current && historyState) {
-      replaceNextAppHistoryEntryRef.current = true;
-    }
-    fallback();
+    withHistoryMode(appHistoryReadyRef.current && historyState ? "replace" : undefined, fallback);
   }
 
   function closeSelectedAgent() {
-    if (selectedAgentId && searchResultAgentIdRef.current === selectedAgentId) {
-      searchResultAgentIdRef.current = null;
-      replaceNextAppHistoryEntryRef.current = true;
-      setSelectedAgentId(null);
+    if (isMobileViewport() && navigation.agentOrigin === "home") {
+      returnToMobileHome();
       return;
     }
-    navigateBack(() => setSelectedAgentId(null));
+    if (selectedAgentId && searchResultAgentIdRef.current === selectedAgentId) {
+      searchResultAgentIdRef.current = null;
+      dispatchNavigation({ type: "closeAgent" }, "replace");
+      return;
+    }
+    navigateBack(() => dispatchNavigation({ type: "closeAgent" }));
   }
 
   function closeThreadPanel() {
     if (activeThreadId && searchResultThreadIdRef.current === activeThreadId) {
       searchResultThreadIdRef.current = null;
     }
-    replaceNextAppHistoryEntryRef.current = true;
-    openThread(null);
-    setShowThread(false);
+    withHistoryMode("replace", () => {
+      openThread(null);
+      dispatchNavigation({ type: "hideThread" });
+    });
   }
 
   function optimisticMessageAttachments(messageId: string, attachments: DraftAttachment[]): MessageAttachment[] {
@@ -4294,7 +4256,7 @@ function App() {
   async function setChannelMember(agentId: string, member: boolean) {
     if (!channel) return;
     if (channel.kind === "dm") {
-      setAppError("Direct message membership is fixed");
+      setAppError("Direct messages can’t add agents");
       return;
     }
     const channelId = channel.id;
@@ -4428,7 +4390,7 @@ function App() {
   async function startEditAgent(agent: Agent) {
     if (agent.details_loaded === false) {
       try { agent = (await hydrateAgentDetail(agent.id)).agent; }
-      catch (err) { setAppError(errorMessage(err, "Failed to load agent configuration")); return; }
+      catch (err) { setAppError(errorMessage(err, "Couldn’t load agent")); return; }
     }
     setEditingAgentId(agent.id);
     setAgentEdit({
@@ -4495,15 +4457,15 @@ function App() {
     const fallbackChannelId = data?.channels.find((item) => item.id !== agentDm?.id)?.id ?? null;
     setConfirmRequest({
       title: `Delete @${agent.handle}?`,
-      body: "This removes the agent profile, DM, schedules, runtime sessions, runs, and pending requests. Existing channel messages keep their sender name.",
+      body: "This removes the agent profile, DM, runtime sessions, runs, and pending requests. Existing channel messages keep their sender name.",
       confirmLabel: "Delete agent",
       onConfirm: async () => {
         await mutate("delete_agent", { agentId: agent.id });
         if (editingAgentId === agent.id) setEditingAgentId(null);
-        if (selectedAgentId === agent.id) setSelectedAgentId(null);
+        dispatchNavigation({ type: "closeAgent", agentId: agent.id });
         if (agentDm) forgetChannelThread(agentDm.id);
         if (agentDm && activeChannelId === agentDm.id) {
-          setActiveChannelId(fallbackChannelId ?? "");
+          dispatchNavigation({ type: "goToChannel", channelId: fallbackChannelId ?? "" });
           openThread(rememberedThreadForChannel(fallbackChannelId ?? ""), fallbackChannelId ?? "");
         }
       },
@@ -4512,6 +4474,20 @@ function App() {
 
   async function restartAgent(agent: Agent) {
     await mutate("start_agent", { agentId: agent.id });
+  }
+
+  function stopReminder(reminder: Reminder) {
+    const loop = Boolean(reminder.check_command?.trim());
+    setConfirmRequest({
+      title: loop ? `Stop loop "${reminder.title}"?` : `Cancel reminder "${reminder.title}"?`,
+      body: loop
+        ? "The check command stops running and nothing more is posted. Ask the agent to create a new loop if you need it again."
+        : "The reminder will not fire. Ask the agent to schedule a new one if you need it again.",
+      confirmLabel: loop ? "Stop loop" : "Cancel reminder",
+      onConfirm: async () => {
+        await mutate("cancel_reminder", { reminderId: reminder.id });
+      },
+    });
   }
 
   async function sendRootMessage(asTask = false, bodyOverride?: string, attachmentsOverride?: DraftAttachment[]) {
@@ -4537,7 +4513,7 @@ function App() {
     } catch (err) {
       if (!removeOptimisticMessage(optimisticId)) return;
       updateRootComposerDraft(channel.id, () => ({ text: body, attachments }));
-      const message = errorMessage(err, "Failed to send message");
+      const message = errorMessage(err, "Message not sent");
       setAppError(message);
       console.error(err);
     }
@@ -4547,12 +4523,11 @@ function App() {
     try {
       const channelId = await apiInvoke("open_dm_with_agent", { agentId: agent.id });
       await reloadUiState(["channels", "channel_members"]);
-      setSelectedAgentId(null);
-      setActiveChannelId(channelId);
+      dispatchNavigation({ type: "closeAgent" });
+      dispatchNavigation({ type: "goToChannel", channelId, tab: "chat" });
       restoreRememberedThreadForChannel(channelId);
-      setActiveTab("chat");
     } catch (err) {
-      const message = errorMessage(err, "Failed to open direct message");
+      const message = errorMessage(err, "Couldn’t open chat");
       setAppError(message);
       console.error(err);
     }
@@ -4580,7 +4555,7 @@ function App() {
     } catch (err) {
       if (!removeOptimisticMessage(optimisticId)) return;
       updateReplyComposerDraft(activeRoot.id, () => ({ text: body, attachments }));
-      const message = errorMessage(err, "Failed to send reply");
+      const message = errorMessage(err, "Reply not sent");
       setAppError(message);
       console.error(err);
     }
@@ -4613,9 +4588,8 @@ function App() {
   }
 
   function openTask(task: Task) {
-    setActiveChannelId(task.channel_id);
+    dispatchNavigation({ type: "goToChannel", channelId: task.channel_id, tab: "chat" });
     revealThread(task.message_id, task.channel_id);
-    setActiveTab("chat");
     setFocusedMessageId(null);
     window.requestAnimationFrame(() => {
       setFocusedMessageId(task.message_id);
@@ -4623,41 +4597,39 @@ function App() {
   }
 
   async function createGithubReviewTask(pullNumber: number, agentId: string) {
-    if (!channel) throw new Error("No active channel");
+    if (!channel) throw new Error("Open a channel first");
     const result = await mutate("create_github_review_task", {
       channelId: channel.id,
       pullNumber,
       agentId,
     });
-    setActiveChannelId(channel.id);
+    dispatchNavigation({ type: "goToChannel", channelId: channel.id, tab: "chat" });
     revealThread(result.thread_root_id, channel.id);
-    setActiveTab("chat");
     setFocusedMessageId(result.thread_root_id);
     return result;
   }
 
   async function createGithubIssueTask(issueNumber: number, agentId: string) {
-    if (!channel) throw new Error("No active channel");
+    if (!channel) throw new Error("Open a channel first");
     const result = await mutate("create_github_issue_task", {
       channelId: channel.id,
       issueNumber,
       agentId,
     });
-    setActiveChannelId(channel.id);
+    dispatchNavigation({ type: "goToChannel", channelId: channel.id, tab: "chat" });
     revealThread(result.thread_root_id, channel.id);
-    setActiveTab("chat");
     setFocusedMessageId(result.thread_root_id);
     return result;
   }
 
   async function openWorkItem(item: AgentWorkItem, focusedMessageIdOverride?: string | null) {
-    if (item.channel_id) setActiveChannelId(item.channel_id);
+    if (item.channel_id) dispatchNavigation({ type: "goToChannel", channelId: item.channel_id });
     if (item.thread_root_id) {
       revealThread(item.thread_root_id, item.channel_id ?? activeChannelId);
-      setActiveTab("chat");
+      dispatchNavigation({ type: "switchTab", tab: "chat" });
     }
     const agent = data?.agents.find((candidate) => candidate.id === item.agent_id);
-    if (agent) setSelectedAgentId(agent.id);
+    if (agent) dispatchNavigation({ type: "openAgent", agentId: agent.id });
     const focusId = focusedMessageIdOverride === undefined
       ? item.source_message_id
       : focusedMessageIdOverride;
@@ -4666,21 +4638,24 @@ function App() {
         await loadReferencedMessage(focusId);
         setFocusedMessageId(focusId);
       } catch (err) {
-        setAppError(errorMessage(err, "Failed to load work item source"));
+        setAppError(errorMessage(err, "Couldn’t open this"));
       }
     }
   }
 
   async function openSearchResult(result: SearchResult) {
     const openedFromSearch = showSearchModal;
+    // A result opened from the Search panel takes over the panel's entry.
+    const historyMode = openedFromSearch ? "replace" : undefined;
     if (result.kind === "wiki") {
-      setShowSearchModal(false);
-      if (result.channelId) {
-        selectChannel(result.channelId);
-        setActiveTab("wiki");
-      }
+      withHistoryMode(historyMode, () => {
+        dismissAppModal("search");
+        if (result.channelId) {
+          selectChannel(result.channelId);
+          dispatchNavigation({ type: "switchTab", tab: "wiki" });
+        }
+      });
       if (openedFromSearch) {
-        replaceNextAppHistoryEntryRef.current = true;
         searchResultThreadIdRef.current = null;
         searchResultAgentIdRef.current = null;
       }
@@ -4688,51 +4663,51 @@ function App() {
     }
     if (result.kind === "artifact") {
       const artifact = data?.artifacts.find((item) => item.id === result.id);
-      setShowSearchModal(false);
+      dismissAppModal("search");
       if (artifact) {
         void openArtifact(artifact);
       } else {
-        setAppError("Artifact no longer exists");
+        setAppError("This report was deleted");
       }
       return;
     }
     if (result.kind === "message" || result.kind === "reply") {
       if (openedFromSearch) {
-        replaceNextAppHistoryEntryRef.current = true;
         searchResultThreadIdRef.current = result.threadId;
         searchResultAgentIdRef.current = null;
       }
-      setShowSearchModal(false);
+      withHistoryMode(historyMode, () => dismissAppModal("search"));
       try {
         const { threadId } = await revealMessageById(result.id);
         if (openedFromSearch) {
           searchResultThreadIdRef.current = threadId;
         }
       } catch (err) {
-        setAppError(errorMessage(err, "Failed to open search result"));
+        setAppError(errorMessage(err, "Couldn’t open this"));
         console.error(err);
       }
       return;
     }
     let openedAgentId: string | null = null;
-    if (result.agentId) {
-      const agent = data?.agents.find((item) => item.id === result.agentId);
-      if (agent) {
-        openedAgentId = agent.id;
-        setSelectedAgentId(agent.id);
+    withHistoryMode(historyMode, () => {
+      if (result.agentId) {
+        const agent = data?.agents.find((item) => item.id === result.agentId);
+        if (agent) {
+          openedAgentId = agent.id;
+          dispatchNavigation({ type: "openAgent", agentId: agent.id });
+        }
       }
-    }
-    if (result.channelId) selectChannel(result.channelId);
-    if (result.threadId) {
-      revealThread(result.threadId, result.channelId ?? activeChannelId);
-      setActiveTab("chat");
-    }
+      if (result.channelId) selectChannel(result.channelId);
+      if (result.threadId) {
+        revealThread(result.threadId, result.channelId ?? activeChannelId);
+        dispatchNavigation({ type: "switchTab", tab: "chat" });
+      }
+      dismissAppModal("search");
+    });
     if (openedFromSearch) {
-      replaceNextAppHistoryEntryRef.current = true;
       searchResultThreadIdRef.current = result.threadId ?? null;
       searchResultAgentIdRef.current = result.threadId ? null : openedAgentId;
     }
-    setShowSearchModal(false);
   }
 
   function openSavedMessage(item: SavedMessage) {
@@ -4740,8 +4715,8 @@ function App() {
     selectChannel(item.channel_id);
     revealThread(item.thread_root_id ?? item.message_id, item.channel_id);
     setFocusedMessageId(item.message_id);
-    setActiveTab("chat");
-    setShowSavedModal(false);
+    dispatchNavigation({ type: "switchTab", tab: "chat" });
+    dismissAppModal("saved");
   }
 
   async function persistReadActivityFeedItems(items: ActivityFeedItem[], readUntil?: string | ((item: ActivityFeedItem) => string)) {
@@ -4779,19 +4754,19 @@ function App() {
     if (item.messageId || targetThreadId) {
       try {
         await revealMessageById(item.messageId ?? targetThreadId!);
-        setShowActivityFeedModal(false);
+        dismissAppModal("activity");
       } catch (err) {
-        setAppError(errorMessage(err, "Failed to open Activity item"));
+        setAppError(errorMessage(err, "Couldn’t open this"));
         console.error(err);
       }
       return;
     }
     if (item.channelId) selectChannel(item.channelId);
-    setSelectedAgentId(null);
-    setActiveTab("chat");
+    dispatchNavigation({ type: "closeAgent" });
+    dispatchNavigation({ type: "switchTab", tab: "chat" });
     openThread(null, item.channelId ?? activeChannelId);
-    setShowThread(false);
-    setShowActivityFeedModal(false);
+    dispatchNavigation({ type: "hideThread" });
+    dismissAppModal("activity");
   }
 
   async function markActivityFeedItemRead(item: ActivityFeedItem) {
@@ -5135,13 +5110,13 @@ function App() {
           const openedFromMobileHome = isMobileHomeOpen();
           createChannelOpenedFromMobileHomeRef.current = openedFromMobileHome;
           if (!openedFromMobileHome) {
-            setShowMobileSidebar(false);
+            dispatchNavigation({ type: "hideHome" });
           }
           setReturnToCreateChannelAfterAgent(false);
           setShowCreateChannelModal(true);
         }}
         selectChannel={(channelId) => {
-          setShowMobileSidebar(false);
+          dispatchNavigation({ type: "hideHome" });
           setMobileSidebarFocus("home");
           setMobileSidebarDragPx(0);
           selectChannel(channelId);
@@ -5152,29 +5127,30 @@ function App() {
           setReturnToCreateChannelAfterAgent(false);
           createAgentOpenedFromMobileHomeRef.current = openedFromMobileHome;
           if (!openedFromMobileHome) {
-            setShowMobileSidebar(false);
+            dispatchNavigation({ type: "hideHome" });
           }
           setShowCreateAgentModal(true);
         }}
         openDmWithAgent={(agent) => {
-          setShowMobileSidebar(false);
+          dispatchNavigation({ type: "hideHome" });
           openDmWithAgent(agent);
         }}
         openAgentDetail={(agent) => {
-          setShowMobileSidebar(false);
+          const fromHome = isMobileHomeOpen();
+          dispatchNavigation({ type: "hideHome" });
           setMobileSidebarDragPx(0);
-          setSelectedAgentId(agent.id);
+          dispatchNavigation({ type: "openAgent", agentId: agent.id, fromHome });
         }}
         openOwnerProfileModal={() => {
           setOwnerProfileDraft(ownerProfileToForm(data.owner_profile));
           if (!isMobileHomeOpen()) {
-            setShowMobileSidebar(false);
+            dispatchNavigation({ type: "hideHome" });
           }
           setShowOwnerProfileModal(true);
         }}
         openSettingsModal={() => {
           if (!isMobileHomeOpen()) {
-            setShowMobileSidebar(false);
+            dispatchNavigation({ type: "hideHome" });
           }
           setShowSettingsModal(true);
         }}
@@ -5195,7 +5171,7 @@ function App() {
         onTimeRangeChange={setSearchTimeRange}
         onOpenResult={openSearchResult}
         onClear={() => setSearchQuery("")}
-        onClose={() => closeAppModal("search", () => setShowSearchModal(false))}
+        onClose={() => closeAppModal("search", () => dismissAppModal("search"))}
       />
 
       <ActivityFeedModal
@@ -5210,7 +5186,7 @@ function App() {
         onDismissItem={dismissActivityFeedItem}
         onDismissItems={dismissActivityFeedItems}
         onMarkAllRead={markAllActivityFeedRead}
-        onClose={() => closeAppModal("activity", () => setShowActivityFeedModal(false))}
+        onClose={() => closeAppModal("activity", () => dismissAppModal("activity"))}
       />
 
       <SavedMessagesModal
@@ -5221,7 +5197,7 @@ function App() {
         ownerProfile={data.owner_profile}
         onOpenItem={openSavedMessage}
         onUnsaveItem={unsaveSavedMessage}
-        onClose={() => closeAppModal("saved", () => setShowSavedModal(false))}
+        onClose={() => closeAppModal("saved", () => dismissAppModal("saved"))}
       />
 
       <NeedsYouModal
@@ -5232,7 +5208,7 @@ function App() {
         onOpenDecision={openDecision}
         onOpenTask={openNeedsYouTask}
         onMarkTaskDone={(task) => updateTaskStatus(task, "done")}
-        onClose={() => closeAppModal("needs", () => setShowNeedsYouModal(false))}
+        onClose={() => closeAppModal("needs", () => dismissAppModal("needs"))}
       />
 
       <ArtifactViewerModal
@@ -5286,7 +5262,7 @@ function App() {
         draft={draft}
         draftAttachments={draftAttachments}
         taskTitleDrafts={taskTitleDrafts}
-        setActiveTab={setActiveTab}
+        setActiveTab={switchTab}
         setActiveThreadId={revealThread}
         openMobileSidebar={openMobileSidebarFromContent}
         canNavigateBack={appHistoryIndex > 0}
@@ -5345,11 +5321,12 @@ function App() {
             startEditAgent(agent);
           }}
           onRestart={restartAgent}
+          onStopReminder={stopReminder}
           channels={data.channels}
           messages={data.messages}
           onOpenWorkItem={(item, focusedMessageIdOverride) => {
             openWorkItem(item, focusedMessageIdOverride);
-            setSelectedAgentId(null);
+            dispatchNavigation({ type: "closeAgent" });
           }}
           onResizeStart={startAgentDrawerResize}
         />
@@ -5481,7 +5458,7 @@ function App() {
 
       <AgentFormModal
         open={showCreateAgentModal}
-        title="Add Agent"
+        title="New agent"
         form={agentDraft}
         runtimeChecks={runtimeChecks}
         submitLabel="Add agent"
@@ -5503,7 +5480,7 @@ function App() {
 
       <AgentFormModal
         open={Boolean(editingAgentId)}
-        title="Edit Agent"
+        title="Edit agent"
         form={agentEdit}
         runtimeChecks={runtimeChecks}
         submitLabel="Save"

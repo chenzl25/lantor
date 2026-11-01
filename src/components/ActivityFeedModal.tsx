@@ -1,3 +1,4 @@
+import { DialogHeader } from "./DialogHeader";
 import { DialogSurface } from "./DialogSurface";
 import { ArrowUp, Check, Hash, Inbox, MessageSquare, UserRound, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -27,7 +28,7 @@ const FILTERS: { value: ActivityFeedFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "unread", label: "Unread" },
   { value: "mention", label: "Mentions" },
-  { value: "dm", label: "DMs" },
+  { value: "dm", label: "Direct" },
   { value: "thread", label: "Threads" },
 ];
 
@@ -218,12 +219,12 @@ export function ActivityFeedModal({
 
   return (
     <DialogSurface label="Activity" backdropClassName="search-backdrop" className="activity-feed-panel activity-panel" onClose={onClose}>
-        <header className="activity-feed-head">
-          <div>
-            <h2>Activity</h2>
-            <p>{displayItems.length} active · {unreadCount} unread</p>
-          </div>
-          <div className="activity-feed-head-actions">
+        <DialogHeader
+          title="Activity"
+          subtitle={`${displayItems.length} active · ${unreadCount} unread`}
+          closeLabel="Close activity"
+          onClose={onClose}
+          actions={<>
             <button
               className="activity-feed-mark-all"
               disabled={filteredUnreadCount === 0}
@@ -236,13 +237,10 @@ export function ActivityFeedModal({
               disabled={filteredItems.length === 0}
               onClick={() => onDismissItems(filteredItems)}
             >
-              Dismiss all
+              Clear all
             </button>
-          </div>
-          <button className="activity-feed-back" onClick={onClose} aria-label="Close activity">
-            <X size={18} />
-          </button>
-        </header>
+          </>}
+        />
 
         <div className="activity-feed-filters">
           {FILTERS.map((item) => (
@@ -271,8 +269,8 @@ export function ActivityFeedModal({
           {filteredItems.length === 0 && (
             <div className="search-empty">
               <Inbox size={34} />
-              <h3>No activity</h3>
-              <p>Agent messages from mentions, DMs, channels, and threads will appear here.</p>
+              <h3>Nothing new</h3>
+              <p>Agent replies to you show up here.</p>
             </div>
           )}
 
@@ -298,7 +296,7 @@ export function ActivityFeedModal({
               >
                 <div className="activity-feed-swipe-action" aria-hidden="true">
                   <X size={18} />
-                  <span>Dismiss</span>
+                  <span>Clear</span>
                 </div>
                 <article
                   className={rowClassName}

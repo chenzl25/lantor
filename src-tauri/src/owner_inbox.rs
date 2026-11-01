@@ -221,27 +221,6 @@ pub(crate) async fn mark_channel_read_through_in_pool(
     Ok(())
 }
 
-pub(crate) async fn update_thread_followed_in_pool(
-    pool: &SqlitePool,
-    thread_root_id: Uuid,
-    followed: bool,
-) -> CommandResult<()> {
-    sqlx::query(
-        r#"
-        update messages
-        set thread_followed = $2
-        where id = $1 and thread_root_id is null
-        "#,
-    )
-    .bind(thread_root_id)
-    .bind(followed)
-    .execute(pool)
-    .await
-    .map_err(to_string)?;
-
-    Ok(())
-}
-
 pub(crate) async fn load_dismissed_inbox_items(
     pool: &SqlitePool,
 ) -> CommandResult<HashMap<String, DateTime<Utc>>> {
@@ -264,22 +243,10 @@ pub(crate) async fn load_dismissed_inbox_items(
 pub(crate) async fn load_read_inbox_items(
     pool: &SqlitePool,
 ) -> CommandResult<HashMap<String, DateTime<Utc>>> {
-    let rows = sqlx::query(
-        r#"
-        select item_id, max(read_until) as read_until
-        from (
-            select item_id, read_until
-            from owner_inbox_read_state
-            union all
-            select item_id, dismissed_until as read_until
-            from owner_inbox_dismissals
-        ) reads
-        group by item_id
-        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(to_string)?;
+    let rows = sqlx::query("select item_id, read_until from owner_inbox_read_state")
+        .fetch_all(pool)
+        .await
+        .map_err(to_string)?;
 
     Ok(rows
         .into_iter()

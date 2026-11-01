@@ -25,7 +25,7 @@ test("shared API command contract matches the Axum routes", () => {
   );
 });
 
-test("every shared API command is registered with the Tauri transport", () => {
+test("the desktop window reaches shared API commands through the one transport command", () => {
   const mainSource = source("src-tauri/src/main.rs");
   const handlerBlock = mainSource.match(
     /tauri::generate_handler!\[([\s\S]*?)\]\)/,
@@ -38,10 +38,11 @@ test("every shared API command is registered with the Tauri transport", () => {
       .map((command) => command.trim())
       .filter(Boolean),
   );
+  assert.ok(registeredCommands.has("api_request"), "api_request is not registered");
   for (const command of API_COMMANDS) {
     assert.ok(
-      registeredCommands.has(command),
-      `${command} is missing from the Tauri handler`,
+      !registeredCommands.has(command),
+      `${command} is an /api route; the desktop reaches it through api_request`,
     );
   }
 });

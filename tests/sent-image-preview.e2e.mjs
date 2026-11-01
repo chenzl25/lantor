@@ -24,7 +24,7 @@ const state = { db_url: "synthetic://sent-image-preview", web_base_url: null,
   messages: [message("Existing message")],
   channel_message_history: [{ channel_id: channelId, before_seq: null, has_more: false }],
   agents: [], agent_runs: [], thread_activities: [], channel_members: [], saved_messages: [],
-  dismissed_inbox_items: {}, read_inbox_items: {}, tasks: [], artifacts: [], reminders: [], agent_schedules: [],
+  dismissed_inbox_items: {}, read_inbox_items: {}, tasks: [], artifacts: [], reminders: [],
   agent_work_items: [], agent_activities: [], supervisor: { pid: null, status: "stopped", updated_at: null },
   launch_agent: { label: "", plist_path: "", installed: false, loaded: false }, ui_event_cursor: 0 };
 

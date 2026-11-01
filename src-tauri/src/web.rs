@@ -43,7 +43,8 @@ use crate::application::{
     github::{
         self as github_commands, BindGithubRepositoryRequest, CreateGithubIssueTaskRequest,
         CreateGithubReviewTaskRequest, GithubChannelRequest, GithubIssueRequest,
-        RereviewGithubPullRequestRequest,
+        LookupGithubReferencesRequest, RereviewGithubPullRequestRequest,
+        SetGithubReferenceAliasRequest,
     },
     inbox::{self as inbox_commands, InboxItemsRequest, MarkChannelReadRequest},
     messages::{
@@ -58,7 +59,7 @@ use crate::application::{
     },
     AgentIdRequest,
 };
-use crate::domain::reminders::complete_reminder_in_pool;
+use crate::domain::reminders::{cancel_reminder_in_pool, complete_reminder_in_pool};
 use crate::launch_agent;
 use crate::lifecycle_commands::start_agent_in_pool;
 use crate::system_commands::{
@@ -184,9 +185,49 @@ pub(crate) fn spawn_web_server_if_configured(pool: SqlitePool, db_url: String) {
     });
 }
 
+/// Marks a request from the desktop window, which the desktop transport
+/// (`desktop_api.rs`) forwards into [`api_router`] in process. The desktop
+/// gets the full bootstrap and inline avatars rather than the slimmer web
+/// payloads.
+pub(crate) const DESKTOP_SURFACE_HEADER: &str = "x-lantor-surface";
+
+fn is_desktop_request(headers: &HeaderMap) -> bool {
+    headers
+        .get(DESKTOP_SURFACE_HEADER)
+        .is_some_and(|value| value == "desktop")
+}
+
+/// The `/api` routes on their own, for the desktop transport.
+pub(crate) fn desktop_api_router(pool: SqlitePool, db_url: String) -> Router {
+    api_router(Arc::new(WebState { pool, db_url }))
+}
+
 fn web_router(state: Arc<WebState>, dist_dir: PathBuf) -> Router {
     let index = dist_dir.join("index.html");
-    let app = Router::new()
+    let app = api_router(state);
+
+    let app = if index.is_file() {
+        // Compression is generated once by the web build, not per request.
+        // Keep it on the static fallback so API responses (especially SSE) are untouched.
+        app.fallback_service(
+            ServeDir::new(&dist_dir)
+                .precompressed_gzip()
+                .precompressed_br()
+                .fallback(
+                    ServeFile::new(index)
+                        .precompressed_gzip()
+                        .precompressed_br(),
+                ),
+        )
+    } else {
+        app.fallback(get(move || missing_dist(dist_dir)))
+    };
+    app.layer(from_fn(static_cache_control))
+}
+
+/// Every `/api` route, shared by the web server and the desktop window.
+fn api_router(state: Arc<WebState>) -> Router {
+    Router::new()
         .route("/api/health", get(api_health))
         .route(
             "/api/bootstrap",
@@ -263,6 +304,18 @@ fn web_router(state: Arc<WebState>, dist_dir: PathBuf) -> Router {
             post(api_load_github_review_queue),
         )
         .route(
+            "/api/load_github_references",
+            post(api_load_github_references),
+        )
+        .route(
+            "/api/lookup_github_references",
+            post(api_lookup_github_references),
+        )
+        .route(
+            "/api/set_github_reference_alias",
+            post(api_set_github_reference_alias),
+        )
+        .route(
             "/api/refresh_github_review_queue",
             post(api_refresh_github_review_queue),
         )
@@ -312,6 +365,7 @@ fn web_router(state: Arc<WebState>, dist_dir: PathBuf) -> Router {
         .route("/api/mark_all_inbox_read", post(api_mark_all_inbox_read))
         .route("/api/mark_channel_read", post(api_mark_channel_read))
         .route("/api/complete_reminder", post(api_complete_reminder))
+        .route("/api/cancel_reminder", post(api_cancel_reminder))
         .route("/api/update_task_status", post(api_update_task_status))
         .route("/api/answer_decision", post(api_answer_decision))
         .route("/api/push/config", get(api_push_config))
@@ -338,25 +392,7 @@ fn web_router(state: Arc<WebState>, dist_dir: PathBuf) -> Router {
             "/api/agent_workspace_read_file",
             post(api_agent_workspace_read_file),
         )
-        .with_state(state);
-
-    let app = if index.is_file() {
-        // Compression is generated once by the web build, not per request.
-        // Keep it on the static fallback so API responses (especially SSE) are untouched.
-        app.fallback_service(
-            ServeDir::new(&dist_dir)
-                .precompressed_gzip()
-                .precompressed_br()
-                .fallback(
-                    ServeFile::new(index)
-                        .precompressed_gzip()
-                        .precompressed_br(),
-                ),
-        )
-    } else {
-        app.fallback(get(move || missing_dist(dist_dir)))
-    };
-    app.layer(from_fn(static_cache_control))
+        .with_state(state)
 }
 
 /// ServeDir emits no Cache-Control header, so browsers fall back to heuristic
@@ -433,8 +469,10 @@ async fn api_health() -> impl IntoResponse {
 
 async fn api_bootstrap(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Query(query): Query<BootstrapQuery>,
 ) -> Result<impl IntoResponse, Response> {
+    let desktop = is_desktop_request(&headers);
     let current_channel_only = query.current_channel_only
         || query
             .channel_id
@@ -447,7 +485,11 @@ async fn api_bootstrap(
     bootstrap_command::bootstrap(
         &state.pool,
         state.db_url.clone(),
-        BootstrapSurface::Web,
+        if desktop {
+            BootstrapSurface::Tauri
+        } else {
+            BootstrapSurface::Web
+        },
         ApplicationBootstrapRequest {
             channel_id,
             current_channel_only,
@@ -455,7 +497,9 @@ async fn api_bootstrap(
     )
     .await
     .map(|mut bootstrap| {
-        crate::web_avatar::rewrite_bootstrap(&mut bootstrap);
+        if !desktop {
+            crate::web_avatar::rewrite_bootstrap(&mut bootstrap);
+        }
         Json(bootstrap)
     })
     .map_err(api_error)
@@ -659,6 +703,35 @@ async fn api_load_github_review_comparisons(
     Json(request): Json<GithubChannelRequest>,
 ) -> Result<impl IntoResponse, Response> {
     github_commands::load_github_review_comparisons(&state.pool, request)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_load_github_references(
+    State(state): State<Arc<WebState>>,
+) -> Result<impl IntoResponse, Response> {
+    github_commands::load_github_references(&state.pool)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_lookup_github_references(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<LookupGithubReferencesRequest>,
+) -> Result<impl IntoResponse, Response> {
+    github_commands::lookup_github_references(&state.pool, request)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_set_github_reference_alias(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<SetGithubReferenceAliasRequest>,
+) -> Result<impl IntoResponse, Response> {
+    github_commands::set_github_reference_alias(&state.pool, request)
         .await
         .map(Json)
         .map_err(api_error)
@@ -868,6 +941,16 @@ async fn api_complete_reminder(
     Json(request): Json<ReminderIdRequest>,
 ) -> Result<impl IntoResponse, Response> {
     complete_reminder_in_pool(&state.pool, request.reminder_id)
+        .await
+        .map(|_| Json(json!({ "ok": true })))
+        .map_err(api_error)
+}
+
+async fn api_cancel_reminder(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<ReminderIdRequest>,
+) -> Result<impl IntoResponse, Response> {
+    cancel_reminder_in_pool(&state.pool, request.reminder_id)
         .await
         .map(|_| Json(json!({ "ok": true })))
         .map_err(api_error)
@@ -1109,6 +1192,7 @@ async fn api_replay_ui_events(
 
 async fn api_load_agent_detail(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(request): Json<AgentIdRequest>,
 ) -> Result<impl IntoResponse, Response> {
     let detail = crate::ui_state::load_agent_detail_in_pool(&state.pool, request.agent_id)
@@ -1117,7 +1201,9 @@ async fn api_load_agent_detail(
     let mut detail = serde_json::to_value(detail)
         .map_err(to_string)
         .map_err(api_error)?;
-    crate::web_avatar::rewrite_avatars(&mut detail);
+    if !is_desktop_request(&headers) {
+        crate::web_avatar::rewrite_avatars(&mut detail);
+    }
     Ok(Json(detail))
 }
 
@@ -1139,12 +1225,16 @@ async fn api_load_thread_messages(
 
 async fn api_load_ui_state(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(request): Json<crate::ui_state::UiStateRequest>,
 ) -> Result<impl IntoResponse, Response> {
+    let desktop = is_desktop_request(&headers);
     crate::ui_state::load_ui_state_in_pool(&state.pool, request.scopes)
         .await
         .map(|mut patch| {
-            crate::web_avatar::rewrite_avatars(&mut patch);
+            if !desktop {
+                crate::web_avatar::rewrite_avatars(&mut patch);
+            }
             Json(patch)
         })
         .map_err(api_error)

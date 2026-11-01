@@ -8,7 +8,6 @@ use crate::{
     owner_inbox::{
         dismiss_inbox_items_in_pool, mark_all_owner_inbox_read_in_pool,
         mark_channel_read_through_in_pool, mark_inbox_items_read_in_pool,
-        update_thread_followed_in_pool,
     },
 };
 
@@ -30,13 +29,6 @@ pub(crate) struct InboxItemsRequest {
 pub(crate) struct MarkChannelReadRequest {
     pub(crate) channel_id: Uuid,
     pub(crate) through_seq: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct UpdateThreadFollowedRequest {
-    pub(crate) thread_root_id: Uuid,
-    pub(crate) followed: bool,
 }
 
 pub(crate) async fn mark_channel_read(
@@ -76,11 +68,4 @@ pub(crate) async fn mark_inbox_items_read(
 
 pub(crate) async fn mark_all_inbox_read(pool: &SqlitePool) -> CommandResult<()> {
     mark_all_owner_inbox_read_in_pool(pool).await
-}
-
-pub(crate) async fn update_thread_followed(
-    pool: &SqlitePool,
-    request: UpdateThreadFollowedRequest,
-) -> CommandResult<()> {
-    update_thread_followed_in_pool(pool, request.thread_root_id, request.followed).await
 }

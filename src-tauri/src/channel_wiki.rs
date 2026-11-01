@@ -83,7 +83,10 @@ pub(crate) async fn publish_channel_wiki_revision(
         ));
     }
 
-    let mut transaction = pool.begin().await.map_err(to_string)?;
+    let mut transaction = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(to_string)?;
     let current = sqlx::query(
         r#"
         select r.id, r.parent_id, r.content, r.author, r.note, r.created_at

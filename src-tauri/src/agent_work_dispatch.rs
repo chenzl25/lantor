@@ -1,199 +1,22 @@
 use serde_json::json;
 use sqlx::{Row, SqlitePool};
-use tauri::State;
 use uuid::Uuid;
 
 use crate::agent_inbox_wake::{
     attach_work_item_to_inbox_in_tx, create_agent_inbox_item, enqueue_agent_work_if_available,
-    ensure_agent_inbox_wake_work_item, prepend_inbox_context, AgentInboxItemInput,
+    ensure_agent_inbox_wake_work_item, AgentInboxItemInput,
 };
 use crate::agent_routing::{resolve_agent_handle, upsert_agent_thread_subscription};
-use crate::app::{to_string, AppState, CommandResult};
+use crate::app::{to_string, CommandResult};
 use crate::channels::add_agent_to_channel;
 use crate::events::activity::record_agent_activity;
+use crate::runtime::lifecycle::{
+    cancel_queued_work_item_in_tx, finish_cancelling_work_item, mark_work_item_cancelling,
+};
 use crate::ui_notifications::{
     enqueue_ui_event_in_tx, enqueue_ui_work_item_changed_in_tx, notify_supervisor_wake,
     reconcile_work_item_change, UiEvent,
 };
-
-#[tauri::command]
-pub(crate) async fn dispatch_agent_work(
-    agent_id: Uuid,
-    channel_id: Option<Uuid>,
-    thread_root_id: Option<Uuid>,
-    task_id: Option<Uuid>,
-    title: String,
-    context: String,
-    state: State<'_, AppState>,
-) -> CommandResult<Uuid> {
-    let agent_handle: Option<String> =
-        sqlx::query_scalar("select handle from agents where id = $1")
-            .bind(agent_id)
-            .fetch_optional(&state.pool)
-            .await
-            .map_err(to_string)?;
-    let Some(agent_handle) = agent_handle else {
-        return Err("agent does not exist".to_owned());
-    };
-    let mut resolved_channel_id = channel_id;
-    let mut resolved_thread_root_id = thread_root_id;
-    let mut resolved_title = title.trim().to_owned();
-
-    if let Some(task_id) = task_id {
-        let row = sqlx::query(
-            r#"
-            select channel_id, message_id, title
-            from tasks
-            where id = $1
-            "#,
-        )
-        .bind(task_id)
-        .fetch_one(&state.pool)
-        .await
-        .map_err(to_string)?;
-        resolved_channel_id = Some(row.get("channel_id"));
-        resolved_thread_root_id = Some(row.get("message_id"));
-        if resolved_title.is_empty() {
-            resolved_title = row.get("title");
-        }
-    }
-
-    if resolved_channel_id.is_none() {
-        if let Some(thread_root_id) = resolved_thread_root_id {
-            resolved_channel_id =
-                sqlx::query_scalar("select channel_id from messages where id = $1")
-                    .bind(thread_root_id)
-                    .fetch_optional(&state.pool)
-                    .await
-                    .map_err(to_string)?;
-        }
-    }
-
-    if resolved_title.is_empty() {
-        resolved_title = match resolved_thread_root_id {
-            Some(thread_root_id) => {
-                let body: Option<String> =
-                    sqlx::query_scalar("select body from messages where id = $1")
-                        .bind(thread_root_id)
-                        .fetch_optional(&state.pool)
-                        .await
-                        .map_err(to_string)?;
-                body.and_then(|body| {
-                    body.lines()
-                        .next()
-                        .map(|line| line.chars().take(120).collect())
-                })
-                .filter(|line: &String| !line.trim().is_empty())
-                .unwrap_or_else(|| "Lantor agent request".to_owned())
-            }
-            None => "Lantor agent request".to_owned(),
-        };
-    }
-
-    let source_kind = if task_id.is_some() { "task" } else { "manual" };
-    let inbox_kind = if task_id.is_some() {
-        "task_assigned"
-    } else {
-        "manual"
-    };
-    let inbox_item_id = create_agent_inbox_item(
-        &state.pool,
-        AgentInboxItemInput {
-            agent_id,
-            channel_id: resolved_channel_id,
-            thread_root_id: resolved_thread_root_id,
-            source_message_id: resolved_thread_root_id,
-            task_id,
-            kind: inbox_kind,
-            priority: if task_id.is_some() { 90 } else { 60 },
-            title: &resolved_title,
-            body_preview: context.trim(),
-            payload: json!({"source_kind": source_kind, "explicit_dispatch": true}),
-        },
-    )
-    .await?;
-    let work_context = prepend_inbox_context(inbox_item_id, inbox_kind, context.trim());
-    let mut transaction = state.pool.begin().await.map_err(to_string)?;
-    let work_item_id: Uuid = sqlx::query_scalar(
-        r#"
-        insert into agent_work_items (
-            agent_id, channel_id, thread_root_id, inbox_item_id, task_id, source_kind, title, context, status
-        )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, 'queued')
-        returning id
-        "#,
-    )
-    .bind(agent_id)
-    .bind(resolved_channel_id)
-    .bind(resolved_thread_root_id)
-    .bind(inbox_item_id)
-    .bind(task_id)
-    .bind(source_kind)
-    .bind(&resolved_title)
-    .bind(&work_context)
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-    attach_work_item_to_inbox_in_tx(&mut transaction, inbox_item_id, work_item_id).await?;
-
-    if let Some(task_id) = task_id {
-        sqlx::query(
-            r#"
-            update tasks
-            set assignee_agent_id = $2,
-                status = 'in_progress',
-                version = version + 1,
-                updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-            where id = $1
-            "#,
-        )
-        .bind(task_id)
-        .bind(agent_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-        enqueue_ui_event_in_tx(
-            &mut transaction,
-            &UiEvent::Refresh {
-                reason: "task_claimed",
-            },
-        )
-        .await?;
-    }
-    enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "work_item_created").await?;
-    transaction.commit().await.map_err(to_string)?;
-    reconcile_work_item_change(&state.pool, work_item_id, "work_item_created").await?;
-
-    if let (Some(channel_id), Some(thread_root_id)) = (resolved_channel_id, resolved_thread_root_id)
-    {
-        upsert_agent_thread_subscription(
-            &state.pool,
-            agent_id,
-            channel_id,
-            thread_root_id,
-            source_kind,
-            None,
-        )
-        .await?;
-    }
-
-    let scheduled = enqueue_agent_work_if_available(&state.pool, agent_id, work_item_id).await?;
-    record_agent_activity(
-        &state.pool,
-        Some(agent_id),
-        None,
-        "dispatch",
-        if scheduled {
-            "Agent request dispatched"
-        } else {
-            "Agent request queued"
-        },
-        format!("#{work_item_id} to @{agent_handle}: {resolved_title}"),
-    )
-    .await?;
-
-    Ok(work_item_id)
-}
 
 pub(crate) async fn dispatch_task_assignment_to_agent(
     pool: &SqlitePool,
@@ -551,16 +374,6 @@ pub(crate) async fn try_claim_unassigned_task(
     Ok(Some(task_number))
 }
 
-#[tauri::command]
-pub(crate) async fn claim_task(
-    task_id: Uuid,
-    agent_id: Option<Uuid>,
-    expected_version: Option<i64>,
-    state: State<'_, AppState>,
-) -> CommandResult<()> {
-    claim_task_in_pool(&state.pool, task_id, agent_id, expected_version).await
-}
-
 pub(crate) async fn claim_task_in_pool(
     pool: &SqlitePool,
     task_id: Uuid,
@@ -724,18 +537,26 @@ pub(crate) async fn mark_task_after_work_item_finished(
     Ok(())
 }
 
-#[tauri::command]
-pub(crate) async fn cancel_agent_work(
-    work_item_id: Uuid,
-    state: State<'_, AppState>,
-) -> CommandResult<()> {
-    cancel_agent_work_in_pool(&state.pool, work_item_id).await
-}
+/// How many times a cancel rereads a request whose status keeps moving.
+const CANCEL_ATTEMPTS: usize = 3;
 
 pub(crate) async fn cancel_agent_work_in_pool(
     pool: &SqlitePool,
     work_item_id: Uuid,
 ) -> CommandResult<()> {
+    // Each attempt acts on the status it read. A request whose turn starts or
+    // finishes before that write is read again rather than overwritten.
+    for _ in 0..CANCEL_ATTEMPTS {
+        if try_cancel_agent_work(pool, work_item_id).await? {
+            return Ok(());
+        }
+    }
+    Err("the request kept changing while it was being cancelled; try again".to_owned())
+}
+
+/// Returns `false` when the request left the status it was read with before
+/// the cancel could write.
+async fn try_cancel_agent_work(pool: &SqlitePool, work_item_id: Uuid) -> CommandResult<bool> {
     let row = sqlx::query(
         r#"
         select agent_id, run_id, status
@@ -756,19 +577,6 @@ pub(crate) async fn cancel_agent_work_in_pool(
             let mut transaction = pool.begin().await.map_err(to_string)?;
             sqlx::query(
                 r#"
-                update agent_work_items
-                set status = 'cancelled',
-                    completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-                    updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-                where id = $1
-                "#,
-            )
-            .bind(work_item_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(to_string)?;
-            sqlx::query(
-                r#"
                 update supervisor_commands
                 set status = 'done',
                     error = 'cancelled',
@@ -780,12 +588,10 @@ pub(crate) async fn cancel_agent_work_in_pool(
             .execute(&mut *transaction)
             .await
             .map_err(to_string)?;
-            enqueue_ui_work_item_changed_in_tx(
-                &mut transaction,
-                work_item_id,
-                "work_item_cancelled",
-            )
-            .await?;
+            if !cancel_queued_work_item_in_tx(&mut transaction, work_item_id).await? {
+                // Dropping the transaction keeps the start command pending.
+                return Ok(false);
+            }
             transaction.commit().await.map_err(to_string)?;
             reconcile_work_item_change(pool, work_item_id, "work_item_cancelled").await?;
         }
@@ -793,26 +599,9 @@ pub(crate) async fn cancel_agent_work_in_pool(
             let Some(run_id) = run_id else {
                 return Err("running agent request does not have a run id".to_owned());
             };
-            let mut transaction = pool.begin().await.map_err(to_string)?;
-            sqlx::query(
-                r#"
-                update agent_work_items
-                set status = 'cancelling',
-                    updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-                where id = $1
-                "#,
-            )
-            .bind(work_item_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(to_string)?;
-            enqueue_ui_work_item_changed_in_tx(
-                &mut transaction,
-                work_item_id,
-                "work_item_cancelling",
-            )
-            .await?;
-            transaction.commit().await.map_err(to_string)?;
+            if !mark_work_item_cancelling(pool, work_item_id, run_id).await? {
+                return Ok(false);
+            }
             reconcile_work_item_change(pool, work_item_id, "work_item_cancelling").await?;
             let pending_stop: Option<Uuid> = sqlx::query_scalar(
                 r#"
@@ -885,29 +674,9 @@ pub(crate) async fn cancel_agent_work_in_pool(
             .map_err(to_string)?
                 > 0;
             if run_live || stop_pending {
-                return Ok(());
+                return Ok(true);
             }
-            let mut transaction = pool.begin().await.map_err(to_string)?;
-            sqlx::query(
-                r#"
-                update agent_work_items
-                set status = 'cancelled',
-                    completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-                    updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-                where id = $1 and status = 'cancelling'
-                "#,
-            )
-            .bind(work_item_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(to_string)?;
-            enqueue_ui_work_item_changed_in_tx(
-                &mut transaction,
-                work_item_id,
-                "work_item_cancelled",
-            )
-            .await?;
-            transaction.commit().await.map_err(to_string)?;
+            finish_cancelling_work_item(pool, work_item_id).await?;
             reconcile_work_item_change(pool, work_item_id, "work_item_cancelled").await?;
         }
         other => return Err(format!("cannot cancel agent request with status {other}")),
@@ -923,15 +692,7 @@ pub(crate) async fn cancel_agent_work_in_pool(
     )
     .await?;
 
-    Ok(())
-}
-
-#[tauri::command]
-pub(crate) async fn retry_agent_work(
-    work_item_id: Uuid,
-    state: State<'_, AppState>,
-) -> CommandResult<Uuid> {
-    retry_agent_work_in_pool(&state.pool, work_item_id).await
+    Ok(true)
 }
 
 pub(crate) async fn retry_agent_work_in_pool(

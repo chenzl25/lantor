@@ -1,8 +1,10 @@
+import { DialogHeader } from "./DialogHeader";
 import { DialogSurface } from "./DialogSurface";
-import { Check, MessageSquare, X } from "lucide-react";
+import { Check, MessageSquare } from "lucide-react";
 import { type MouseEvent as ReactMouseEvent } from "react";
 import { Channel, Message } from "../types";
 import { firstLines, formatTime } from "../ui-utils";
+import { markdownPreviewText } from "../markdown-preview";
 
 type ThreadBrowserModalProps = {
   open: boolean;
@@ -42,23 +44,14 @@ export function ThreadBrowserModal({
 
   return (
     <DialogSurface label="Threads" backdropClassName="search-backdrop" className="thread-browser-panel" onClose={onClose}>
-        <header className="thread-browser-head">
-          <div className="search-input-icon"><MessageSquare size={24} /></div>
-          <div>
-            <h2>Threads</h2>
-            <p>{threads.length} active</p>
-          </div>
-          <button className="search-clear" onClick={onClose} aria-label="Close threads">
-            <X size={18} />
-          </button>
-        </header>
+        <DialogHeader title="Threads" subtitle={`${threads.length} active`} closeLabel="Close threads" onClose={onClose} />
 
         <div className="thread-browser-body">
           {threads.length === 0 && (
             <div className="search-empty">
               <MessageSquare size={32} />
-              <h3>No active threads</h3>
-              <p>Threads appear here after a channel or DM message gets replies.</p>
+              <h3>No threads yet</h3>
+              <p>A thread starts when a message gets replies.</p>
             </div>
           )}
 
@@ -86,7 +79,7 @@ export function ThreadBrowserModal({
                     <strong>{thread.sender_name}</strong>
                     <time>{formatTime(thread.created_at)}</time>
                   </div>
-                  <p>{firstLines(thread.body, 2)}</p>
+                  <p>{firstLines(markdownPreviewText(thread.body), 2)}</p>
                   <small>
                     {replies} {replies === 1 ? "reply" : "replies"}
                     {unread > 0 ? ` · ${unread} new` : ""}
@@ -95,7 +88,7 @@ export function ThreadBrowserModal({
                 {thread.thread_followed && (
                   <button
                     className="thread-browser-follow"
-                    title="Stop following this thread"
+                    title="Unfollow"
                     onClick={(event) => {
                       event.stopPropagation();
                       onToggleFollow(thread);

@@ -63,6 +63,52 @@ function apiPath(command: string) {
   return `/api/${command}`;
 }
 
+/**
+ * The desktop window's transport: the request travels over Tauri IPC as raw
+ * bytes and the backend serves it with the same `/api` routes browsers use.
+ */
+async function desktopFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const request = new Request(new URL(path, "http://lantor.desktop"), init);
+  const body = new Uint8Array(await request.arrayBuffer());
+  // Tauri describes the IPC body with its own Content-Type, so the API
+  // request's content type travels in a header of its own.
+  const headers: Record<string, string> = {
+    "lantor-method": request.method,
+    "lantor-path": path,
+  };
+  const contentType = request.headers.get("content-type");
+  if (contentType) headers["lantor-content-type"] = contentType;
+  try {
+    // The IPC protocol returns an ArrayBuffer; its postMessage fallback
+    // returns the same bytes as an array of numbers.
+    const payload = await tauriInvoke<ArrayBuffer | number[]>("api_request", body, { headers });
+    return new Response(Array.isArray(payload) ? new Uint8Array(payload) : payload, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({ message: String(error) }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+  }
+}
+
+function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  return isTauriRuntime() ? desktopFetch(path, init) : sessionFetch(path, init);
+}
+
+function requestApi(command: string, args: Record<string, unknown>): Promise<Response> {
+  if (command === "bootstrap") return apiFetch(bootstrapApiPath(args));
+  return apiFetch(apiPath(command), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(args),
+  });
+}
+
 function bootstrapApiPath(args: Record<string, unknown>) {
   const channelId = typeof args.channelId === "string" ? args.channelId.trim() : "";
   const params = new URLSearchParams();
@@ -91,20 +137,7 @@ export async function apiInvoke<C extends ApiCommand>(
   ...argsTuple: ApiArgsTuple<C>
 ): Promise<ApiResult<C>> {
   const args = (argsTuple[0] ?? {}) as Record<string, unknown>;
-  if (isTauriRuntime()) {
-    return tauriInvoke<ApiResult<C>>(command, args);
-  }
-
-  const response = command === "bootstrap"
-    ? await sessionFetch(bootstrapApiPath(args))
-    : await sessionFetch(apiPath(command), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(args),
-    });
-
+  const response = await requestApi(command, args);
   return readApiResponse<ApiResult<C>>(response, `${command} failed`);
 }
 
@@ -114,20 +147,6 @@ export async function sendMessage(
   args: SendMessageArgs,
   attachments: readonly File[],
 ): Promise<ApiResult<"send_message">> {
-  if (isTauriRuntime()) {
-    const uploads = await Promise.all(
-      attachments.map(async (file) => {
-        const buffer = await file.arrayBuffer();
-        return {
-          originalName: file.name,
-          mimeType: file.type || "application/octet-stream",
-          bytes: Array.from(new Uint8Array(buffer)),
-        };
-      }),
-    );
-    return apiInvoke("send_message", { ...args, attachments: uploads });
-  }
-
   if (attachments.length === 0) {
     return apiInvoke("send_message", { ...args, attachments: [] });
   }
@@ -137,7 +156,7 @@ export async function sendMessage(
   for (const file of attachments) {
     formData.append("attachments", file, file.name || "attachment");
   }
-  const response = await sessionFetch(apiPath("send_message"), {
+  const response = await apiFetch(apiPath("send_message"), {
     method: "POST",
     body: formData,
   });
@@ -159,25 +178,7 @@ export async function apiInvokeMeasured<C extends ApiCommand>(
 ): Promise<{ payload: ApiResult<C>; measurement: ApiInvokeMeasurement }> {
   const args = (argsTuple[0] ?? {}) as Record<string, unknown>;
   const startedAt = performance.now();
-  if (isTauriRuntime()) {
-    const payload = await tauriInvoke<ApiResult<C>>(command, args);
-    return {
-      payload,
-      measurement: {
-        roundtripMs: performance.now() - startedAt,
-      },
-    };
-  }
-
-  const response = command === "bootstrap"
-    ? await sessionFetch(bootstrapApiPath(args))
-    : await sessionFetch(apiPath(command), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(args),
-    });
+  const response = await requestApi(command, args);
 
   const contentType = response.headers.get("content-type") || "";
   const rawPayload = await response.text();
@@ -212,12 +213,6 @@ type BackendEventSubscriptionOptions = {
 type DesktopUiEventDelivery = {
   cursor: number;
   event: string;
-};
-
-type DesktopUiEventReplay = {
-  cursor: number;
-  replayGap: boolean;
-  events: DesktopUiEventDelivery[];
 };
 
 function parseDesktopUiEventDeliveries(
@@ -304,9 +299,7 @@ export async function subscribeBackendEvents(
     });
 
     try {
-      const replay = await tauriInvoke<DesktopUiEventReplay>("replay_ui_events", {
-        cursor: startingCursor,
-      });
+      const replay = await apiInvoke("replay_ui_events", { cursor: startingCursor });
       if (replay.replayGap) {
         handler(JSON.stringify({
           type: "refresh",

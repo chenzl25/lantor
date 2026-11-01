@@ -27,10 +27,8 @@ tauri = { version = "2.5.1", features = ["protocol-asset"] }
 tower-http = { version = "0.6.2", features = ["compression-gzip", "fs"] }
 tokio = { version = "1.44.2", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["io"] }
-uuid = { version = "1.16.0", features = ["serde", "v4"] }
-
-[dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+uuid = { version = "1.16.0", features = ["serde", "v4"] }
 
 # The desktop app (and the :8787 server it hosts) runs as a dev build under
 # `tauri dev`. Unoptimized dependencies make image decoding and thumbnail

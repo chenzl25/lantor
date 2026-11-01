@@ -85,6 +85,18 @@ pub(super) fn codex_error_notification_detail(value: &Value) -> Option<String> {
         .or_else(|| Some("codex emitted error notification".to_owned()))
 }
 
+/// The app-server tags errors caused by an invalid login (expired or revoked
+/// ChatGPT tokens, a rejected API key) with `codexErrorInfo: "unauthorized"`,
+/// both on `error` notifications and on a failed turn.
+pub(super) fn codex_auth_failure(value: &Value) -> bool {
+    [
+        "/params/error/codexErrorInfo",
+        "/params/turn/error/codexErrorInfo",
+    ]
+    .iter()
+    .any(|pointer| value.pointer(pointer).and_then(Value::as_str) == Some("unauthorized"))
+}
+
 pub(super) fn codex_thread_id_from_response(value: &Value) -> Option<String> {
     value
         .pointer("/result/thread/id")

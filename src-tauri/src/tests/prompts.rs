@@ -73,6 +73,22 @@ fn decision_cards_are_taught_through_the_context_tool() {
 }
 
 #[test]
+fn pull_request_reviews_show_core_hunks_in_layers() {
+    for prompt in [
+        claude_system_prompt("tester"),
+        codex_developer_instructions("tester"),
+    ] {
+        assert!(prompt.contains("Pull request reviews:"));
+        assert!(prompt.contains("Open with the verdict"));
+        assert!(prompt.contains(
+            "```diff <language> path=<GitHub blob permalink at the reviewed head commit>"
+        ));
+        assert!(prompt.contains("Copy hunks verbatim from `git diff <base>...<head>`"));
+        assert!(prompt.contains("only what changed since the previously reviewed commit"));
+    }
+}
+
+#[test]
 fn memory_snapshot_is_turn_context() {
     let prompt = prepend_memory_context(
         "Current request".to_owned(),
@@ -109,6 +125,7 @@ fn streaming_prompt_does_not_repeat_standing_contract() {
         "Review the change",
         "Latest user message: please review",
         Some("lantor"),
+        &[],
         None,
         Some(Uuid::nil()),
         &[],
@@ -132,6 +149,7 @@ fn standalone_prompt_keeps_standing_and_finish_contract() {
         "Review the change",
         "Latest user message: please review",
         Some("lantor"),
+        &[],
         None,
         Some(Uuid::nil()),
         &[],
@@ -150,6 +168,7 @@ fn streaming_work_item_prompt_omits_repeated_standing_context() {
         "Review the change",
         "Latest user message: please review",
         Some("lantor"),
+        &[],
         None,
         Some(Uuid::nil()),
         &["@peer".to_owned()],
@@ -173,6 +192,7 @@ fn work_item_prompt_includes_agent_profile_hint_when_present() {
         "Handle inbox",
         "Latest user message: hello",
         Some("lantor"),
+        &[],
         None,
         Some(Uuid::nil()),
         &[],
@@ -181,4 +201,28 @@ fn work_item_prompt_includes_agent_profile_hint_when_present() {
 
     assert!(prompt.contains("agent_profile_hint:"));
     assert!(prompt.contains("Pick a stable DiceBear avatar if the profile is empty."));
+}
+
+#[test]
+fn work_item_prompt_names_github_repositories_after_the_channel() {
+    let github = vec![
+        "github_repo: chenzl25/lantor (a bare #123 here links to it)".to_owned(),
+        "github_names: lantor=chenzl25/lantor, rw=risingwavelabs/risingwave".to_owned(),
+    ];
+    let prompt = build_streaming_work_item_prompt(
+        Uuid::nil(),
+        "Handle inbox",
+        "Latest user message: hello",
+        Some("lantor-dev"),
+        &github,
+        None,
+        None,
+        &[],
+        None,
+    );
+
+    assert!(prompt.contains(
+        "channel: #lantor-dev\ngithub_repo: chenzl25/lantor (a bare #123 here links to it)\ngithub_names: lantor=chenzl25/lantor, rw=risingwavelabs/risingwave\n"
+    ));
+    assert!(claude_system_prompt("arch").contains("names from `github_names` in the turn header"));
 }

@@ -25,7 +25,7 @@ export function ChannelSettingsModal({
   return (
     <Modal
       open={open}
-      title={channel ? `#${channel.name} Settings` : "Channel Settings"}
+      title={channel ? `#${channel.name} Settings` : "Edit channel"}
       onClose={onCancel}
       width={560}
     >
@@ -44,7 +44,7 @@ export function ChannelSettingsModal({
             <textarea
               value={descriptionDraft}
               onChange={(event) => onDescriptionChange(event.target.value)}
-              placeholder="Channel description"
+              placeholder="What’s this channel for?"
             />
           </label>
           <div className="modal-actions">

@@ -1,10 +1,12 @@
 pub(crate) mod claude;
 pub(crate) mod codex;
+pub(crate) mod lifecycle;
 pub(crate) mod process;
 pub(crate) mod streaming;
 pub(crate) mod supervisor;
 pub(crate) mod surface;
 pub(crate) mod turn_outcome;
+pub(crate) mod warm;
 
 const MEMORY_CONTEXT_CLEARED: &str = "Lantor durable memory update:\nThe previously loaded Lantor memory snapshot has been cleared. Do not rely on facts or preferences from that earlier snapshot unless the current request or current source confirms them.";
 

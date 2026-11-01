@@ -48,10 +48,17 @@ const initialState = { db_url: "synthetic://activity", web_base_url: null, owner
   reminders: [{ id: id(901), title: "Synthetic due reminder card", note: "System reminder note", status: "fired",
     channel_id: channelId, thread_root_id: root.id, message_id: id(30), due_at: at(30), fired_at: at(30) }],
   thread_activities: initialActivities, saved_messages: [], dismissed_inbox_items: {}, read_inbox_items: {}, artifacts: [],
-  agent_schedules: [], agent_runs: [], agent_work_items: [], agent_activities: [], supervisor: { pid: null, status: "stopped", updated_at: null },
+  agent_runs: [], agent_work_items: [], agent_activities: [], supervisor: { pid: null, status: "stopped", updated_at: null },
   launch_agent: { label: "", plist_path: "", installed: false, loaded: false }, ui_event_cursor: 0 };
-let state, messages, cursor = 0;
+// Agent replies counted in the channel's unread totals that no receipt has covered yet.
+let state, messages, cursor = 0, emulateThreadReceipts = false, receiptableReplies = 0;
 const clients = new Set(), requests = [];
+const until = async (check, message) => {
+  for (const end = Date.now() + 5_000; Date.now() < end; await new Promise(done => setTimeout(done, 50))) {
+    const value = check(); if (value) return value;
+  }
+  throw new Error(message);
+};
 const publish = event => { cursor++; for (const client of clients) client.write(`id: ${cursor}\nevent: lantor\ndata: ${JSON.stringify(event)}\n\n`); };
 const api = createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
@@ -81,6 +88,20 @@ const api = createServer(async (req, res) => {
     case "/api/replay_ui_events": result = { cursor, replayGap: false, events: [] }; break;
     case "/api/mark_inbox_items_read":
       for (const item of args.items) state.read_inbox_items[item.itemId] = item.dismissedUntil;
+      if (emulateThreadReceipts) {
+        // Like the backend: a thread receipt clears replies up to its cutoff and refreshes read state.
+        const covered = a => args.items.some(item => item.itemId === `thread:${a.thread_root_id}`
+          && Date.parse(item.dismissedUntil) >= Date.parse(a.latest_activity_at));
+        // The channel totals drop the receipted replies too.
+        for (const a of state.thread_activities.filter(covered)) {
+          state.channels = state.channels.map(c => c.id === a.channel_id ? { ...c,
+            unread_count: c.unread_count - receiptableReplies, agent_unread_count: c.agent_unread_count - receiptableReplies } : c);
+          receiptableReplies = 0;
+        }
+        state.thread_activities = state.thread_activities.map(a => covered(a)
+          ? { ...a, unread_count: 0, agent_unread_count: 0, first_unread_agent_message_id: null } : a);
+        setTimeout(() => publish({ type: "refresh", reason: "owner_inbox_read" }), 0);
+      }
       break;
     case "/api/mark_channel_read":
       state.channels = state.channels.map(c => c.id === args.channelId ? { ...c, unread_count: 0, agent_unread_count: 0 } : c);
@@ -94,7 +115,8 @@ await new Promise(done => api.listen(0, "127.0.0.1", done));
 let browser;
 try {
   for (const [name, engine, width] of [["desktop", chromium, 1440], ["mobile", webkit, 390]]) {
-    state = structuredClone(initialState); messages = structuredClone(initialMessages); requests.length = 0;
+    state = structuredClone(initialState); messages = structuredClone(initialMessages); requests.length = 0; emulateThreadReceipts = false;
+    receiptableReplies = 0;
     browser = await engine.launch();
     const page = await browser.newPage({ serviceWorkers: "block", viewport: { width, height: 900 } });
     page.setDefaultTimeout(10_000);
@@ -112,7 +134,7 @@ try {
     assert.equal(await rows.filter({ hasText: /Synthetic|Reminder|notification|Owner follow-up/ }).count(), 0);
     assert.equal(await rows.locator(".activity-feed-unread-dot").count(), 2);
     await dialog.getByRole("button", { name: "Mentions", exact: true }).click();
-    await dialog.getByText("No activity", { exact: true }).waitFor();
+    await dialog.getByText("Nothing new", { exact: true }).waitFor();
     await dialog.getByRole("button", { name: "All", exact: true }).click();
     const target = rows.filter({ hasText: "Agent investigation complete" });
     if (width < 760) await dialog.getByRole("button", { name: "Mark all read", exact: true }).click();
@@ -149,6 +171,47 @@ try {
     await dialog.waitFor({ state: "detached" });
     await page.locator(`.thread [data-message-id="${first.id}"]`).waitFor();
     assert.ok(requests.some(r => r.path === "/api/load_message" && r.args.messageId === first.id), "opens first unread agent reply absent from the initial snapshot");
+
+    if (width >= 1101) {
+      // An expanded thread hides the conversation, whose read watermark was the
+      // only receipt for replies arriving in the open thread.
+      await page.getByRole("button", { name: "Full width", exact: true }).click();
+      await page.locator(".app.thread-expanded").waitFor();
+      emulateThreadReceipts = true;
+      // Unfollowed, the thread leaves Activity once read, so a channel entry
+      // for the same replies would show up in its place.
+      const unfollowed = { ...messages.find(m => m.id === root.id), thread_followed: false };
+      messages = messages.map(m => m.id === root.id ? unfollowed : m);
+      publish({ type: "message_upsert", message: unfollowed });
+      const badge = trigger.locator(".unread-badge");
+      const badgeValue = async () => await badge.count() ? Number(await badge.textContent()) : 0;
+      await page.waitForTimeout(300);
+      const before = await badgeValue();
+      const late = message(110, "agent", "Late reply in the expanded thread", { thread_root_id: root.id });
+      messages.push(late);
+      // Like the backend, channel totals count thread replies above the watermark.
+      state.channels = state.channels.map(c => c.id === channelId
+        ? { ...c, unread_count: c.unread_count + 1, agent_unread_count: c.agent_unread_count + 1 } : c);
+      receiptableReplies = 1;
+      state.thread_activities = state.thread_activities.map(a => a.thread_root_id === root.id
+        ? { ...a, reply_count: a.reply_count + 1, unread_count: 1, agent_unread_count: 1, first_unread_agent_message_id: late.id,
+          latest_message_id: late.id, latest_activity_at: late.created_at } : a);
+      const sent = requests.length;
+      publish({ type: "message_upsert", message: late });
+      await page.locator(`.thread [data-message-id="${late.id}"]`).waitFor();
+      await until(() => requests.slice(sent).some(r => r.path === "/api/mark_inbox_items_read"
+        && r.args.items.some(item => item.itemId === `thread:${root.id}` && item.dismissedUntil === late.created_at)),
+        "expanded thread receipts its new reply, fenced to the snapshot's latest activity");
+      for (const end = Date.now() + 5_000; await badgeValue() !== before && Date.now() < end;) await page.waitForTimeout(50);
+      assert.equal(await badgeValue(), before, "Activity unread clears while the thread stays expanded");
+      await trigger.click();
+      await dialog.waitFor();
+      assert.equal(await dialog.locator(".activity-feed-unread-dot").count(), before,
+        "no unread channel entry replaces the read thread");
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "detached" });
+      assert.equal(requests.slice(sent).filter(r => r.path === "/api/mark_channel_read").length, 0, "hidden conversation is not marked read");
+    }
     assert.equal(errors.length, 0, errors.join("\n"));
     console.log(`PASS ${name}: agent-only hydration, no system cards/mentions/unread, live reply, first-unread navigation`);
     await browser.close(); browser = null;

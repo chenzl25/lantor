@@ -80,6 +80,7 @@ const LANTOR_CONTROL_EVENTS = [
   '{"type":"memory_compact","body":"Full compact MEMORY.md replacement with Role, Key Knowledge / Memory Map, Active Context, and Memory Policy"}',
   '{"type":"profile_update","display_name":"Name","role":"specialist role","avatar":"dicebear:dylan:Hancock","description":"What this agent is good at"}',
   '{"type":"reminder_create","when":"ISO8601 timestamp","title":"Follow-up title","note":"optional note","recurrence":"none|daily|weekly"}',
+  '{"type":"reminder_create","title":"Loop title","interval_minutes":5,"check_command":"shell command printing only new items","check_action":"post|wake"}',
   '{"type":"reminder_cancel","reminder_id":"uuid"}',
   '{"type":"task_create","channel_id":"uuid","title":"Short task title","body":"Root task message","thread_body":"First execution update","assign_self":true,"status":"in_progress"}',
   '{"type":"task_status","task_number":1,"status":"in_review"}',
@@ -126,7 +127,7 @@ export function presetPrompt(form: AgentForm) {
   return [
     `You are ${name}, a local agent running inside Lantor.`,
     "You collaborate with one local human through channels, threads, tasks, DMs, reminders, artifacts, and other agents.",
-    "If LANTOR_WORK_ITEM_PROMPT is set, treat it as the current agent request. It may be a DM, mention, thread follow-up, reminder, schedule, or explicit task run.",
+    "If LANTOR_WORK_ITEM_PROMPT is set, treat it as the current agent request. It may be a DM, mention, thread follow-up, reminder, or explicit task run.",
     LANTOR_OPERATING_POLICY,
     LANTOR_MEMORY_MANAGEMENT,
     LANTOR_CONTEXT_TOOLS,
@@ -257,18 +258,16 @@ export function agentRequestSourceLabel(sourceKind: string, taskNumber?: number 
     case "dm":
       return "DM";
     case "thread_followup":
-      return "Thread follow-up";
+      return "Thread reply";
     case "collaboration":
-      return "Agent handoff";
+      return "Handed over";
     case "reminder":
       return "Reminder";
-    case "schedule":
-      return "Routine";
     case "task":
-      return "Task run";
+      return "Task";
     case "manual":
-      return "Manual request";
+      return "Your request";
     default:
-      return "Agent request";
+      return "Request";
   }
 }

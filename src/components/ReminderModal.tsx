@@ -98,7 +98,7 @@ export function ReminderModal({
             <div className="reminder-icon"><Bell size={18} /></div>
             <div>
               <strong>New reminder</strong>
-              <span>{currentChannel ? `Anchored to ${currentChannel.kind === "dm" ? "this DM" : `#${currentChannel.name}`}` : "No active channel selected"}</span>
+              <span>{currentChannel ? `Anchored to ${currentChannel.kind === "dm" ? "this DM" : `#${currentChannel.name}`}` : "Open a channel first"}</span>
             </div>
           </div>
           <div className="reminder-quick-grid" aria-label="Quick reminder times">
@@ -109,12 +109,12 @@ export function ReminderModal({
           <input
             value={title}
             onChange={(event) => onTitleChange(event.target.value)}
-            placeholder={`What should ${APP_DISPLAY_NAME} remind you about?`}
+            placeholder={`Remind me to…`}
           />
           <textarea
             value={note}
             onChange={(event) => onNoteChange(event.target.value)}
-            placeholder="Optional note"
+            placeholder="Note (optional)"
           />
           <div className="reminder-create-grid">
             <label>
@@ -124,7 +124,7 @@ export function ReminderModal({
             <label>
               Repeat
               <select value={recurrence} onChange={(event) => onRecurrenceChange(event.target.value)}>
-                <option value="none">No repeat</option>
+                <option value="none">Once</option>
                 <option value="daily">Daily</option>
                 <option value="weekly">Weekly</option>
               </select>
@@ -137,10 +137,10 @@ export function ReminderModal({
               disabled={!activeThreadId}
               onChange={(event) => onIncludeThreadChange(event.target.checked)}
             />
-            <span>Anchor to current thread</span>
+            <span>Link to this thread</span>
           </label>
           <button className="primary" disabled={!canCreate} onClick={onCreate}>
-            Create reminder
+            Add reminder
           </button>
         </section>
 
@@ -177,7 +177,7 @@ export function ReminderModal({
                     {reminder.note && <p>{reminder.note}</p>}
                   </div>
                   <div className="reminder-row-actions">
-                    <button onClick={() => onSnooze(reminder, 10)}>Snooze 10m</button>
+                    <button onClick={() => onSnooze(reminder, 10)}>Snooze 10 min</button>
                     <button className="icon" onClick={() => onComplete(reminder)} title="Complete"><Check size={15} /></button>
                   </div>
                 </article>
@@ -190,7 +190,7 @@ export function ReminderModal({
               <h4>Scheduled</h4>
               <span>{scheduled.length}</span>
             </div>
-            {scheduled.length === 0 && <p className="empty-mini">No scheduled reminders.</p>}
+            {scheduled.length === 0 && <p className="empty-mini">No reminders.</p>}
             {scheduled.map((reminder) => (
               <article key={reminder.id} className="reminder-row">
                 <div className="reminder-row-icon">{reminder.recurrence !== "none" ? <Repeat2 size={15} /> : <Clock3 size={15} />}</div>

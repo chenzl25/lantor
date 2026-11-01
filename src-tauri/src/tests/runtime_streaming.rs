@@ -4,7 +4,7 @@ use super::{
     dispatch_streaming_agent_message_mentions, ensure_streaming_agent_message,
     finish_streaming_agent_message, finish_streaming_agent_message_deferred_mentions,
     maybe_hide_silent_streaming_reply, reconcile_streaming_agent_message,
-    streaming_message_body_is_empty,
+    settle_orphaned_streaming_messages, streaming_message_body_is_empty,
 };
 use crate::domain::reminders::load_reminders;
 use crate::message_store::load_messages;
@@ -70,6 +70,107 @@ async fn terminal_empty_placeholders_preserve_attached_content_and_threads() {
         .await
         .unwrap();
     assert_eq!((replies, attachments), (2, 2));
+    drop_test_schema(pool, database).await;
+}
+
+#[tokio::test]
+async fn orphaned_streaming_replies_settle_after_their_run_stops() {
+    let (pool, database) = test_pool().await.expect("isolated database");
+    let agent = insert_test_agent(&pool, "orphan-streamer").await.unwrap();
+    let channel = insert_test_channel(&pool, "orphan-streaming")
+        .await
+        .unwrap();
+    let timestamp = |age: ChronoDuration| {
+        (Utc::now() - age)
+            .format("%Y-%m-%dT%H:%M:%S%.3f+00:00")
+            .to_string()
+    };
+    let long_ago = timestamp(ChronoDuration::minutes(10));
+    let just_now = timestamp(ChronoDuration::seconds(5));
+
+    let mut ids = Vec::new();
+    for (stopped_at, body, replied) in [
+        (Some(long_ago.as_str()), "Half a reply", false),
+        (Some(long_ago.as_str()), "", false),
+        (Some(long_ago.as_str()), "", true),
+        (Some(just_now.as_str()), "Still finishing", false),
+        (None, "Still streaming", false),
+    ] {
+        let run_id: Uuid = sqlx::query_scalar(
+            "insert into agent_runs (agent_id, command, status, stopped_at) values ($1, 'claude', $2, $3) returning id",
+        )
+        .bind(agent)
+        .bind(if stopped_at.is_some() { "unknown" } else { "running" })
+        .bind(stopped_at)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let key = format!("{run_id}:claude-assistant");
+        let id = ensure_streaming_agent_message(&pool, agent, channel, None, &key)
+            .await
+            .unwrap();
+        sqlx::query("update messages set body = $2, created_at = $3 where id = $1")
+            .bind(id)
+            .bind(body)
+            .bind(&long_ago)
+            .execute(&pool)
+            .await
+            .unwrap();
+        if replied {
+            sqlx::query("insert into messages (channel_id, thread_root_id, sender_name, body) values ($1, $2, 'owner', 'Keep this reply')")
+                .bind(channel).bind(id).execute(&pool).await.unwrap();
+        }
+        ids.push(id);
+    }
+
+    assert_eq!(settle_orphaned_streaming_messages(&pool).await.unwrap(), 3);
+    let mut states = Vec::new();
+    for id in &ids {
+        let state: Option<String> =
+            sqlx::query_scalar("select delivery_state from messages where id = $1")
+                .bind(id)
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        states.push(state);
+    }
+    assert_eq!(
+        states,
+        vec![
+            Some("error".to_owned()),
+            None,
+            Some("error".to_owned()),
+            Some("streaming".to_owned()),
+            Some("streaming".to_owned()),
+        ]
+    );
+
+    let events: Vec<(String, String)> = sqlx::query(
+        r#"
+        select json_extract(event_json, '$.type') as kind,
+               coalesce(json_extract(event_json, '$.message_id'),
+                        json_extract(event_json, '$.message.id')) as message_id
+        from ui_events
+        where json_extract(event_json, '$.reason') = 'orphaned_stream_settled'
+        order by id
+        "#,
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| (row.get("kind"), row.get("message_id")))
+    .collect();
+    assert_eq!(
+        events,
+        vec![
+            ("message_upsert".to_owned(), ids[0].to_string()),
+            ("message_delete".to_owned(), ids[1].to_string()),
+            ("message_upsert".to_owned(), ids[2].to_string()),
+        ]
+    );
+
+    assert_eq!(settle_orphaned_streaming_messages(&pool).await.unwrap(), 0);
     drop_test_schema(pool, database).await;
 }
 

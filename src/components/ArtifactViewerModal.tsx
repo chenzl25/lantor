@@ -37,7 +37,7 @@ export function ArtifactViewerModal({
           {loading ? (
             <div className="artifact-viewer-status">
               <LoaderCircle className="spin" size={20} />
-              <span>Loading full artifact…</span>
+              <span>Loading report…</span>
             </div>
           ) : error ? (
             <div className="artifact-viewer-status error" role="alert">{error}</div>
@@ -46,6 +46,7 @@ export function ArtifactViewerModal({
               <MessageMarkdown
                 body={artifact.content}
                 scrollKey={`artifact-viewer:${artifact.id}`}
+                channelId={artifact.channel_id}
               />
             </div>
           ) : (

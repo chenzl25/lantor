@@ -1,3 +1,7 @@
+use std::{future::Future, time::Duration};
+
+use crate::app::CommandResult;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WarmTurnOutcome {
     pub(crate) agent_status: &'static str,
@@ -38,6 +42,82 @@ pub(crate) fn resolve_warm_turn_outcome(success: bool, was_cancelled: bool) -> W
             activity_kind: "run_error",
             activity_title: "Failed",
         }
+    }
+}
+
+/// SQLite answers some write conflicts with `database is locked` at once
+/// instead of waiting out `busy_timeout` (a deferred transaction that read
+/// first, for instance). Turn finalization retries those so a burst of agents
+/// finishing together cannot leave a run open.
+pub(crate) fn is_transient_sqlite_error(error: &str) -> bool {
+    error.contains("database is locked")
+        || error.contains("database table is locked")
+        || error.contains("(code: 5)")
+        || error.contains("(code: 6)")
+}
+
+const TRANSIENT_RETRY_ATTEMPTS: u32 = 8;
+const TRANSIENT_RETRY_FIRST_DELAY: Duration = Duration::from_millis(50);
+const TRANSIENT_RETRY_MAX_DELAY: Duration = Duration::from_secs(2);
+
+pub(crate) async fn retry_transient_sqlite<T, F, Fut>(mut operation: F) -> CommandResult<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = CommandResult<T>>,
+{
+    let mut delay = TRANSIENT_RETRY_FIRST_DELAY;
+    let mut attempt = 1;
+    loop {
+        match operation().await {
+            Err(error)
+                if attempt < TRANSIENT_RETRY_ATTEMPTS && is_transient_sqlite_error(&error) =>
+            {
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(TRANSIENT_RETRY_MAX_DELAY);
+                attempt += 1;
+            }
+            result => return result,
+        }
+    }
+}
+
+/// Keeps the first error of a best-effort step and lets finalization go on.
+pub(crate) fn keep_first_error<T>(
+    first: &mut Option<String>,
+    result: CommandResult<T>,
+) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            if first.is_none() {
+                *first = Some(error);
+            }
+            None
+        }
+    }
+}
+
+/// Work-item status after a turn ends. A turn that failed because the
+/// provider login expired never reached the model, so its request goes back to
+/// the queue instead of failing.
+pub(crate) fn finished_work_status(
+    success: bool,
+    was_cancelled: bool,
+    auth_required: bool,
+    current_status: Option<&str>,
+) -> &'static str {
+    if was_cancelled {
+        "cancelled"
+    } else if auth_required {
+        "queued"
+    } else if success && current_status == Some("silent") {
+        "silent"
+    } else if success && current_status == Some("held") {
+        "held"
+    } else if success {
+        "done"
+    } else {
+        "failed"
     }
 }
 

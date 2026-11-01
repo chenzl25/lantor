@@ -564,7 +564,7 @@ async fn load_unannounced_items(pool: &SqlitePool, badge: i64) -> CommandResult<
         let requester: Option<String> = row.get("requester_handle");
         let title = match requester {
             Some(handle) => format!("@{handle} needs your call"),
-            None => "An agent needs your call".to_owned(),
+            None => "Lantor needs your call".to_owned(),
         };
         items.push(NeedsYouItem {
             key: format!("decision:{}", id.simple()),

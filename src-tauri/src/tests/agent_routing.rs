@@ -1,6 +1,6 @@
 use super::{
-    extract_agent_mentions, queue_mentions_as_work_items, upsert_agent_thread_subscription,
-    MentionDispatchOrigin,
+    extract_agent_mentions, queue_mentions_as_work_items, suggest_agent_handle,
+    upsert_agent_thread_subscription, MentionDispatchOrigin,
 };
 use crate::channels::open_dm_with_agent_in_pool;
 use crate::message_store::{insert_agent_message, send_owner_message_in_pool};
@@ -39,6 +39,21 @@ fn ignores_mentions_inside_code_blocks_and_inline_code() {
 fn unclosed_fence_suppresses_rest_of_message() {
     let mentions = extract_agent_mentions("before @Speed\n```rust\nlet x = \"@Hancock\";");
     assert_eq!(mentions, vec!["Speed"]);
+}
+
+#[test]
+fn suggests_agent_handle_only_for_typo_like_mentions() {
+    let handles: Vec<String> = ["Vegapunk", "Hancock", "MK", "arch"]
+        .iter()
+        .map(|handle| handle.to_string())
+        .collect();
+    assert_eq!(suggest_agent_handle("Vegapun", &handles), Some("Vegapunk"));
+    assert_eq!(suggest_agent_handle("hancok", &handles), Some("Hancock"));
+    assert_eq!(suggest_agent_handle("arc", &handles), Some("arch"));
+    // Pasted external names resemble no handle.
+    assert_eq!(suggest_agent_handle("ZJY0516", &handles), None);
+    // Short handles do not absorb unrelated two-letter names.
+    assert_eq!(suggest_agent_handle("me", &handles), None);
 }
 
 #[tokio::test]
@@ -552,7 +567,7 @@ async fn owner_thread_followup_with_explicit_mention_does_not_fan_out_to_thread_
 }
 
 #[tokio::test]
-async fn owner_thread_followup_with_unknown_mention_does_not_fall_back_to_thread_agents() {
+async fn owner_thread_followup_with_typo_mention_does_not_fall_back_and_suggests_handle() {
     let Some((pool, schema)) = test_pool().await else {
         return;
     };
@@ -597,7 +612,7 @@ async fn owner_thread_followup_with_unknown_mention_does_not_fall_back_to_thread
             None,
             channel_id,
             Some(root_id),
-            "@missing-agent 这个后续不应该 fallback 给 thread 参与者",
+            "@known-thread-agnt 这个后续不应该 fallback 给 thread 参与者",
             false,
             vec![],
         )
@@ -618,6 +633,108 @@ async fn owner_thread_followup_with_unknown_mention_does_not_fall_back_to_thread
         .map_err(|err| err.to_string())?;
 
         assert_eq!(inboxes, 0);
+
+        let notices: Vec<String> = sqlx::query_scalar(
+            r#"
+            select body
+            from messages
+            where channel_id = $1 and thread_root_id = $2 and sender_role = 'system'
+            "#,
+        )
+        .bind(channel_id)
+        .bind(root_id)
+        .fetch_all(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("@known-thread-agnt (did you mean @known-thread-agent?)"));
+        assert!(notices[0].contains("not dispatched"));
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    assert!(result.is_ok(), "{:?}", result.err());
+}
+
+#[tokio::test]
+async fn owner_thread_followup_with_external_mention_falls_back_to_thread_agents() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "known-thread-agent").await?;
+        let channel_id = insert_test_channel(&pool, "thread-external-mention").await?;
+        sqlx::query(
+            r#"
+            insert into channel_members (channel_id, agent_id)
+            values ($1, $2)
+            "#,
+        )
+        .bind(channel_id)
+        .bind(agent_id)
+        .execute(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+
+        let root_id: Uuid = sqlx::query_scalar(
+            r#"
+            insert into messages (channel_id, sender_name, sender_role, body, is_task)
+            values ($1, 'Dylan', 'owner', 'root request', false)
+            returning id
+            "#,
+        )
+        .bind(channel_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        upsert_agent_thread_subscription(
+            &pool,
+            agent_id,
+            channel_id,
+            root_id,
+            "mention",
+            Some(root_id),
+        )
+        .await?;
+
+        send_owner_message_in_pool(
+            &pool,
+            None,
+            channel_id,
+            Some(root_id),
+            "@ZJY0516 already implemented a prototype in #42304，介绍其中的概念",
+            false,
+            vec![],
+        )
+        .await?;
+
+        let inbox_kinds: Vec<String> = sqlx::query_scalar(
+            r#"
+            select kind
+            from agent_inbox_items
+            where agent_id = $1
+              and source_message_id <> $2
+            "#,
+        )
+        .bind(agent_id)
+        .bind(root_id)
+        .fetch_all(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(inbox_kinds, vec!["thread_followup".to_owned()]);
+
+        let notices: i64 = sqlx::query_scalar(
+            r#"
+            select count(*)
+            from messages
+            where channel_id = $1 and sender_role = 'system'
+            "#,
+        )
+        .bind(channel_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(notices, 0);
         Ok(())
     }
     .await;

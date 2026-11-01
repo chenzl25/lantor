@@ -12,11 +12,11 @@ use serde_json::Value;
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use super::{ClaudeSurface, WarmClaudeRuntime};
+use super::{steer::settle_claude_follow_ups, ClaudeSurface, WarmClaudeRuntime};
 use crate::app::{to_string, CommandResult};
 use crate::events::activity::record_agent_activity;
 use crate::runtime::{
-    process::{cleanup_failed_warm_start, WarmStartFailure},
+    lifecycle::WarmStartFailure, process::cleanup_failed_warm_start,
     streaming::delete_streaming_agent_message_by_key,
 };
 
@@ -240,6 +240,8 @@ pub(super) async fn restart_after_missing_session(
         detail.clone(),
     )
     .await?;
+    // The process is gone, so follow-ups it never replayed go back to the queue.
+    settle_claude_follow_ups(pool, agent_id, runtime).await?;
     let Some(active) = active else {
         return Ok(());
     };

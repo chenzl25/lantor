@@ -14,13 +14,13 @@ export function WebAppStatus() {
   useEffect(() => isTauriRuntime() ? undefined : watchWebSessionRecovery(), []);
   if (isTauriRuntime() || (online && !updateAvailable && !sessionExpired)) return null;
   return <aside className="web-app-status" role="status" aria-live="polite">
-    {!online && <span><WifiOff size={16} aria-hidden="true" /> Offline — reconnect to sync your workspace.</span>}
+    {!online && <span><WifiOff size={16} aria-hidden="true" /> Offline. Reconnect to catch up.</span>}
     {sessionExpired && <div>
       <p>Your session has expired. Your drafts are kept in this tab.</p>
       <button type="button" onClick={() => window.open(webSignInUrl(), "_blank", "noopener,noreferrer")}>Sign in again</button>
       <p>Sign in in the new tab, then return here to reconnect.</p>
     </div>}
-    {updateAvailable && !sessionExpired && <span><RefreshCw size={16} aria-hidden="true" /><span>A new version is available.</span>
+    {updateAvailable && !sessionExpired && <span><RefreshCw size={16} aria-hidden="true" /><span>New version ready.</span>
       <button type="button" onClick={() => window.location.reload()}>Refresh</button>
     </span>}
   </aside>;

@@ -24,6 +24,7 @@ import { ActivityProgressDock, activeProgressByAgent, indexProgress } from "./Ac
 import { AgentAvatar } from "./AgentAvatar";
 import { ComposerReferenceTextarea } from "./ComposerReferenceTextarea";
 import { DraftAttachmentsPreview } from "./DraftAttachmentsPreview";
+import { IconButton } from "./IconButton";
 import { MessageActionMenu } from "./MessageActionMenu";
 import { MessageRow, type MessageRowActions, type MessageRowAction } from "./MessageRow";
 import { MessageReferencePreview, type MessageReferencePreviewItem } from "./MessageReferencePreview";
@@ -266,7 +267,7 @@ export function ThreadPanel({
         id,
         token,
         channelName: channel?.name ?? "unknown",
-        senderName: "Missing reference",
+        senderName: "Message not found",
         preview: id,
         meta: "not loaded",
         missing: true,
@@ -743,14 +744,13 @@ export function ThreadPanel({
         onPointerDown={onResizeStart}
       />
       <header>
-        <button
-          type="button"
+        <IconButton
           className="thread-mobile-back"
           onClick={onClose}
-          aria-label={isDm ? "Back to direct message" : "Back to channel"}
+          label={isDm ? "Back to direct message" : "Back to channel"}
         >
           <ArrowLeft size={18} />
-        </button>
+        </IconButton>
         <div className="thread-title">
           <span className="hash-card thread-title-card" aria-hidden="true">
             <MessageSquare size={21} />
@@ -760,17 +760,16 @@ export function ThreadPanel({
           </h2>
         </div>
         <span className="thread-mobile-actions">
-          <button
-            type="button"
+          <IconButton
             className="thread-mobile-actions-trigger"
-            aria-label="Thread actions"
+            label="Thread options"
             aria-expanded={showMobileThreadActions}
             onClick={() => setShowMobileThreadActions((current) => !current)}
           >
-            <MoreHorizontal size={20} />
-          </button>
+            <MoreHorizontal size={18} />
+          </IconButton>
           {showMobileThreadActions && (
-            <span className="thread-mobile-actions-menu" role="menu" aria-label="Thread actions">
+            <span className="thread-mobile-actions-menu" role="menu" aria-label="Thread options">
               <button
                 type="button"
                 role="menuitem"
@@ -781,7 +780,7 @@ export function ThreadPanel({
                 }}
               >
                 <FileImage size={18} />
-                <span>Export as SVG</span>
+                <span>Save as image</span>
               </button>
               <button
                 type="button"
@@ -793,46 +792,43 @@ export function ThreadPanel({
                 }}
               >
                 <Crosshair size={18} />
-                <span>{isDm ? "Locate in DM" : "Locate in channel"}</span>
+                <span>{isDm ? "Show in chat" : "Show in channel"}</span>
               </button>
             </span>
           )}
         </span>
         <span className="thread-header-actions">
-          <button
-            type="button"
+          <IconButton
             className="thread-export-svg"
             onClick={exportThreadVectorImage}
             aria-disabled={!activeRoot}
-            data-tooltip="Export thread as SVG"
-            title="Export thread as SVG"
-            aria-label="Export thread as SVG"
+            data-tooltip="Save as image"
+            title="Save as image"
+            label="Save as image"
           >
             <FileImage size={18} />
-          </button>
-          <button
-            type="button"
+          </IconButton>
+          <IconButton
             className="thread-locate-root"
             onClick={() => {
               if (activeRoot) onLocateRoot(activeRoot);
             }}
             disabled={!activeRoot}
-            data-tooltip={isDm ? "Locate this thread in the DM" : "Locate this thread in the channel"}
-            aria-label={isDm ? "Locate this thread in the DM" : "Locate this thread in the channel"}
+            data-tooltip={isDm ? "Show in chat" : "Show in channel"}
+            label={isDm ? "Show in chat" : "Show in channel"}
           >
             <Crosshair size={18} />
-          </button>
-          <button
-            type="button"
+          </IconButton>
+          <IconButton
             className="thread-expand-toggle"
             onClick={onToggleExpanded}
             aria-pressed={expanded}
-            data-tooltip={expanded ? "Show the channel next to this thread" : "Expand thread over the channel"}
-            aria-label={expanded ? "Exit expanded thread" : "Expand thread"}
+            data-tooltip={expanded ? "Show channel" : "Full width"}
+            label={expanded ? "Show channel" : "Full width"}
           >
             {expanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
-          </button>
-          <button type="button" className="thread-close" onClick={onClose} aria-label="Close thread panel"><X size={18} /></button>
+          </IconButton>
+          <IconButton className="thread-close" onClick={onClose} label="Close thread"><X size={18} /></IconButton>
         </span>
       </header>
 
@@ -900,14 +896,14 @@ export function ThreadPanel({
                     <CheckCircle2 size={15} /> Done
                   </button>
                   <button type="button" onClick={() => updateTaskStatus(activeTask, "in_progress")}>
-                    <RotateCcw size={15} /> Follow-up
+                    <RotateCcw size={15} /> Needs more work
                   </button>
                 </div>
               )}
               <div className="task-execution-panel">
                 <div className="task-execution-head">
-                  <strong>Execution</strong>
-                  <span>{taskActivities.length || taskWorkItems.length ? `${taskActivities.length || taskWorkItems.length} events` : "No runs yet"}</span>
+                  <strong>Progress</strong>
+                  <span>{taskActivities.length || taskWorkItems.length ? `${taskActivities.length || taskWorkItems.length} steps` : "Not started"}</span>
                 </div>
                 {taskActivities.length > 0 ? (
                   <div className="task-execution-timeline">
@@ -940,7 +936,7 @@ export function ThreadPanel({
                     ))}
                   </div>
                 ) : (
-                  <p className="task-execution-empty">Assign an agent to start execution.</p>
+                  <p className="task-execution-empty">Assign an agent to start.</p>
                 )}
               </div>
             </section>
@@ -950,8 +946,7 @@ export function ThreadPanel({
             <div className="thread-replies-divider" aria-label="Beginning of replies">
               <span />
               <div>
-                <strong>Beginning of replies</strong>
-                <small>{replies.length} {replies.length === 1 ? "reply" : "replies"}</small>
+                                <small>{replies.length} {replies.length === 1 ? "reply" : "replies"}</small>
               </div>
               <span />
             </div>
@@ -961,8 +956,8 @@ export function ThreadPanel({
             {!activeRoot && (
               <div className="empty-state compact">
                 <MessageSquare size={28} />
-                <h2>No thread selected</h2>
-                <p>Select a root message after you create one.</p>
+                <h2>No thread open</h2>
+                <p>Tap a message to open its thread.</p>
               </div>
             )}
             {replies.map((reply, index) => <MessageRow
@@ -994,7 +989,7 @@ export function ThreadPanel({
           {activeRoot && showBackToBottom && (
             <button type="button" className="thread-back-to-bottom" onClick={returnThreadToBottom}>
               <ArrowDown size={15} />
-              Back to bottom
+              Jump to latest
             </button>
           )}
         </div>
@@ -1197,7 +1192,7 @@ function ThreadReplyComposer({
 
   const fullReplyPlaceholder = activeRoot
     ? isDm ? `Reply to @${dmAgent?.handle || "agent"}` : "Reply in thread"
-    : "Select a thread to reply";
+    : "Open a thread to reply";
   const replyPlaceholder = shouldUseShortPlaceholder
     ? activeRoot ? "Reply" : "No thread"
     : fullReplyPlaceholder;

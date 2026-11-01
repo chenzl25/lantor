@@ -3,7 +3,7 @@ import { removeChannelsFromBootstrap, savedMessagesWithState, type SnapshotOptim
 
 export type UiStateScope = "owner_profile" | "channels" | "channel_members" | "thread_activities"
   | "agents" | "saved_messages" | "dismissed_inbox_items" | "read_inbox_items" | "artifacts"
-  | "tasks" | "decisions" | "reminders" | "agent_schedules" | "agent_runs" | "agent_work_items"
+  | "tasks" | "decisions" | "reminders" | "agent_runs" | "agent_work_items"
   | "agent_activities" | "supervisor" | "launch_agent";
 export type UiStatePatch = Partial<Pick<Bootstrap, UiStateScope>>;
 
@@ -21,11 +21,10 @@ export function scopesForRefresh(reason?: string): UiStateScope[] | null {
   if (reason === "task_status_updated" || reason === "task_title_updated" || reason === "task_claimed" || reason === "task_ready_for_review") return ["tasks"];
   if (reason.startsWith("task_") || /^github_(issue|review)_task_/.test(reason)) return ["tasks", "channels", "thread_activities"];
   if (reason.startsWith("github_")) return ["channels"];
-  if (reason.startsWith("agent_schedule_")) return ["agent_schedules"];
   if (reason.startsWith("reminder_")) return ["reminders"];
   if (reason.startsWith("decision_")) return ["decisions"];
   if (reason === "profile_update" || reason === "agent_updated" || reason === "agent_created") return ["agents", "channel_members"];
-  if (reason === "agent_deleted") return ["agents", "channel_members", "channels", "tasks", "agent_work_items", "agent_runs", "agent_schedules", "reminders"];
+  if (reason === "agent_deleted") return ["agents", "channel_members", "channels", "tasks", "agent_work_items", "agent_runs", "reminders"];
   if (reason === "channel_deleted") return ["channels"];
   if (reason.startsWith("channel_") || reason === "dm_opened") return ["channels", "channel_members"];
   if (reason === "agent_queued" || reason === "supervisor_command") return ["agents", "supervisor"];

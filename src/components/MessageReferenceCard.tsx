@@ -3,6 +3,7 @@ import { useSyncExternalStore, type CSSProperties, type KeyboardEvent, type Mous
 import { createRoot } from "react-dom/client";
 import type { Channel, Message } from "../types";
 import { formatTime } from "../ui-utils";
+import { markdownPreviewText } from "../markdown-preview";
 import {
   type ResolvedMessageReference,
   parseMessageReferences,
@@ -19,13 +20,13 @@ type MessageReferenceCardProps = {
 };
 
 export function firstLinePreview(body: string, limit = 140) {
-  const normalized = body.replace(/\s+/g, " ").trim();
+  const normalized = markdownPreviewText(body).replace(/\s+/g, " ").trim();
   if (!normalized) return "Empty message";
   return normalized.length > limit ? `${normalized.slice(0, limit - 1).trimEnd()}...` : normalized;
 }
 
 function firstLinesPreview(body: string, maxLines = 3) {
-  const lines = withoutMessageReferenceTokens(body)
+  const lines = markdownPreviewText(withoutMessageReferenceTokens(body))
     .replace(/\r/g, "")
     .split("\n")
     .map((line) => line.trim())
@@ -144,7 +145,7 @@ export function MessageReferenceCard({
   const Icon = reference.kind === "thread" ? PanelRightOpen : MessageSquare;
   const preview = reference.message
     ? firstLinePreview(reference.message.body, compact ? 96 : 150)
-    : `Missing ${reference.kind} ${reference.id.slice(0, 8)}`;
+    : "Message not found";
   const className = [
     "message-reference-card",
     `reference-${reference.kind}`,
@@ -214,7 +215,7 @@ export function MessageReferenceCard({
         <button
           type="button"
           className="message-reference-remove"
-          aria-label={`Remove ${reference.kind} reference`}
+          aria-label="Remove quote"
           onClick={(event) => {
             event.stopPropagation();
             onRemove?.(reference.token);
@@ -245,7 +246,7 @@ export function MessageReferencePreview({
   const references = parseMessageReferences(text).map((reference) => resolveMessageReference(reference, messages, channels));
   if (references.length === 0) return null;
   return (
-    <div className="message-reference-preview-list" aria-label="Message references">
+    <div className="message-reference-preview-list" aria-label="Quotes">
       {references.map((reference) => (
         <MessageReferenceCard
           key={`${reference.kind}:${reference.id}`}

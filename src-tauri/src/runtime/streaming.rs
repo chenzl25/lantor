@@ -22,9 +22,8 @@ use crate::freshness::{
     try_complete_streaming_message_if_fresh,
 };
 use crate::message_store::{attach_linked_files_best_effort, load_message_patch_in_tx};
-use crate::ui_notifications::{
-    enqueue_ui_event_in_tx, enqueue_ui_work_item_changed_in_tx, reconcile_work_item_change, UiEvent,
-};
+use crate::runtime::lifecycle;
+use crate::ui_notifications::{enqueue_ui_event_in_tx, reconcile_work_item_change, UiEvent};
 
 struct PendingStream {
     gate: StreamControlGate,
@@ -449,7 +448,10 @@ pub(crate) async fn reconcile_streaming_agent_message(
         ensure_streaming_agent_message(pool, agent_id, channel_id, thread_root_id, stream_key)
             .await?;
     let (visible, _) = capped_stream_delta(&visible, 0);
-    let mut transaction = pool.begin().await.map_err(to_string)?;
+    let mut transaction = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(to_string)?;
     let stored_len: i64 = sqlx::query_scalar("select length(body) from messages where id = $1")
         .bind(message_id)
         .fetch_one(&mut *transaction)
@@ -742,6 +744,136 @@ pub(crate) async fn delete_streaming_agent_message_by_key(
     Ok(())
 }
 
+/// A stopped run keeps its reply this long before the sweep may settle it, so
+/// a turn that is still finishing its own reply is never overtaken.
+const ORPHANED_STREAM_GRACE_SECS: i64 = 120;
+
+/// Settles replies still marked `streaming` whose run stopped without
+/// finishing them: a crash, a failed launch, an orphan-closed run or a
+/// supervisor restart all skip the turn's own finish. Empty placeholders are
+/// deleted and partial replies end as `error`, as after a failed turn. Unlike
+/// that finish, nothing is replayed: the turn that wrote the reply is gone, so
+/// its controls and mentions must not run now. Returns how many were settled.
+pub(crate) async fn settle_orphaned_streaming_messages(pool: &SqlitePool) -> CommandResult<usize> {
+    let rows = sqlx::query(
+        r#"
+        select id, stream_key
+        from messages
+        where delivery_state = 'streaming'
+          and stream_key is not null
+          and created_at < strftime('%Y-%m-%dT%H:%M:%f+00:00','now', $1)
+        "#,
+    )
+    .bind(format!("-{ORPHANED_STREAM_GRACE_SECS} seconds"))
+    .fetch_all(pool)
+    .await
+    .map_err(to_string)?;
+    let mut settled = 0;
+    for row in rows {
+        let message_id: Uuid = row.get("id");
+        let stream_key: String = row.get("stream_key");
+        if stream_run_may_still_finish(pool, &stream_key).await? {
+            continue;
+        }
+        if settle_orphaned_streaming_message(pool, message_id, &stream_key).await? {
+            settled += 1;
+        }
+    }
+    Ok(settled)
+}
+
+/// Whether the run named by the stream key is live or stopped within the
+/// grace period. A key without a known run has no turn left to finish it.
+async fn stream_run_may_still_finish(pool: &SqlitePool, stream_key: &str) -> CommandResult<bool> {
+    let Some(run_id) = stream_key
+        .split(':')
+        .next()
+        .and_then(|prefix| Uuid::parse_str(prefix).ok())
+    else {
+        return Ok(false);
+    };
+    sqlx::query_scalar(
+        r#"
+        select exists (
+            select 1 from agent_runs
+            where id = $1
+              and (stopped_at is null
+                   or stopped_at >= strftime('%Y-%m-%dT%H:%M:%f+00:00','now', $2))
+        )
+        "#,
+    )
+    .bind(run_id)
+    .bind(format!("-{ORPHANED_STREAM_GRACE_SECS} seconds"))
+    .fetch_one(pool)
+    .await
+    .map_err(to_string)
+}
+
+async fn settle_orphaned_streaming_message(
+    pool: &SqlitePool,
+    message_id: Uuid,
+    stream_key: &str,
+) -> CommandResult<bool> {
+    stream_buffers()
+        .lock()
+        .unwrap()
+        .remove(&stream_buffer_key(pool, stream_key));
+    let mut transaction = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(to_string)?;
+    // Same guards as the terminal finish: never cascade-delete a task or
+    // content that someone attached to, or replied to under, the placeholder.
+    let deleted: Option<Uuid> = sqlx::query_scalar(
+        r#"
+        delete from messages
+        where id = $1 and delivery_state = 'streaming' and body = ''
+          and is_task = false
+          and not exists (select 1 from messages reply where reply.thread_root_id = messages.id)
+          and not exists (select 1 from message_attachments a where a.message_id = messages.id)
+        returning id
+        "#,
+    )
+    .bind(message_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(to_string)?;
+    if deleted.is_some() {
+        enqueue_ui_event_in_tx(
+            &mut transaction,
+            &UiEvent::MessageDelete {
+                reason: "orphaned_stream_settled",
+                message_id,
+            },
+        )
+        .await?;
+    } else {
+        let affected = sqlx::query(
+            "update messages set delivery_state = 'error' where id = $1 and delivery_state = 'streaming'",
+        )
+        .bind(message_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(to_string)?
+        .rows_affected();
+        if affected == 0 {
+            transaction.commit().await.map_err(to_string)?;
+            return Ok(false);
+        }
+        let message = load_message_patch_in_tx(&mut transaction, message_id).await?;
+        enqueue_ui_event_in_tx(
+            &mut transaction,
+            &UiEvent::MessageUpsert {
+                reason: "orphaned_stream_settled",
+                message: &message,
+            },
+        )
+        .await?;
+    }
+    transaction.commit().await.map_err(to_string)?;
+    Ok(true)
+}
+
 async fn delete_superseded_empty_run_progress_messages(
     pool: &SqlitePool,
     agent_id: Uuid,
@@ -1014,23 +1146,7 @@ async fn mark_work_item_silent(
     work_item_id: Uuid,
     reason: &str,
 ) -> CommandResult<()> {
-    let mut transaction = pool.begin().await.map_err(to_string)?;
-    sqlx::query(
-        r#"
-        update agent_work_items
-        set status = 'silent',
-            completed_at = coalesce(completed_at, strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id = $1
-          and status not in ('cancelled', 'failed')
-        "#,
-    )
-    .bind(work_item_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-    enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "work_item_silent").await?;
-    transaction.commit().await.map_err(to_string)?;
+    lifecycle::mark_work_item_silent(pool, work_item_id).await?;
     reconcile_work_item_change(pool, work_item_id, "work_item_silent").await?;
     record_agent_activity(
         pool,

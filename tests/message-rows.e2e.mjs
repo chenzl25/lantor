@@ -102,7 +102,7 @@ try {
 
   await reset();
   await row("reply", 102).hover();
-  await row("reply", 102).getByRole("button", { name: "Save message", exact: true }).last().click();
+  await row("reply", 102).getByRole("button", { name: "Save", exact: true }).last().click();
   expectRows(await stats(), [`reply:${id(102)}`], "saving a reply only updates its row");
   assert.ok(await row("reply", 102).getAttribute("class").then((c) => c.includes("saved")));
 
@@ -149,7 +149,7 @@ try {
 
   await page.locator(".conversation textarea").fill("Existing draft");
   await row("channel", 4).hover();
-  await row("channel", 4).getByRole("button", { name: "Reference message", exact: true }).click();
+  await row("channel", 4).getByRole("button", { name: "Quote", exact: true }).click();
   assert.equal(await page.evaluate(() => window.__rowProbe.draft), `Existing draft\n[[message:${id(4)}]]\n`, "stable action reads the latest draft");
 
   await page.evaluate(() => window.__rowProbe.profile());

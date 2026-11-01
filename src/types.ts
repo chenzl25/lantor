@@ -327,6 +327,38 @@ export type GithubIssueDetail = {
   updated_at: string;
 };
 
+export type GithubReferenceRepository = {
+  channel_id: string;
+  name_with_owner: string;
+  url: string;
+  reference_alias: string;
+};
+
+export type GithubReferenceItem = {
+  name_with_owner: string;
+  number: number;
+  kind: "pull" | "issue";
+  title: string;
+  url: string;
+  /** `open`, `closed` or `merged`. */
+  state: string;
+  /** Closed issues: `completed`, `not_planned` or `duplicate`; empty otherwise. */
+  state_reason: string;
+  is_draft: boolean;
+  checks_status: string;
+  updated_at: string;
+};
+
+export type GithubReferenceLookup = {
+  items: GithubReferenceItem[];
+  error: string | null;
+};
+
+export type GithubReferences = {
+  repositories: GithubReferenceRepository[];
+  items: GithubReferenceItem[];
+};
+
 export type GithubReviewComparisons = {
   repository_id: string;
   comparisons: {
@@ -411,29 +443,17 @@ export type Reminder = {
   title: string;
   note: string;
   status: string;
-  recurrence: "none" | "daily" | "weekly" | string;
+  recurrence: "none" | "daily" | "weekly" | "interval" | string;
+  interval_seconds: number | null;
+  check_command: string;
+  check_action: "" | "post" | "wake" | string;
+  last_checked_at: string | null;
+  last_check_status: "" | "quiet" | "posted" | "woke" | "failed" | string;
+  last_check_detail: string;
+  check_failures: number;
   due_at: string;
   fired_at: string | null;
   completed_at: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-export type AgentSchedule = {
-  id: string;
-  agent_id: string;
-  agent_handle: string;
-  channel_id: string;
-  channel_name: string;
-  channel_kind: "channel" | "dm" | string;
-  thread_root_id: string | null;
-  title: string;
-  prompt: string;
-  cadence: "hourly" | "daily" | "weekly" | string;
-  status: string;
-  next_run_at: string;
-  last_run_at: string | null;
-  last_work_item_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -530,7 +550,6 @@ export type Bootstrap = {
   /** Open decisions plus recently resolved ones. Absent in older fixtures. */
   decisions?: Decision[];
   reminders: Reminder[];
-  agent_schedules: AgentSchedule[];
   agent_runs: AgentRun[];
   agent_work_items: AgentWorkItem[];
   agent_activities: AgentActivity[];
@@ -568,7 +587,6 @@ export type BootstrapPerf = {
     artifacts: number;
     tasks: number;
     reminders: number;
-    agent_schedules: number;
     agent_runs: number;
     agent_work_items: number;
     agent_activities: number;

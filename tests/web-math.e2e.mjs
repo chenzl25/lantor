@@ -41,7 +41,7 @@ const bootstrap = (body) => ({
   messages: [message(body)], channel_message_history: [{ channel_id: channelId, before_seq: null, has_more: false }],
   thread_activities: [], channel_members: [], agents: [], saved_messages: [],
   dismissed_inbox_items: {}, read_inbox_items: {}, artifacts: [], tasks: [], reminders: [],
-  agent_schedules: [], agent_runs: [], agent_work_items: [], agent_activities: [],
+  agent_runs: [], agent_work_items: [], agent_activities: [],
   supervisor: { pid: null, status: "stopped", updated_at: null },
   launch_agent: { label: "", plist_path: "", installed: false, loaded: false }, ui_event_cursor: 0,
 });
@@ -98,7 +98,7 @@ try {
   await normal.page.goto(origin, { waitUntil: "networkidle" });
   await normal.page.locator(".markdown-body").filter({ hasText: "Plain message" }).waitFor();
   assert.equal(await normal.page.locator(".markdown-body table").count(), 1);
-  assert.equal(await normal.page.getByRole("button", { name: "Copy code block" }).count(), 1);
+  assert.equal(await normal.page.getByRole("button", { name: "Copy code" }).count(), 1);
   assert.equal(await normal.page.locator(".markdown-body .local-entity-link").count(), 1);
   assert.deepEqual(normal.requests.filter(mathResource), [], "plain channel must not request math JS/CSS/fonts");
 

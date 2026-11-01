@@ -239,7 +239,7 @@ export function Conversation({
         id,
         token,
         channelName: channel?.name ?? "unknown",
-        senderName: "Missing reference",
+        senderName: "Message not found",
         preview: id,
         meta: "not loaded",
         missing: true,
@@ -369,7 +369,7 @@ export function Conversation({
         <button
           type="button"
           className="mobile-nav-button"
-          aria-label="Back to navigation"
+          aria-label="Back"
           onClick={openMobileSidebar}
         >
           <ArrowLeft size={18} />
@@ -401,7 +401,7 @@ export function Conversation({
             <button
               type="button"
               className="hash-card dm-card dm-agent-detail-trigger"
-              aria-label={`View @${dmAgent.handle} details`}
+              aria-label={`@${dmAgent.handle}’s profile`}
               onClick={() => openAgentDetail(dmAgent)}
             >
               <AgentAvatarWithProfile agent={dmAgent} />
@@ -427,8 +427,8 @@ export function Conversation({
             <button
               type="button"
               className={`channel-agent-count-trigger ${channelAgents.length === 0 ? "empty" : ""}`}
-              title={channelAgents.length === 0 ? "Add agents to this channel" : "Manage channel agents"}
-              aria-label={channelAgents.length === 0 ? "Add agents to this channel" : "Manage channel agents"}
+              title={channelAgents.length === 0 ? "Add agents" : "Agents here"}
+              aria-label={channelAgents.length === 0 ? "Add agents" : "Agents here"}
               onClick={() => {
                 setShowChannelActions(false);
                 openChannelAgentsModal();
@@ -450,8 +450,8 @@ export function Conversation({
             <button
               type="button"
               className={`channel-action-trigger ${showChannelActions ? "active" : ""}`}
-              title="Channel actions"
-              aria-label="Channel actions"
+              title="Channel options"
+              aria-label="Channel options"
               aria-expanded={showChannelActions}
               onClick={() => setShowChannelActions((current) => !current)}
             >
@@ -467,7 +467,7 @@ export function Conversation({
                   }}
                 >
                   <Settings size={15} />
-                  <span>Channel settings</span>
+                  <span>Edit channel</span>
                 </button>
                 <button
                   type="button"
@@ -541,22 +541,22 @@ export function Conversation({
                   <div className="beginning" aria-live="polite">
                     {hasMoreRootMessages
                       ? isLoadingOlderRootMessages
-                        ? "Loading earlier messages..."
-                        : "Earlier messages available"
+                        ? "Loading…"
+                        : "Scroll up for more"
                       : isDm
                         ? `Beginning of your DM with @${dmAgent?.handle || "agent"}`
-                        : `Beginning of #${channel.name}`}
+                        : `Start of #${channel.name}`}
                   </div>
                 ) : (
                   <div className="empty-state">
                     <MessageSquare size={34} />
-                    <h2>{isDm ? "No DM messages yet" : "No messages yet"}</h2>
+                    <h2>No messages yet</h2>
                     <p>
                       {isDm
-                        ? "Send a message here to talk directly with this agent."
+                        ? "Send a message to start."
                         : channelAgents.length === 0
-                          ? "Add agents to this channel or send the first message."
-                          : "Send a root message from the composer. Replies belong in the right thread pane."}
+                          ? "Add an agent, then say what you need."
+                          : "Send a message below. Replies open on the side."}
                     </p>
                     {!isDm && channelAgents.length === 0 && (
                       <button type="button" className="empty-state-action" onClick={openChannelAgentsModal}>
@@ -569,7 +569,7 @@ export function Conversation({
                 <div className="empty-state">
                   <Hash size={34} />
                   <h2>No channels yet</h2>
-                  <p>Create a channel in the left sidebar, then send messages or tasks.</p>
+                  <p>Create a channel to start working with agents.</p>
                 </div>
               )}
             {rootMessages.map((message, index) => {
@@ -590,13 +590,13 @@ export function Conversation({
           </div>
           </div>
           {channel && syncing && <div className="message-list-syncing" role="status">Updating…</div>}
-          {channel && messageScroll.restoring && <div className="message-list-restoring" role="status">Restoring reading position…</div>}
+          {channel && messageScroll.restoring && <div className="message-list-restoring" role="status">Back to where you left off…</div>}
           {channel && messageScroll.showBackToBottom && (
             <button type="button" className="message-list-back-to-bottom" onClick={messageScroll.toBottom}>
               <ArrowDown size={15} />
               {messageScroll.unseenCount > 0
                 ? `${messageScroll.unseenCount} new message${messageScroll.unseenCount === 1 ? "" : "s"}`
-                : "Back to bottom"}
+                : "Jump to latest"}
             </button>
           )}
           {messageMenu && (
@@ -870,7 +870,7 @@ function ConversationComposer({
     ? isDm
       ? `Message @${dmAgent?.handle || "agent"}`
       : `Message #${channel.name}`
-    : "Create a channel before messaging";
+    : "Create a channel first";
   const placeholder = shouldUseShortPlaceholder
     ? channel ? "Message" : "No channel"
     : fullPlaceholder;
@@ -983,6 +983,8 @@ function ConversationComposer({
         <button
           type="button"
           className="attach-button"
+          title="Attach files"
+          aria-label="Attach files"
           disabled={!channel}
           onMouseDown={preserveComposerFocus}
           onClick={() => fileInputRef.current?.click()}
@@ -993,8 +995,8 @@ function ConversationComposer({
           <button
             type="button"
             className={`task-toggle ${sendAsTask ? "active" : ""}`}
-            title={sendAsTask ? "Send next message as a normal message" : "Send next message as a task"}
-            aria-label={sendAsTask ? "Send next message as a normal message" : "Send next message as a task"}
+            title={sendAsTask ? "Send as message" : "Send as task"}
+            aria-label={sendAsTask ? "Send as message" : "Send as task"}
             aria-pressed={sendAsTask}
             disabled={!channel}
             onPointerDown={handleTaskTogglePointerDown}

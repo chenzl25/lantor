@@ -1,8 +1,10 @@
+import { DialogHeader } from "./DialogHeader";
 import { DialogSurface } from "./DialogSurface";
 import { Bookmark, Hash, MessageSquare, X } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Agent, OwnerProfile, SavedMessage } from "../types";
 import { firstLines, formatTime, ownerAsAvatarAgent } from "../ui-utils";
+import { markdownPreviewText } from "../markdown-preview";
 import { AgentAvatar } from "./AgentAvatar";
 
 type SavedMessagesModalProps = {
@@ -30,22 +32,15 @@ export function SavedMessagesModal({
 
   return (
     <DialogSurface label="Saved messages" backdropClassName="search-backdrop" className="activity-feed-panel saved-panel" onClose={onClose}>
-        <header className="activity-feed-head">
-          <div>
-            <h2>Saved</h2>
-            <p>{items.length} saved {items.length === 1 ? "message" : "messages"}</p>
-          </div>
-          <button className="activity-feed-back" onClick={onClose} aria-label="Close saved messages">
-            <X size={18} />
-          </button>
-        </header>
+        <DialogHeader title="Saved" subtitle={`${items.length} saved ${items.length === 1 ? "message" : "messages"}`}
+          closeLabel="Close saved messages" onClose={onClose} />
 
         <div className="activity-feed-body">
           {items.length === 0 && (
             <div className="search-empty">
               <Bookmark size={34} />
-              <h3>No saved messages</h3>
-              <p>Use the message save action or right-click a message to track it here.</p>
+              <h3>Nothing saved</h3>
+              <p>Tap the bookmark on a message to keep it.</p>
             </div>
           )}
 
@@ -83,12 +78,12 @@ export function SavedMessagesModal({
                     <Icon size={18} />
                     {item.sender_name || "Saved message"}
                   </h3>
-                  <p>{firstLines(item.body, 3) || "Empty message"}</p>
-                  <small>Open source</small>
+                  <p>{firstLines(markdownPreviewText(item.body), 3) || "Empty message"}</p>
+                  <small>Go to message</small>
                 </div>
                 <button
                   className="activity-feed-check saved-unsave"
-                  title="Unsave"
+                  title="Remove"
                   onClick={(event) => {
                     event.stopPropagation();
                     onUnsaveItem(item);

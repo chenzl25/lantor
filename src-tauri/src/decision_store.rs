@@ -305,6 +305,92 @@ pub(crate) async fn create_agent_decision(
     Ok((decision_id, message_id))
 }
 
+/// A card Lantor itself raises (no requesting agent), e.g. a provider that
+/// needs the owner to log in again. Its answer mentions nobody; the caller
+/// reacts to the answer through `answer_decision_in_pool`'s hooks.
+pub(crate) async fn create_system_decision_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    channel_id: Uuid,
+    title: &str,
+    context: &str,
+    options: Vec<DecisionOption>,
+) -> CommandResult<(Uuid, Uuid)> {
+    let title = clip_single_line(title, DECISION_TITLE_LIMIT);
+    let context = clip(context, DECISION_CONTEXT_LIMIT);
+    let body = render_decision_body(&title, &context, &options);
+    let options_json = serde_json::to_string(&options).map_err(to_string)?;
+    let message_id: Uuid = sqlx::query_scalar(
+        r#"
+        insert into messages (channel_id, sender_name, sender_role, body, is_task)
+        values ($1, 'Lantor', 'system', $2, 0)
+        returning id
+        "#,
+    )
+    .bind(channel_id)
+    .bind(&body)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(to_string)?;
+    let decision_id: Uuid = sqlx::query_scalar(
+        r#"
+        insert into decisions (message_id, channel_id, title, context, options)
+        values ($1, $2, $3, $4, $5)
+        returning id
+        "#,
+    )
+    .bind(message_id)
+    .bind(channel_id)
+    .bind(&title)
+    .bind(&context)
+    .bind(options_json)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(to_string)?;
+    enqueue_ui_event_in_tx(
+        tx,
+        &UiEvent::Refresh {
+            reason: "decision_created",
+        },
+    )
+    .await?;
+    let message = load_message_patch_in_tx(tx, message_id).await?;
+    enqueue_ui_event_in_tx(
+        tx,
+        &UiEvent::MessageUpsert {
+            reason: "message",
+            message: &message,
+        },
+    )
+    .await?;
+    Ok((decision_id, message_id))
+}
+
+/// Lantor closes its own open card once the situation resolved by itself.
+pub(crate) async fn close_system_decision(
+    pool: &SqlitePool,
+    decision_id: Uuid,
+) -> CommandResult<bool> {
+    let closed = sqlx::query(
+        r#"
+        update decisions
+        set status = 'dismissed',
+            resolved_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where id = $1 and status = 'open' and requester_agent_id is null
+        "#,
+    )
+    .bind(decision_id)
+    .execute(pool)
+    .await
+    .map_err(to_string)?
+    .rows_affected()
+        > 0;
+    if closed {
+        notify_decision_changed(pool).await?;
+    }
+    Ok(closed)
+}
+
 fn decision_from_row(row: &SqliteRow) -> Decision {
     let options: String = row.get("options");
     Decision {
@@ -537,6 +623,9 @@ pub(crate) async fn answer_decision_in_pool(
     .await
     .map_err(to_string)?;
     notify_decision_changed(pool).await?;
+    if decision.requester_agent_id.is_none() {
+        crate::provider_auth::resume_after_login_answer(pool, decision_id).await?;
+    }
     load_decision(pool, decision_id).await
 }
 

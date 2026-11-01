@@ -70,11 +70,11 @@ try {
       window.__TAURI_INTERNALS__ = { invoke: () => Promise.reject(new Error("fixture opener denied")), convertFileSrc: () => "about:blank" };
     });
     await outer.getByRole("link", { name: "Broken link", exact: true }).click();
-    await page.getByRole("alert").filter({ hasText: "Could not open link: fixture opener denied" }).waitFor();
+    await page.getByRole("alert").filter({ hasText: "Couldn’t open link: fixture opener denied" }).waitFor();
     assert.equal(await page.getByRole("alert").evaluate(e => Boolean(e.closest('[role="dialog"]')) && !e.closest('[inert]')), true);
     await page.getByRole("button", { name: "Dismiss notification" }).click();
     await outer.getByRole("link", { name: "Open report.txt", exact: true }).click();
-    await page.getByRole("alert").filter({ hasText: "Open failed: fixture opener denied" }).waitFor();
+    await page.getByRole("alert").filter({ hasText: "Couldn’t open: fixture opener denied" }).waitFor();
     await page.getByRole("button", { name: "Dismiss notification" }).click();
     await outer.getByRole("button", { name: "Trigger error", exact: true }).click();
     await page.evaluate(() => document.documentElement.dataset.theme = "dark");

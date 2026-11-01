@@ -79,6 +79,54 @@ pub(crate) fn extract_agent_mentions(body: &str) -> Vec<String> {
     handles
 }
 
+fn handle_edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().map(|ch| ch.to_ascii_lowercase()).collect();
+    let b: Vec<char> = b.chars().map(|ch| ch.to_ascii_lowercase()).collect();
+    let mut previous: Vec<usize> = (0..=b.len()).collect();
+    for (i, a_ch) in a.iter().enumerate() {
+        let mut current = vec![i + 1; b.len() + 1];
+        for (j, b_ch) in b.iter().enumerate() {
+            let substitution = previous[j] + usize::from(a_ch != b_ch);
+            current[j + 1] = substitution.min(previous[j + 1] + 1).min(current[j] + 1);
+        }
+        previous = current;
+    }
+    previous[b.len()]
+}
+
+/// Closest agent handle to an unresolved mention that looks like a typo: at
+/// most 2 edits and at most a third of the handle's length, so short handles
+/// such as `MK` never absorb unrelated names.
+pub(crate) fn suggest_agent_handle<'a>(
+    mention: &str,
+    known_handles: &'a [String],
+) -> Option<&'a str> {
+    known_handles
+        .iter()
+        .filter_map(|handle| {
+            let distance = handle_edit_distance(mention, handle);
+            let close = distance <= 2 && distance * 3 <= handle.chars().count();
+            close.then_some((distance, handle.as_str()))
+        })
+        .min_by_key(|(distance, _)| *distance)
+        .map(|(_, handle)| handle)
+}
+
+fn unresolved_mention_notice(suggestions: &[(String, String)], dispatched: bool) -> String {
+    let guesses = suggestions
+        .iter()
+        .map(|(mention, suggestion)| format!("@{mention} (did you mean @{suggestion}?)"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if dispatched {
+        format!(
+            "No agent matches {guesses}. The other mentioned agents still received this message."
+        )
+    } else {
+        format!("No agent matches {guesses}, so this message was not dispatched. Resend it with the right handle.")
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum MentionDispatchOrigin {
     Owner,
@@ -197,6 +245,7 @@ pub(crate) async fn queue_mentions_as_work_items(
             }
         }
     } else {
+        let mut unresolved_mentions: Vec<&str> = Vec::new();
         for handle in &mentions {
             let agent_id: Option<Uuid> =
                 sqlx::query_scalar("select id from agents where lower(handle) = lower($1)")
@@ -205,6 +254,7 @@ pub(crate) async fn queue_mentions_as_work_items(
                     .await
                     .map_err(to_string)?;
             let Some(agent_id) = agent_id else {
+                unresolved_mentions.push(handle);
                 continue;
             };
             if Some(agent_id) == origin.sender_agent_id() {
@@ -231,10 +281,32 @@ pub(crate) async fn queue_mentions_as_work_items(
             }
             targets.push((agent_id, handle.clone()));
         }
-        if mentions.is_empty()
-            && targets.is_empty()
-            && matches!(origin, MentionDispatchOrigin::Owner)
-        {
+        let is_owner = matches!(origin, MentionDispatchOrigin::Owner);
+        // An unresolved mention close to a real handle (`@Vegapun`) means the
+        // owner addressed someone specific: say so instead of fanning out. One
+        // that resembles no handle (a pasted GitHub `@ZJY0516`) is plain text.
+        let mut typo_suggestions: Vec<(String, String)> = Vec::new();
+        if is_owner && !unresolved_mentions.is_empty() {
+            let known_handles: Vec<String> = sqlx::query_scalar("select handle from agents")
+                .fetch_all(pool)
+                .await
+                .map_err(to_string)?;
+            for mention in unresolved_mentions {
+                if let Some(suggestion) = suggest_agent_handle(mention, &known_handles) {
+                    typo_suggestions.push((mention.to_owned(), suggestion.to_owned()));
+                }
+            }
+        }
+        if !typo_suggestions.is_empty() {
+            insert_system_message(
+                pool,
+                channel_id,
+                Some(thread_root_id.unwrap_or(message_id)),
+                unresolved_mention_notice(&typo_suggestions, !targets.is_empty()),
+            )
+            .await?;
+        }
+        if is_owner && targets.is_empty() && typo_suggestions.is_empty() {
             if let Some(thread_root_id) = thread_root_id {
                 targets = load_thread_followup_targets(pool, channel_id, thread_root_id).await?;
                 if !targets.is_empty() {

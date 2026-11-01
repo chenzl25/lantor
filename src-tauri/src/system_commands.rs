@@ -8,10 +8,10 @@ use std::{
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::SqlitePool;
-use tauri::{Manager, State};
+use tauri::Manager;
 
 use crate::{
-    app::{to_string, AppState, CommandResult},
+    app::{to_string, CommandResult},
     db::expand_home_path,
     events::activity::record_agent_activity,
     models::RuntimeCheck,
@@ -58,14 +58,6 @@ fn clip_crash_field(value: Option<String>) -> Option<String> {
         cut -= 1;
     }
     Some(format!("{}…", &trimmed[..cut]))
-}
-
-#[tauri::command]
-pub(crate) async fn report_client_crash(
-    report: ClientCrashReport,
-    state: State<'_, AppState>,
-) -> CommandResult<()> {
-    report_client_crash_in_pool(&state.pool, report).await
 }
 
 pub(crate) async fn report_client_crash_in_pool(
@@ -529,11 +521,6 @@ pub(crate) async fn complete_startup_splash(app: tauri::AppHandle) -> CommandRes
         splashscreen.close().map_err(to_string)?;
     }
     Ok(())
-}
-
-#[tauri::command]
-pub(crate) async fn check_runtime(runtime: String) -> CommandResult<RuntimeCheck> {
-    check_runtime_in_env(runtime).await
 }
 
 pub(crate) async fn check_runtime_in_env(runtime: String) -> CommandResult<RuntimeCheck> {

@@ -108,7 +108,7 @@ export function MessageReferencePreview({
             <button
               type="button"
               className="message-reference-remove"
-              aria-label={`Remove ${item.kind} reference`}
+              aria-label="Remove quote"
               onPointerDown={preserveComposerSelection}
               onClick={(event) => {
                 event.stopPropagation();
@@ -127,7 +127,7 @@ export function MessageReferencePreview({
           onPointerDown={preserveComposerSelection}
           onClick={() => setExpanded((current) => !current)}
         >
-          {expanded ? "Show fewer references" : `+${hiddenCount} more ${hiddenCount === 1 ? "reference" : "references"}`}
+          {expanded ? "Show less" : `+${hiddenCount} more ${hiddenCount === 1 ? "reference" : "references"}`}
         </button>
       )}
     </div>

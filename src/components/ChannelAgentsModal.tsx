@@ -37,8 +37,8 @@ export function ChannelAgentsModal({
             <UserPlus size={18} />
           </span>
           <div>
-            <strong>{selectedCount > 0 ? `${selectedCount} ${selectedCount === 1 ? "agent" : "agents"} added` : "Bring agents into this channel"}</strong>
-            <p>{agents.length > 0 ? "Pick the agents that should participate here." : "Create an agent first, then add it to this channel."}</p>
+            <strong>{selectedCount > 0 ? `${selectedCount} ${selectedCount === 1 ? "agent" : "agents"} added` : "Agents in this channel"}</strong>
+            <p>{agents.length > 0 ? "Pick who works here." : "Create an agent first."}</p>
           </div>
         </div>
         <div className="member-editor modal-member-editor channel-agent-picker">
@@ -70,7 +70,7 @@ export function ChannelAgentsModal({
           })}
         </div>
         <div className="modal-actions split">
-          <button onClick={onCreateAgent}>Create new agent</button>
+          <button onClick={onCreateAgent}>New agent</button>
           <button className="primary" onClick={onClose}>Done</button>
         </div>
       </div>
