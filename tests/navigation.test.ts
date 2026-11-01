@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  historyModeFor,
   initialNavigationState,
+  navigate,
   navigationReducer,
   type NavigationAction,
   type NavigationState,
@@ -26,6 +28,7 @@ test("phones start on Home, desktops on the channel", () => {
     threadRequested: false,
     showMobileSidebar: true,
     activeModal: null,
+    history: { id: 0, mode: "push" },
   });
   assert.equal(desktop.showMobileSidebar, false);
 });
@@ -136,6 +139,7 @@ test("restoring a history entry shows its view; the agent's Home origin survives
     ...entry,
     channelThreadMemory: { c2: "t2" },
     agentOrigin: null,
+    history: fromHome.history,
   });
 
   const sameAgent = navigationReducer(fromHome, {
@@ -249,4 +253,64 @@ test("a history entry without a channel keeps the current channel and thread", (
   assert.equal(restored.activeChannelId, "c1");
   assert.equal(restored.activeThreadId, "t1");
   assert.equal(restored.activeTab, "wiki");
+});
+
+const restoreDesktop: NavigationAction = {
+  type: "restore",
+  activeChannelId: "c1",
+  activeThreadId: null,
+  activeTab: "chat",
+  selectedAgentId: null,
+  threadRequested: false,
+  showMobileSidebar: false,
+  activeModal: null,
+};
+
+test("a step's own history mode: restores write nothing, panel swaps replace, the rest push", () => {
+  assert.equal(historyModeFor(desktop, restoreDesktop), "none");
+  const search = run(desktop, { type: "openPanel", modal: "search" });
+  assert.equal(historyModeFor(search, { type: "openPanel", modal: "activity" }), "replace");
+  assert.equal(historyModeFor(desktop, { type: "openPanel", modal: "activity" }), "push");
+  assert.equal(historyModeFor(desktop, { type: "revealThread" }), "push");
+  assert.equal(historyModeFor(search, { type: "closePanel" }), "push");
+});
+
+test("the first step after a history write opens a new intent; later steps join it", () => {
+  const first = navigate(desktop, { action: { type: "goToChannel", channelId: "c2" }, writtenHistoryId: 0 });
+  assert.deepEqual(first.history, { id: 1, mode: "push" });
+  assert.equal(first.activeChannelId, "c2");
+
+  // Same batch: the effect has not written id 1 yet.
+  const joined = navigate(first, { action: { type: "revealThread" }, writtenHistoryId: 0 });
+  assert.deepEqual(joined.history, { id: 1, mode: "push" });
+  assert.equal(joined.threadRequested, true);
+
+  // After the effect wrote id 1, the next step opens id 2.
+  const next = navigate(joined, { action: { type: "hideThread" }, writtenHistoryId: 1 });
+  assert.deepEqual(next.history, { id: 2, mode: "push" });
+});
+
+test("steps sharing an intent combine their modes: none over replace over push", () => {
+  const replaced = navigate(desktop, { action: { type: "revealThread" }, writtenHistoryId: 0, historyMode: "replace" });
+  const thenPush = navigate(replaced, { action: { type: "goToChannel", channelId: "c2" }, writtenHistoryId: 0 });
+  assert.deepEqual(thenPush.history, { id: 1, mode: "replace" });
+
+  const pushed = navigate(desktop, { action: { type: "revealThread" }, writtenHistoryId: 0 });
+  const thenReplace = navigate(pushed, {
+    action: { type: "goToChannel", channelId: "c2" },
+    writtenHistoryId: 0,
+    historyMode: "replace",
+  });
+  assert.equal(thenReplace.history.mode, "replace");
+  assert.equal(navigate(thenReplace, { action: restoreDesktop, writtenHistoryId: 0 }).history.mode, "none");
+});
+
+test("a step that changes nothing records no intent, but a restore always does", () => {
+  assert.equal(navigate(desktop, { action: { type: "closeAgent" }, writtenHistoryId: 0, historyMode: "replace" }), desktop);
+  const sameView: NavigationAction = { ...restoreDesktop, activeChannelId: null } as NavigationAction;
+  assert.equal(navigationReducer(desktop, sameView), desktop);
+  const restored = navigate(desktop, { action: sameView, writtenHistoryId: 0 });
+  assert.notEqual(restored, desktop);
+  assert.deepEqual(restored.history, { id: 1, mode: "none" });
+  assert.deepEqual({ ...restored, history: desktop.history }, desktop);
 });

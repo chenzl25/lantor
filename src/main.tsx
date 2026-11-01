@@ -43,14 +43,15 @@ import {
   resolveAppModalHistoryPop,
   shouldPopAppModalHistory,
   shouldReplaceActiveAppModalHistory,
-  shouldReplaceAppModalHistory,
   type AppModal,
 } from "./app-modal-history";
 import {
   initialNavigationState,
-  navigationReducer,
+  navigate,
   type ActiveTab,
   type ChannelThreadMemory,
+  type HistoryMode,
+  type NavigationAction,
 } from "./navigation";
 import { AgentDetailDrawer } from "./components/AgentDetailDrawer";
 import type { AgentPerformance } from "./components/AgentDetailDrawer";
@@ -767,8 +768,12 @@ function App() {
       setData(update);
     });
   }, []);
-  const [navigation, dispatchNavigation] = useReducer(
-    navigationReducer,
+  // The history effect records the intent id it wrote; steps dispatched
+  // after that open a new intent. withHistoryMode sets the override.
+  const historyWrittenIdRef = useRef(0);
+  const historyModeOverrideRef = useRef<HistoryMode | undefined>(undefined);
+  const [navigation, dispatchNavigationInput] = useReducer(
+    navigate,
     null,
     () => initialNavigationState({
       activeChannelId: getStoredActiveChannelId(),
@@ -777,6 +782,23 @@ function App() {
     }),
   );
   const { activeChannelId, activeThreadId, activeTab, channelThreadMemory } = navigation;
+  const dispatchNavigation = useCallback((action: NavigationAction, historyMode?: HistoryMode) => {
+    dispatchNavigationInput({
+      action,
+      writtenHistoryId: historyWrittenIdRef.current,
+      historyMode: historyMode ?? historyModeOverrideRef.current,
+    });
+  }, []);
+  /** Runs `run` with its navigation steps writing history as `mode`. */
+  function withHistoryMode(mode: HistoryMode | undefined, run: () => void) {
+    const previous = historyModeOverrideRef.current;
+    historyModeOverrideRef.current = mode ?? previous;
+    try {
+      run();
+    } finally {
+      historyModeOverrideRef.current = previous;
+    }
+  }
   const switchTab = useCallback((tab: ActiveTab) => dispatchNavigation({ type: "switchTab", tab }), []);
   // Backend event subscriptions are long-lived; refresh callbacks must read the
   // latest channel instead of the value captured when the listener was created.
@@ -1008,16 +1030,11 @@ function App() {
   const appHistoryMaxIndexRef = useRef(0);
   const appModalHistoryBackPendingRef = useRef(false);
   const appHistorySnapshotRef = useRef<AppHistoryState | null>(null);
-  const restoringAppHistoryRef = useRef(false);
-  const replaceNextAppHistoryEntryRef = useRef(false);
   const lastAppHistoryKeyRef = useRef<string | null>(null);
   const historyFocusedMessageIdRef = useRef<string | null>(null);
   const searchResultThreadIdRef = useRef<string | null>(null);
   const searchResultAgentIdRef = useRef<string | null>(null);
   const [appHistoryIndex, setAppHistoryIndex] = useState(0);
-  // Bumped on each restore so the history effect runs even when the restored
-  // view looks the same, and the restore mark cannot outlive its restore.
-  const [appHistoryRestoreCount, setAppHistoryRestoreCount] = useState(0);
   const [appHistoryMaxIndex, setAppHistoryMaxIndex] = useState(0);
   const appSurfaceStateRef = useRef({
     activeModal: activeAppModal,
@@ -2673,8 +2690,6 @@ function App() {
         lastAppHistoryKeyRef.current = null;
         return;
       }
-      restoringAppHistoryRef.current = true;
-      setAppHistoryRestoreCount((count) => count + 1);
       appHistoryReadyRef.current = true;
       setAppHistoryPosition(historyState.index);
       const activeChannelIdFromState = historyState.activeChannelId ?? null;
@@ -2710,13 +2725,16 @@ function App() {
   // popstate then marked the restore, the pending run took that mark for
   // itself, and the restored view was pushed as a new entry.
   useLayoutEffect(() => {
+    // Steps dispatched from here on open a new intent, whether or not this
+    // run writes anything for the current one.
+    const intent = navigation.history.id !== historyWrittenIdRef.current ? navigation.history.mode : null;
+    historyWrittenIdRef.current = navigation.history.id;
     if (!data || !activeChannelId) return;
     if (isMobileViewport()) {
       if (isAppHistoryState(window.history.state)) {
         window.history.replaceState(null, "");
       }
       appHistoryReadyRef.current = false;
-      replaceNextAppHistoryEntryRef.current = false;
       lastAppHistoryKeyRef.current = null;
       setAppHistoryPosition(0, 0);
       return;
@@ -2725,8 +2743,7 @@ function App() {
     const currentState = buildAppHistoryState(appHistoryIndexRef.current);
     const currentKey = appHistoryKey(currentState);
 
-    if (restoringAppHistoryRef.current) {
-      restoringAppHistoryRef.current = false;
+    if (intent === "none") {
       lastAppHistoryKeyRef.current = currentKey;
       return;
     }
@@ -2771,8 +2788,7 @@ function App() {
       historyState,
     });
 
-    if (replaceNextAppHistoryEntryRef.current || shouldReplaceActiveModal) {
-      replaceNextAppHistoryEntryRef.current = false;
+    if (intent === "replace" || shouldReplaceActiveModal) {
       const nextState = { ...currentState, index: appHistoryIndexRef.current };
       window.history.replaceState(nextState, "");
       setAppHistoryPosition(nextState.index);
@@ -2793,7 +2809,8 @@ function App() {
     activeAppModal,
     showMobileSidebar,
     showThread,
-    appHistoryRestoreCount,
+    navigation.history.id,
+    navigation.history.mode,
   ]);
 
   useEffect(() => {
@@ -3980,9 +3997,6 @@ function App() {
   }
 
   function openSearchModal() {
-    if (shouldReplaceAppModalHistory(appSurfaceStateRef.current.activeModal, "search")) {
-      replaceNextAppHistoryEntryRef.current = true;
-    }
     setMobileSidebarFocus("home");
     dispatchNavigation({ type: "openPanel", modal: "search" });
     void reloadUiState(["agent_work_items", "agent_activities", "thread_activities", "read_inbox_items", "dismissed_inbox_items"])
@@ -3990,9 +4004,6 @@ function App() {
   }
 
   function openActivityFeedModal() {
-    if (shouldReplaceAppModalHistory(appSurfaceStateRef.current.activeModal, "activity")) {
-      replaceNextAppHistoryEntryRef.current = true;
-    }
     setMobileSidebarFocus("home");
     dispatchNavigation({ type: "openPanel", modal: "activity" });
     void Promise.all([
@@ -4002,18 +4013,12 @@ function App() {
   }
 
   function openSavedModal() {
-    if (shouldReplaceAppModalHistory(appSurfaceStateRef.current.activeModal, "saved")) {
-      replaceNextAppHistoryEntryRef.current = true;
-    }
     setMobileSidebarFocus("home");
     dispatchNavigation({ type: "openPanel", modal: "saved" });
     void markSavedMessagesRead();
   }
 
   function openNeedsYouModal() {
-    if (shouldReplaceAppModalHistory(appSurfaceStateRef.current.activeModal, "needs")) {
-      replaceNextAppHistoryEntryRef.current = true;
-    }
     setMobileSidebarFocus("home");
     dispatchNavigation({ type: "openPanel", modal: "needs" });
     void reloadUiState(["decisions", "tasks", "thread_activities"])
@@ -4082,10 +4087,7 @@ function App() {
       window.history.back();
       return;
     }
-    if (appHistoryReadyRef.current && historyState) {
-      replaceNextAppHistoryEntryRef.current = true;
-    }
-    fallback();
+    withHistoryMode(appHistoryReadyRef.current && historyState ? "replace" : undefined, fallback);
   }
 
   function closeSelectedAgent() {
@@ -4095,8 +4097,7 @@ function App() {
     }
     if (selectedAgentId && searchResultAgentIdRef.current === selectedAgentId) {
       searchResultAgentIdRef.current = null;
-      replaceNextAppHistoryEntryRef.current = true;
-      dispatchNavigation({ type: "closeAgent" });
+      dispatchNavigation({ type: "closeAgent" }, "replace");
       return;
     }
     navigateBack(() => dispatchNavigation({ type: "closeAgent" }));
@@ -4106,9 +4107,10 @@ function App() {
     if (activeThreadId && searchResultThreadIdRef.current === activeThreadId) {
       searchResultThreadIdRef.current = null;
     }
-    replaceNextAppHistoryEntryRef.current = true;
-    openThread(null);
-    dispatchNavigation({ type: "hideThread" });
+    withHistoryMode("replace", () => {
+      openThread(null);
+      dispatchNavigation({ type: "hideThread" });
+    });
   }
 
   function optimisticMessageAttachments(messageId: string, attachments: DraftAttachment[]): MessageAttachment[] {
@@ -4633,14 +4635,17 @@ function App() {
 
   async function openSearchResult(result: SearchResult) {
     const openedFromSearch = showSearchModal;
+    // A result opened from the Search panel takes over the panel's entry.
+    const historyMode = openedFromSearch ? "replace" : undefined;
     if (result.kind === "wiki") {
-      dismissAppModal("search");
-      if (result.channelId) {
-        selectChannel(result.channelId);
-        dispatchNavigation({ type: "switchTab", tab: "wiki" });
-      }
+      withHistoryMode(historyMode, () => {
+        dismissAppModal("search");
+        if (result.channelId) {
+          selectChannel(result.channelId);
+          dispatchNavigation({ type: "switchTab", tab: "wiki" });
+        }
+      });
       if (openedFromSearch) {
-        replaceNextAppHistoryEntryRef.current = true;
         searchResultThreadIdRef.current = null;
         searchResultAgentIdRef.current = null;
       }
@@ -4658,11 +4663,10 @@ function App() {
     }
     if (result.kind === "message" || result.kind === "reply") {
       if (openedFromSearch) {
-        replaceNextAppHistoryEntryRef.current = true;
         searchResultThreadIdRef.current = result.threadId;
         searchResultAgentIdRef.current = null;
       }
-      dismissAppModal("search");
+      withHistoryMode(historyMode, () => dismissAppModal("search"));
       try {
         const { threadId } = await revealMessageById(result.id);
         if (openedFromSearch) {
@@ -4675,24 +4679,25 @@ function App() {
       return;
     }
     let openedAgentId: string | null = null;
-    if (result.agentId) {
-      const agent = data?.agents.find((item) => item.id === result.agentId);
-      if (agent) {
-        openedAgentId = agent.id;
-        dispatchNavigation({ type: "openAgent", agentId: agent.id });
+    withHistoryMode(historyMode, () => {
+      if (result.agentId) {
+        const agent = data?.agents.find((item) => item.id === result.agentId);
+        if (agent) {
+          openedAgentId = agent.id;
+          dispatchNavigation({ type: "openAgent", agentId: agent.id });
+        }
       }
-    }
-    if (result.channelId) selectChannel(result.channelId);
-    if (result.threadId) {
-      revealThread(result.threadId, result.channelId ?? activeChannelId);
-      dispatchNavigation({ type: "switchTab", tab: "chat" });
-    }
+      if (result.channelId) selectChannel(result.channelId);
+      if (result.threadId) {
+        revealThread(result.threadId, result.channelId ?? activeChannelId);
+        dispatchNavigation({ type: "switchTab", tab: "chat" });
+      }
+      dismissAppModal("search");
+    });
     if (openedFromSearch) {
-      replaceNextAppHistoryEntryRef.current = true;
       searchResultThreadIdRef.current = result.threadId ?? null;
       searchResultAgentIdRef.current = result.threadId ? null : openedAgentId;
     }
-    dismissAppModal("search");
   }
 
   function openSavedMessage(item: SavedMessage) {
