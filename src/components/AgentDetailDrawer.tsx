@@ -471,7 +471,7 @@ export function AgentDetailDrawer({
             ? "This agent was deleted"
             : "";
   const restartDisabled = Boolean(restartDisabledReason);
-  const restartLabel = agentStatus === "error" ? `Restart @${agent.handle}` : `Start @${agent.handle}`;
+  const restartLabel = `Restart @${agent.handle}`;
   const workspacePath = agent.working_directory.trim();
   const rootWorkspaceEntries = workspaceNodes[""] ?? agent.workspace_entries ?? [];
   const memoryPath = agent.workspace_memory_path || (workspacePath ? `${workspacePath}/MEMORY.md` : "");

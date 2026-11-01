@@ -30,6 +30,14 @@ process exits, and the idle stop. `claude.rs` and `codex.rs` implement
 `WarmProvider` and keep what depends on their protocol: spawning and the
 handshake, stdout parsing, turns, follow-ups and interrupts.
 
+Restart in the agent panel asks for a fresh process. The request is stored on
+the agent (`runtime_restart_requested_at`), so it survives the order in which
+the supervisor picks up queued starts. The next start retires the agent's idle
+process and spawns a new one, which resumes the same Claude session or Codex
+thread. A process that is in a turn is replaced at the first start after that
+turn. Use it when something the provider reads only at startup has changed,
+such as an MCP login.
+
 Stdout-command runtimes are still supported for custom scripts. They can print
 one line to stdout with the `LANTOR_EVENT ` prefix followed by JSON. Non-matching
 stdout and stderr are preserved only in the run log.

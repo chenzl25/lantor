@@ -5,7 +5,7 @@ use crate::{
     agent_work_dispatch::dispatch_agent_restart_backlog,
     app::{to_string, CommandResult},
     events::activity::record_agent_activity,
-    runtime::lifecycle::mark_agent_queued_in_tx,
+    runtime::{lifecycle::mark_agent_queued_in_tx, warm::request_restart_in_tx},
     ui_notifications::{enqueue_ui_event_in_tx, notify_supervisor_wake, UiEvent},
 };
 
@@ -50,6 +50,7 @@ pub(crate) async fn start_agent_in_pool(pool: &SqlitePool, agent_id: Uuid) -> Co
 
     let mut transaction = pool.begin().await.map_err(to_string)?;
     mark_agent_queued_in_tx(&mut transaction, agent_id, false).await?;
+    request_restart_in_tx(&mut transaction, agent_id).await?;
     enqueue_ui_event_in_tx(
         &mut transaction,
         &UiEvent::Refresh {

@@ -10,7 +10,7 @@
 
 use std::{collections::HashMap, future::Future, sync::Arc};
 
-use sqlx::SqlitePool;
+use sqlx::{Sqlite, SqlitePool, Transaction};
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, BufReader},
     process::{Child, ChildStdin},
@@ -129,11 +129,65 @@ impl<P: WarmProvider> WarmRegistry<P> {
     }
 }
 
+/// Asks for a fresh process at the agent's next start. Restart in the agent
+/// panel uses it, so that the provider re-reads what it loads only when it
+/// starts, such as MCP logins and skills. A process in a turn is replaced at
+/// the first start after the turn.
+pub(crate) async fn request_restart_in_tx(
+    transaction: &mut Transaction<'_, Sqlite>,
+    agent_id: Uuid,
+) -> CommandResult<()> {
+    sqlx::query(
+        "update agents set runtime_restart_requested_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now') where id = $1",
+    )
+    .bind(agent_id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(to_string)?;
+    Ok(())
+}
+
 /// The agent's live process when it can take the next start. A process
-/// whose environment changed, or that the provider wants replaced, is retired
-/// first unless a turn still needs it; a dead one is dropped. `None` means
-/// the caller spawns a new process.
+/// whose environment changed, that the provider wants replaced, or whose
+/// restart was requested is retired first unless a turn still needs it; a
+/// dead one is dropped. `None` means the caller spawns a new process, which
+/// also serves a pending restart request.
 pub(crate) async fn reusable_runtime<P: WarmProvider>(
+    pool: &SqlitePool,
+    registry: &WarmRegistry<P>,
+    agent_id: Uuid,
+    environment_variables: &str,
+    replace: bool,
+) -> CommandResult<Option<Arc<WarmRuntime<P>>>> {
+    let restart_requested_at: Option<String> =
+        sqlx::query_scalar("select runtime_restart_requested_at from agents where id = $1")
+            .bind(agent_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(to_string)?
+            .flatten();
+    let runtime = live_runtime(
+        registry,
+        agent_id,
+        environment_variables,
+        replace || restart_requested_at.is_some(),
+    )
+    .await;
+    if let (None, Some(requested_at)) = (&runtime, restart_requested_at) {
+        // Only the request this start read: a newer one waits for the next.
+        sqlx::query(
+            "update agents set runtime_restart_requested_at = null where id = $1 and runtime_restart_requested_at = $2",
+        )
+        .bind(agent_id)
+        .bind(requested_at)
+        .execute(pool)
+        .await
+        .map_err(to_string)?;
+    }
+    Ok(runtime)
+}
+
+async fn live_runtime<P: WarmProvider>(
     registry: &WarmRegistry<P>,
     agent_id: Uuid,
     environment_variables: &str,
@@ -306,3 +360,7 @@ pub(crate) async fn load_work_item_status(
         .await
         .map_err(to_string)
 }
+
+#[cfg(test)]
+#[path = "../tests/runtime_warm.rs"]
+mod tests;
