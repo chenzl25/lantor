@@ -3,10 +3,12 @@ import test from "node:test";
 
 import {
   dismissAppModalHistoryEntry,
+  isAppModal,
   resolveAppModalHistoryPop,
   shouldPopAppModalHistory,
   shouldReplaceActiveAppModalHistory,
   shouldReplaceAppModalHistory,
+  withoutAppModal,
 } from "../src/app-modal-history";
 import { shouldDismissOnEscape, type EscapeDismissEvent } from "../src/escape-dismiss";
 
@@ -130,4 +132,15 @@ test("Escape dismisses one surface only for an unhandled initial keydown", () =>
   assert.equal(shouldDismissOnEscape(escapeEvent({ isComposing: true })), false);
   assert.equal(shouldDismissOnEscape(escapeEvent({ keyCode: 229 })), false);
   assert.equal(shouldDismissOnEscape(escapeEvent({ key: "Enter" })), false);
+});
+
+test("dismissing a panel closes it only when it is the open one", () => {
+  assert.equal(withoutAppModal("search", "search"), null);
+  assert.equal(withoutAppModal("activity", "search"), "activity");
+  assert.equal(withoutAppModal(null, "saved"), null);
+});
+
+test("only the four app panels are app modals", () => {
+  for (const modal of ["search", "activity", "saved", "needs"]) assert.ok(isAppModal(modal), modal);
+  for (const value of [null, undefined, "", "settings", 1]) assert.ok(!isAppModal(value), String(value));
 });
