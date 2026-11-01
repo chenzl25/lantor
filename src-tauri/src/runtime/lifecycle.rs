@@ -481,44 +481,65 @@ pub(crate) async fn cancel_unfinished_work_item(
 }
 
 /// Cancels a work item the owner cancelled while it was queued, in the
-/// caller's transaction. Unlike the other cancels this does not recheck the
-/// status it read before the transaction.
+/// caller's transaction. Returns `false`, changing nothing, when the item is
+/// no longer queued: its turn started or it finished after the owner's read.
 pub(crate) async fn cancel_queued_work_item_in_tx(
     transaction: &mut Transaction<'_, Sqlite>,
     work_item_id: Uuid,
-) -> CommandResult<()> {
-    finish_work_item_in_tx(
-        transaction,
-        work_item_id,
-        "cancelled",
-        "work_item_cancelled",
+) -> CommandResult<bool> {
+    let cancelled = sqlx::query(
+        r#"
+        update agent_work_items
+        set status = 'cancelled',
+            completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+        where id = $1 and status = 'queued'
+        "#,
     )
+    .bind(work_item_id)
+    .execute(&mut **transaction)
     .await
+    .map_err(to_string)?
+    .rows_affected()
+        > 0;
+    if cancelled {
+        enqueue_ui_work_item_changed_in_tx(transaction, work_item_id, "work_item_cancelled")
+            .await?;
+    }
+    Ok(cancelled)
 }
 
 /// Marks a running work item the owner cancelled as cancelling until its run
-/// stops. Unlike [`mark_run_stopping`] this does not recheck the status it
-/// read before the transaction.
+/// stops. Returns `false`, changing nothing, when the item is no longer
+/// running on `run_id`.
 pub(crate) async fn mark_work_item_cancelling(
     pool: &SqlitePool,
     work_item_id: Uuid,
-) -> CommandResult<()> {
+    run_id: Uuid,
+) -> CommandResult<bool> {
     let mut transaction = pool.begin().await.map_err(to_string)?;
-    sqlx::query(
+    let marked = sqlx::query(
         r#"
         update agent_work_items
         set status = 'cancelling',
             updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id = $1
+        where id = $1 and status = 'running' and run_id = $2
         "#,
     )
     .bind(work_item_id)
+    .bind(run_id)
     .execute(&mut *transaction)
     .await
-    .map_err(to_string)?;
+    .map_err(to_string)?
+    .rows_affected()
+        > 0;
+    if !marked {
+        return Ok(false);
+    }
     enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "work_item_cancelling")
         .await?;
-    transaction.commit().await.map_err(to_string)
+    transaction.commit().await.map_err(to_string)?;
+    Ok(true)
 }
 
 /// Finishes a work item left `cancelling` after its run ended.

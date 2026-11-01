@@ -735,10 +735,26 @@ pub(crate) async fn cancel_agent_work(
     cancel_agent_work_in_pool(&state.pool, work_item_id).await
 }
 
+/// How many times a cancel rereads a request whose status keeps moving.
+const CANCEL_ATTEMPTS: usize = 3;
+
 pub(crate) async fn cancel_agent_work_in_pool(
     pool: &SqlitePool,
     work_item_id: Uuid,
 ) -> CommandResult<()> {
+    // Each attempt acts on the status it read. A request whose turn starts or
+    // finishes before that write is read again rather than overwritten.
+    for _ in 0..CANCEL_ATTEMPTS {
+        if try_cancel_agent_work(pool, work_item_id).await? {
+            return Ok(());
+        }
+    }
+    Err("the request kept changing while it was being cancelled; try again".to_owned())
+}
+
+/// Returns `false` when the request left the status it was read with before
+/// the cancel could write.
+async fn try_cancel_agent_work(pool: &SqlitePool, work_item_id: Uuid) -> CommandResult<bool> {
     let row = sqlx::query(
         r#"
         select agent_id, run_id, status
@@ -770,7 +786,10 @@ pub(crate) async fn cancel_agent_work_in_pool(
             .execute(&mut *transaction)
             .await
             .map_err(to_string)?;
-            cancel_queued_work_item_in_tx(&mut transaction, work_item_id).await?;
+            if !cancel_queued_work_item_in_tx(&mut transaction, work_item_id).await? {
+                // Dropping the transaction keeps the start command pending.
+                return Ok(false);
+            }
             transaction.commit().await.map_err(to_string)?;
             reconcile_work_item_change(pool, work_item_id, "work_item_cancelled").await?;
         }
@@ -778,7 +797,9 @@ pub(crate) async fn cancel_agent_work_in_pool(
             let Some(run_id) = run_id else {
                 return Err("running agent request does not have a run id".to_owned());
             };
-            mark_work_item_cancelling(pool, work_item_id).await?;
+            if !mark_work_item_cancelling(pool, work_item_id, run_id).await? {
+                return Ok(false);
+            }
             reconcile_work_item_change(pool, work_item_id, "work_item_cancelling").await?;
             let pending_stop: Option<Uuid> = sqlx::query_scalar(
                 r#"
@@ -851,7 +872,7 @@ pub(crate) async fn cancel_agent_work_in_pool(
             .map_err(to_string)?
                 > 0;
             if run_live || stop_pending {
-                return Ok(());
+                return Ok(true);
             }
             finish_cancelling_work_item(pool, work_item_id).await?;
             reconcile_work_item_change(pool, work_item_id, "work_item_cancelled").await?;
@@ -869,7 +890,7 @@ pub(crate) async fn cancel_agent_work_in_pool(
     )
     .await?;
 
-    Ok(())
+    Ok(true)
 }
 
 #[tauri::command]
