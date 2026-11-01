@@ -1,10 +1,23 @@
-import { withoutAppModal, type AppModal } from "./app-modal-history";
+import { shouldReplaceAppModalHistory, withoutAppModal, type AppModal } from "./app-modal-history";
 import { resolveActiveChannelId } from "./state-sync";
 
 export type ActiveTab = "chat" | "tasks" | "github" | "wiki";
 
 /** The thread each channel last showed, so returning to it reopens that thread. */
 export type ChannelThreadMemory = Record<string, string | null>;
+
+/**
+ * How a navigation step writes desktop browser history: a new entry, a
+ * rewrite of the current one, or nothing (a restore of an existing entry).
+ */
+export type HistoryMode = "push" | "replace" | "none";
+
+/**
+ * The history write that the steps since the last write ask for. Steps
+ * dispatched before the history effect runs share one entry; their modes
+ * combine, `none` over `replace` over `push`.
+ */
+export type HistoryIntent = { id: number; mode: HistoryMode };
 
 /**
  * Which view `App()` shows, kept in one reducer so each navigation step is a
@@ -30,6 +43,7 @@ export type NavigationState = {
   showMobileSidebar: boolean;
   /** The full-screen panel (Search, Activity, Saved, Needs you). */
   activeModal: AppModal | null;
+  history: HistoryIntent;
 };
 
 export type NavigationAction =
@@ -112,7 +126,49 @@ export function initialNavigationState({
     threadRequested: false,
     showMobileSidebar,
     activeModal: null,
+    history: { id: 0, mode: "push" },
   };
+}
+
+/** What `App()` dispatches: a step plus what its history write needs. */
+export type NavigationInput = {
+  action: NavigationAction;
+  /** The intent id the history effect wrote last. */
+  writtenHistoryId: number;
+  /** Replaces the step's own history mode. */
+  historyMode?: HistoryMode;
+};
+
+/**
+ * The `useReducer` reducer: applies a step and records how it writes history.
+ * The first step after a write opens a new intent; later ones join it.
+ */
+export function navigate(state: NavigationState, input: NavigationInput): NavigationState {
+  const next = navigationReducer(state, input.action);
+  // A restore always records its intent, so the history effect runs and
+  // knows the change came from history even when nothing on screen changed.
+  if (next === state && input.action.type !== "restore") return state;
+  const mode = input.historyMode ?? historyModeFor(state, input.action);
+  const history = state.history.id === input.writtenHistoryId
+    ? { id: state.history.id + 1, mode }
+    : { id: state.history.id, mode: strongerHistoryMode(state.history.mode, mode) };
+  return { ...next, history };
+}
+
+/**
+ * A step's own history mode: a restore writes nothing, switching straight
+ * from one full-screen panel to another rewrites the entry, the rest push.
+ */
+export function historyModeFor(state: NavigationState, action: NavigationAction): HistoryMode {
+  if (action.type === "restore") return "none";
+  if (action.type === "openPanel" && shouldReplaceAppModalHistory(state.activeModal, action.modal)) return "replace";
+  return "push";
+}
+
+const HISTORY_MODE_STRENGTH: Record<HistoryMode, number> = { push: 0, replace: 1, none: 2 };
+
+function strongerHistoryMode(left: HistoryMode, right: HistoryMode): HistoryMode {
+  return HISTORY_MODE_STRENGTH[right] > HISTORY_MODE_STRENGTH[left] ? right : left;
 }
 
 /** Returns `state` itself when an action changes nothing. */

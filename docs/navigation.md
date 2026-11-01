@@ -6,13 +6,15 @@ the tab (Chat, Tasks, GitHub, Wiki), the agent panel, the full-screen panel
 
 ## State
 
-`navigationReducer` in `src/navigation.ts` holds the navigation state: the
-channel, its active thread and tab, the thread each channel last showed, and
-which surfaces are open (Home, the thread panel, the agent panel and where it
-was opened from, the full-screen panel). Each change is a named action, unit
-tested in `tests/navigation.test.ts`; an action that opens one surface closes
-the ones it covers, for example `returnHome` closes everything above Home. The
-focused message is still `App()` state.
+`navigate` in `src/navigation.ts` is the reducer for the navigation state: it
+applies a step with `navigationReducer` and records how the step writes
+history. The state covers the channel, its active thread and tab, the thread
+each channel last showed, and which surfaces are open (Home, the thread panel,
+the agent panel and where it was opened from, the full-screen panel). Each
+change is a named action, unit tested in `tests/navigation.test.ts`; an action
+that opens one surface closes the ones it covers, for example `returnHome`
+closes everything above Home. The focused message is a short highlight, not a
+view, so it stays `App()` state; the history entry records it from a ref.
 
 ## Desktop history
 
@@ -36,6 +38,11 @@ Mod+] all walk the same list.
   keeps the current position without adding entries.
 - Entries are written in a layout effect, while React commits the view, so a
   Back that arrives right after a change cannot find an entry still pending.
+- Each navigation step says how it writes history (`HistoryMode`: push,
+  replace or none). Steps dispatched before the effect runs share one entry,
+  and the strongest mode wins: none (a restore from history) over replace over
+  push. A handler that needs a different mode passes it to
+  `dispatchNavigation` or wraps its steps in `withHistoryMode`.
 
 ## Phone navigation
 
