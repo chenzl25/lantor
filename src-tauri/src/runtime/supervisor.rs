@@ -160,6 +160,37 @@ async fn close_orphaned_agent_run(
     Ok(())
 }
 
+/// Closes everything a previous supervisor left live, then updates the tasks,
+/// threads and activity log of what it closed, as the periodic sweep does.
+async fn close_runs_left_by_restart(pool: &SqlitePool) -> CommandResult<()> {
+    let sweep = close_orphaned_runs_at_startup(pool).await?;
+    for work_item in &sweep.work_items {
+        if let Some(run_id) = work_item.run_id {
+            let _ = crate::mark_task_after_work_item_finished(
+                pool,
+                work_item.id,
+                work_item.agent_id,
+                run_id,
+                &work_item.status,
+            )
+            .await;
+        }
+        reconcile_work_item_change(pool, work_item.id, "work_item_finished").await?;
+    }
+    for (run_id, agent_id) in &sweep.runs {
+        record_agent_activity(
+            pool,
+            Some(*agent_id),
+            Some(*run_id),
+            "run_error",
+            "Closed a run the supervisor restart interrupted",
+            format!("run={run_id}; its request was closed so the queue can move on"),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 pub(crate) async fn recover_supervisor_commands_at_startup(pool: &SqlitePool) -> CommandResult<()> {
     sqlx::query(
         r#"
@@ -312,7 +343,7 @@ pub(crate) async fn run_supervisor() -> CommandResult<()> {
         .map_err(to_string)?;
     migrate(&pool).await.map_err(to_string)?;
 
-    close_orphaned_runs_at_startup(&pool).await?;
+    close_runs_left_by_restart(&pool).await?;
     settle_orphaned_streaming_messages(&pool).await?;
     recover_supervisor_commands_at_startup(&pool).await?;
     let codex_registry = WarmCodexRegistry::default();
@@ -1136,6 +1167,119 @@ mod tests {
         }
         .await;
         drop_test_schema(pool, schema).await;
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn startup_sweep_reports_what_it_closed() {
+        use crate::test_support::run_and_work_item_events;
+        let Some((pool, database_path)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let agent_id = insert_test_agent(&pool, "restarted").await?;
+            let channel_id = insert_test_channel(&pool, "restarted").await?;
+            sqlx::query("update agents set runtime = 'claude', status = 'running' where id = $1")
+                .bind(agent_id)
+                .execute(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+            let run_id: Uuid = sqlx::query_scalar(
+                "insert into agent_runs (agent_id, command, status) values ($1, 'claude', 'running') returning id",
+            )
+            .bind(agent_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            let insert_work_item = |status: &'static str, run_id: Option<Uuid>| {
+                let pool = pool.clone();
+                async move {
+                    sqlx::query_scalar::<_, Uuid>(
+                        r#"
+                        insert into agent_work_items (agent_id, channel_id, title, context, status, run_id)
+                        values ($1, $2, 'left behind', 'context', $3, $4)
+                        returning id
+                        "#,
+                    )
+                    .bind(agent_id)
+                    .bind(channel_id)
+                    .bind(status)
+                    .bind(run_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())
+                }
+            };
+            let interrupted = insert_work_item("running", Some(run_id)).await?;
+            insert_work_item("cancelling", None).await?;
+            let inbox_item_id: Uuid = sqlx::query_scalar(
+                r#"
+                insert into agent_inbox_items (
+                    agent_id, channel_id, kind, state, title, body_preview, work_item_id
+                )
+                values ($1, $2, 'dm', 'processing', 'hello', 'hi', $3)
+                returning id
+                "#,
+            )
+            .bind(agent_id)
+            .bind(channel_id)
+            .bind(interrupted)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            let cursor: i64 = sqlx::query_scalar("select coalesce(max(id), 0) from ui_events")
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+
+            super::close_runs_left_by_restart(&pool).await?;
+
+            // The UI hears about every run, request and agent it closed, as
+            // with the periodic sweep.
+            let mut events = run_and_work_item_events(&pool, cursor).await?;
+            events.sort();
+            assert_eq!(
+                events,
+                [
+                    "agent_run_upsert:orphaned_run_closed:unknown",
+                    "work_item_upsert:work_item_finished:cancelled",
+                    "work_item_upsert:work_item_finished:failed",
+                ]
+            );
+            let agent_refreshes: i64 = sqlx::query_scalar(
+                r#"
+                select count(*) from ui_events
+                where id > $1
+                  and json_extract(event_json, '$.type') = 'refresh'
+                  and json_extract(event_json, '$.reason') = 'agent_updated'
+                "#,
+            )
+            .bind(cursor)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            assert_eq!(agent_refreshes, 1);
+            // The interrupted request's inbox item is archived, and the
+            // activity log says why its run ended.
+            let inbox_state: String =
+                sqlx::query_scalar("select state from agent_inbox_items where id = $1")
+                    .bind(inbox_item_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            assert_eq!(inbox_state, "archived");
+            let run_errors: i64 = sqlx::query_scalar(
+                "select count(*) from agent_activities where run_id = $1 and kind = 'run_error'",
+            )
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            assert_eq!(run_errors, 1);
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, database_path).await;
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
