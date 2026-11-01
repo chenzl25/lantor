@@ -530,7 +530,7 @@ export function AgentDetailDrawer({
       });
       setWorkspaceNodes((current) => ({ ...current, [path]: listing.entries }));
     } catch (err) {
-      setWorkspaceError(String(err));
+      setWorkspaceError(err instanceof Error ? err.message : String(err));
     } finally {
       setWorkspaceLoadingPath(null);
     }
@@ -547,7 +547,7 @@ export function AgentDetailDrawer({
       });
       setWorkspacePreview(file);
     } catch (err) {
-      setWorkspaceError(String(err));
+      setWorkspaceError(err instanceof Error ? err.message : String(err));
     } finally {
       setWorkspaceLoadingPath(null);
     }

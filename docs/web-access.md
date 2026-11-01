@@ -52,8 +52,9 @@ The web UI does not perform its own token check. Only expose Lantor on a
 trusted private path such as loopback, Tailscale Serve, or a Cloudflare Tunnel
 protected by Cloudflare Access.
 
-The web UI uses HTTP endpoints under `/api/` for the subset of Tauri commands
-the chat surface needs, including:
+The UI calls HTTP endpoints under `/api/`. Browsers reach them over the
+network; the desktop window sends the same requests over Tauri IPC, where
+`desktop_api.rs` serves them with the same router. They include:
 
 - bootstrap and runtime health checks
 - sending messages, creating/updating/deleting channels and agents

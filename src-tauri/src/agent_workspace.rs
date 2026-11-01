@@ -5,11 +5,10 @@ use std::{
 };
 
 use sqlx::{Row, SqlitePool};
-use tauri::State;
 use uuid::Uuid;
 
 use crate::{
-    app::{to_string, AppState, CommandResult},
+    app::{to_string, CommandResult},
     models::{AgentWorkspaceEntry, AgentWorkspaceFile, AgentWorkspaceListing},
 };
 
@@ -204,15 +203,6 @@ fn sort_workspace_entries(entries: &mut [AgentWorkspaceEntry]) {
     );
 }
 
-#[tauri::command]
-pub(crate) async fn agent_workspace_list(
-    agent_id: Uuid,
-    path: String,
-    state: State<'_, AppState>,
-) -> CommandResult<AgentWorkspaceListing> {
-    agent_workspace_list_in_pool(&state.pool, agent_id, &path).await
-}
-
 pub(crate) async fn agent_workspace_list_in_pool(
     pool: &SqlitePool,
     agent_id: Uuid,
@@ -231,15 +221,6 @@ pub(crate) async fn agent_workspace_list_in_pool(
         ),
         entries: list_workspace_entries(&workspace, &directory)?,
     })
-}
-
-#[tauri::command]
-pub(crate) async fn agent_workspace_read_file(
-    agent_id: Uuid,
-    path: String,
-    state: State<'_, AppState>,
-) -> CommandResult<AgentWorkspaceFile> {
-    agent_workspace_read_file_in_pool(&state.pool, agent_id, &path).await
 }
 
 pub(crate) async fn agent_workspace_read_file_in_pool(

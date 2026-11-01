@@ -10,8 +10,10 @@ in [docs/development.md](docs/development.md).
 - `src-tauri/src/` is the Rust backend. One binary runs as the desktop app
   (Tauri), as the browser-only server (`--web-only`), and as the agent
   supervisor (`--supervisor`).
-  - `application/` holds the operations behind the UI. `commands/` (Tauri) and
-    `web.rs` (HTTP API and SSE) are thin adapters over it.
+  - `application/` holds the operations behind the UI. `web.rs` (HTTP API and
+    SSE) is the thin adapter over it. The desktop window calls the same `/api`
+    routes over Tauri IPC through `desktop_api.rs`, so a new API needs a route
+    in `web.rs` and an entry in `src/api-contract.ts`, not a Tauri command.
   - `runtime/` launches and supervises Claude and Codex processes and turns
     their output into messages; `prompts.rs` builds the agent prompts.
   - `agent_routing.rs` and `agent_work_dispatch.rs` turn messages into agent
@@ -58,7 +60,7 @@ in [docs/development.md](docs/development.md).
   does not also fix bugs or change behavior; send those separately.
 - Refactor only for real pressure: a feature that needs it, repeated review
   pain, unclear ownership, or logic leaking across layers.
-- Keep dependencies pointing one way: adapters (`commands/`, `web.rs`) call
+- Keep dependencies pointing one way: adapters (`web.rs`, `desktop_api.rs`) call
   `application/` and the stores, never the reverse. Keep `pub(crate)` exposure
   to what callers actually use.
 - Agents working in parallel use separate git worktrees with disjoint write

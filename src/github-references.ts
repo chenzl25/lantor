@@ -238,7 +238,10 @@ function flushGithubReferenceLookups() {
     })
       .then((result) => applyGithubReferenceLookup(batch.map(([key]) => key), result))
       .catch((error) => {
-        applyGithubReferenceLookup(batch.map(([key]) => key), { items: [], error: String(error) });
+        applyGithubReferenceLookup(batch.map(([key]) => key), {
+          items: [],
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
   }
 }

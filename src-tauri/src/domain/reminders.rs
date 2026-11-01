@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde_json::json;
 use sqlx::{Executor, Row, Sqlite, SqlitePool};
-use tauri::State;
 use uuid::Uuid;
 
 use crate::agent_routing::ensure_agent_channel_member;
@@ -9,7 +8,7 @@ use crate::events::activity::record_agent_activity;
 use crate::models::Reminder;
 use crate::ui_notifications::{enqueue_ui_event_in_tx, insert_system_message, UiEvent};
 use crate::{
-    app::{to_string, AppState, CommandResult},
+    app::{to_string, CommandResult},
     create_agent_inbox_item, ensure_agent_inbox_wake_work_item, AgentInboxItemInput,
 };
 
@@ -536,14 +535,6 @@ pub(crate) async fn cancel_reminder_in_pool(
     Ok(())
 }
 
-#[tauri::command]
-pub(crate) async fn complete_reminder(
-    reminder_id: Uuid,
-    state: State<'_, AppState>,
-) -> CommandResult<()> {
-    complete_reminder_in_pool(&state.pool, reminder_id).await
-}
-
 pub(crate) async fn complete_reminder_in_pool(
     pool: &SqlitePool,
     reminder_id: Uuid,
@@ -572,14 +563,6 @@ pub(crate) async fn complete_reminder_in_pool(
     .await?;
     transaction.commit().await.map_err(to_string)?;
     Ok(())
-}
-
-#[tauri::command]
-pub(crate) async fn cancel_reminder(
-    reminder_id: Uuid,
-    state: State<'_, AppState>,
-) -> CommandResult<()> {
-    cancel_reminder_in_pool(&state.pool, reminder_id).await
 }
 
 pub(crate) async fn load_reminders(pool: &SqlitePool) -> CommandResult<Vec<Reminder>> {
