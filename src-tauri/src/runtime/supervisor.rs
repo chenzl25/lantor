@@ -1519,6 +1519,90 @@ mod tests {
         assert!(matches!(exit, Ok(Ok(status)) if !status.success()));
     }
 
+    #[tokio::test]
+    async fn a_warm_runtime_that_cannot_spawn_flags_its_agent_in_the_ui() {
+        let Some((pool, database_path)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            // No process can start in a directory that does not exist.
+            let missing_directory = std::env::temp_dir()
+                .join(format!("lantor-missing-{}", Uuid::new_v4().simple()))
+                .to_string_lossy()
+                .into_owned();
+            for runtime in ["claude", "codex"] {
+                let agent_id = insert_test_agent(&pool, &format!("{runtime}-spawn")).await?;
+                sqlx::query("update agents set runtime = $2 where id = $1")
+                    .bind(agent_id)
+                    .bind(runtime)
+                    .execute(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+                let cursor: i64 = sqlx::query_scalar("select coalesce(max(id), 0) from ui_events")
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+                let started = if runtime == "claude" {
+                    crate::runtime::claude::supervisor_start_claude_streaming_agent(
+                        &pool,
+                        &WarmClaudeRegistry::default(),
+                        agent_id,
+                        None,
+                        runtime.to_owned(),
+                        String::new(),
+                        String::new(),
+                        missing_directory.clone(),
+                        String::new(),
+                        String::new(),
+                        0,
+                        None,
+                    )
+                    .await
+                } else {
+                    crate::runtime::codex::supervisor_start_codex_streaming_agent(
+                        &pool,
+                        &WarmCodexRegistry::default(),
+                        agent_id,
+                        None,
+                        runtime.to_owned(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        missing_directory.clone(),
+                        String::new(),
+                        String::new(),
+                        None,
+                    )
+                    .await
+                };
+                assert!(started.is_err(), "{runtime} started in a missing directory");
+
+                let status: String = sqlx::query_scalar("select status from agents where id = $1")
+                    .bind(agent_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+                assert_eq!(status, "error", "{runtime}");
+                let refreshes: Vec<String> = sqlx::query_scalar(
+                    r#"
+                    select json_extract(event_json, '$.reason')
+                    from ui_events
+                    where id > $1 and json_extract(event_json, '$.type') = 'refresh'
+                    "#,
+                )
+                .bind(cursor)
+                .fetch_all(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+                assert_eq!(refreshes, ["agent_updated"], "{runtime}");
+            }
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, database_path).await;
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
     async fn test_pool() -> Option<(SqlitePool, String)> {
         test_pool_with_connections(1).await
     }
