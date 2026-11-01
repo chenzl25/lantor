@@ -16,6 +16,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
 } from "react";
@@ -46,6 +47,7 @@ import {
   withoutAppModal,
   type AppModal,
 } from "./app-modal-history";
+import { initialNavigationState, navigationReducer } from "./navigation";
 import { AgentDetailDrawer } from "./components/AgentDetailDrawer";
 import type { AgentPerformance } from "./components/AgentDetailDrawer";
 import { AgentFormModal } from "./components/AgentFormModal";
@@ -807,8 +809,6 @@ function App() {
   const createChannelSubmittingRef = useRef(false);
   const createChannelOpenedFromMobileHomeRef = useRef(false);
   const createAgentOpenedFromMobileHomeRef = useRef(false);
-  // The agent whose panel was opened from mobile Home, so its Back returns Home.
-  const agentOpenedFromMobileHomeRef = useRef<string | null>(null);
   const [activeAppModal, setActiveAppModal] = useState<AppModal | null>(null);
   const showSearchModal = activeAppModal === "search";
   const showActivityFeedModal = activeAppModal === "activity";
@@ -829,7 +829,8 @@ function App() {
   const [mobileSidebarDragPx, setMobileSidebarDragPx] = useState(0);
   const [mobileDragSurface, setMobileDragSurface] = useState<"sidebar" | "panel" | null>(null);
   const [mobileComposerFocused, setMobileComposerFocused] = useState(false);
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [navigation, dispatchNavigation] = useReducer(navigationReducer, initialNavigationState);
+  const selectedAgentId = navigation.selectedAgentId;
   const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null);
   const openPushTargetRef = useRef<(target: PushTarget) => void>(() => {});
   const [appError, setAppError] = useState<string | null>(null);
@@ -2560,7 +2561,7 @@ function App() {
         navigateBack(() => {
           if (artifactViewer) closeArtifactViewer();
           else if (activeAppModal) setActiveAppModal(null);
-          else if (selectedAgentId) setSelectedAgentId(null);
+          else if (selectedAgentId) dispatchNavigation({ type: "closeAgent" });
           else if (showThread) setShowThread(false);
         });
         return;
@@ -2689,7 +2690,7 @@ function App() {
       setShowThread(historyState.showThread);
       setShowMobileSidebar(historyState.showMobileSidebar);
       setMobileSidebarDragPx(0);
-      setSelectedAgentId(historyState.selectedAgentId);
+      dispatchNavigation({ type: "restore", selectedAgentId: historyState.selectedAgentId });
       setFocusedMessageId(historyState.focusedMessageId ?? null);
       setActiveAppModal(historyState.activeModal);
     }
@@ -3756,7 +3757,7 @@ function App() {
     const nextChannel = data?.channels.find((item) => item.id === channelId) ?? null;
     const needsMessageLoad = !initializedOlderChannelIdsRef.current.has(channelId);
     historyFocusedMessageIdRef.current = null;
-    setSelectedAgentId(null);
+    dispatchNavigation({ type: "closeAgent" });
     setActiveChannelId(channelId);
     setShowMobileSidebar(false);
     if (nextChannel?.kind === "dm") {
@@ -3789,13 +3790,13 @@ function App() {
   function revealThread(threadId: string | null, channelId = activeChannelId) {
     openThread(threadId, channelId);
     if (threadId) {
-      setSelectedAgentId(null);
+      dispatchNavigation({ type: "closeAgent" });
       setShowThread(true);
     }
   }
 
   function revealThreadRootInChannel(message: Message) {
-    setSelectedAgentId(null);
+    dispatchNavigation({ type: "closeAgent" });
     // An expanded thread hides the channel column, so locating must bring it back.
     setThreadExpanded(false);
     setActiveTab("chat");
@@ -3898,7 +3899,7 @@ function App() {
     const threadId = target.thread_root_id ?? target.id;
     pendingChannelRestoreRef.current.delete(channelId);
     historyFocusedMessageIdRef.current = target.id;
-    setSelectedAgentId(null);
+    dispatchNavigation({ type: "closeAgent" });
     setActiveChannelId(channelId);
     setShowMobileSidebar(false);
     setActiveTab("chat");
@@ -3921,7 +3922,7 @@ function App() {
       if (referenceNavigationRequestRef.current !== requestId) return;
       const target = messageReferenceLocation(kind, targetMessage);
       pendingChannelRestoreRef.current.delete(target.channelId);
-      setSelectedAgentId(null);
+      dispatchNavigation({ type: "closeAgent" });
       setActiveTab("chat");
       setShowMobileSidebar(false);
       setActiveChannelId(target.channelId);
@@ -3951,14 +3952,8 @@ function App() {
   }
 
   const openAgentDetail = useCallback((agent: Agent) => {
-    setSelectedAgentId(agent.id);
+    dispatchNavigation({ type: "openAgent", agentId: agent.id });
   }, []);
-  // Forget the Home origin once that agent's panel is closed or replaced.
-  useLayoutEffect(() => {
-    if (agentOpenedFromMobileHomeRef.current !== selectedAgentId) {
-      agentOpenedFromMobileHomeRef.current = null;
-    }
-  }, [selectedAgentId]);
   const navigateToReferencedMessageRef = useRef(navigateToReferencedMessage);
   const navigateToReferencedThreadRef = useRef(navigateToReferencedThread);
   useLayoutEffect(() => {
@@ -3982,7 +3977,7 @@ function App() {
     setMobileSidebarFocus("home");
     if (isMobileViewport()) {
       setShowThread(false);
-      setSelectedAgentId(null);
+      dispatchNavigation({ type: "closeAgent" });
       setShowMobileSidebar(true);
       setMobileSidebarDragPx(0);
       return;
@@ -4000,7 +3995,7 @@ function App() {
 
   function returnToMobileHome() {
     setActiveAppModal(null);
-    setSelectedAgentId(null);
+    dispatchNavigation({ type: "closeAgent" });
     setShowThread(false);
     setShowMobileSidebar(true);
     setMobileSidebarDragPx(0);
@@ -4121,17 +4116,17 @@ function App() {
   }
 
   function closeSelectedAgent() {
-    if (isMobileViewport() && selectedAgentId && agentOpenedFromMobileHomeRef.current === selectedAgentId) {
+    if (isMobileViewport() && navigation.agentOrigin === "home") {
       returnToMobileHome();
       return;
     }
     if (selectedAgentId && searchResultAgentIdRef.current === selectedAgentId) {
       searchResultAgentIdRef.current = null;
       replaceNextAppHistoryEntryRef.current = true;
-      setSelectedAgentId(null);
+      dispatchNavigation({ type: "closeAgent" });
       return;
     }
-    navigateBack(() => setSelectedAgentId(null));
+    navigateBack(() => dispatchNavigation({ type: "closeAgent" }));
   }
 
   function closeThreadPanel() {
@@ -4482,7 +4477,7 @@ function App() {
       onConfirm: async () => {
         await mutate("delete_agent", { agentId: agent.id });
         if (editingAgentId === agent.id) setEditingAgentId(null);
-        if (selectedAgentId === agent.id) setSelectedAgentId(null);
+        dispatchNavigation({ type: "closeAgent", agentId: agent.id });
         if (agentDm) forgetChannelThread(agentDm.id);
         if (agentDm && activeChannelId === agentDm.id) {
           setActiveChannelId(fallbackChannelId ?? "");
@@ -4543,7 +4538,7 @@ function App() {
     try {
       const channelId = await apiInvoke("open_dm_with_agent", { agentId: agent.id });
       await reloadUiState(["channels", "channel_members"]);
-      setSelectedAgentId(null);
+      dispatchNavigation({ type: "closeAgent" });
       setActiveChannelId(channelId);
       restoreRememberedThreadForChannel(channelId);
       setActiveTab("chat");
@@ -4653,7 +4648,7 @@ function App() {
       setActiveTab("chat");
     }
     const agent = data?.agents.find((candidate) => candidate.id === item.agent_id);
-    if (agent) setSelectedAgentId(agent.id);
+    if (agent) dispatchNavigation({ type: "openAgent", agentId: agent.id });
     const focusId = focusedMessageIdOverride === undefined
       ? item.source_message_id
       : focusedMessageIdOverride;
@@ -4715,7 +4710,7 @@ function App() {
       const agent = data?.agents.find((item) => item.id === result.agentId);
       if (agent) {
         openedAgentId = agent.id;
-        setSelectedAgentId(agent.id);
+        dispatchNavigation({ type: "openAgent", agentId: agent.id });
       }
     }
     if (result.channelId) selectChannel(result.channelId);
@@ -4783,7 +4778,7 @@ function App() {
       return;
     }
     if (item.channelId) selectChannel(item.channelId);
-    setSelectedAgentId(null);
+    dispatchNavigation({ type: "closeAgent" });
     setActiveTab("chat");
     openThread(null, item.channelId ?? activeChannelId);
     setShowThread(false);
@@ -5157,10 +5152,10 @@ function App() {
           openDmWithAgent(agent);
         }}
         openAgentDetail={(agent) => {
-          agentOpenedFromMobileHomeRef.current = isMobileHomeOpen() ? agent.id : null;
+          const fromHome = isMobileHomeOpen();
           setShowMobileSidebar(false);
           setMobileSidebarDragPx(0);
-          setSelectedAgentId(agent.id);
+          dispatchNavigation({ type: "openAgent", agentId: agent.id, fromHome });
         }}
         openOwnerProfileModal={() => {
           setOwnerProfileDraft(ownerProfileToForm(data.owner_profile));
@@ -5347,7 +5342,7 @@ function App() {
           messages={data.messages}
           onOpenWorkItem={(item, focusedMessageIdOverride) => {
             openWorkItem(item, focusedMessageIdOverride);
-            setSelectedAgentId(null);
+            dispatchNavigation({ type: "closeAgent" });
           }}
           onResizeStart={startAgentDrawerResize}
         />
