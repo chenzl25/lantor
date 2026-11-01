@@ -8,7 +8,7 @@ use crate::events::activity::{record_agent_activity, work_status_title};
 use crate::freshness::advance_agent_target_watermark_for_work_item;
 use crate::provider_auth::{record_provider_auth_failure, record_provider_turn_success};
 use crate::runtime::{
-    lifecycle::{end_turn, TurnEnd},
+    lifecycle::{end_turn, settle_codex_steer, TurnEnd},
     process::{terminate_process_group, upsert_runtime_thread_id},
     streaming::{
         consume_streaming_agent_control_lines, delete_streaming_agent_message_by_key,
@@ -19,9 +19,7 @@ use crate::runtime::{
         finished_work_status, keep_first_error, resolve_warm_turn_outcome, retry_transient_sqlite,
     },
 };
-use crate::ui_notifications::{
-    enqueue_ui_work_item_changed_in_tx, notify_supervisor_wake, reconcile_work_item_change,
-};
+use crate::ui_notifications::{notify_supervisor_wake, reconcile_work_item_change};
 use crate::{
     app::{to_string, CommandResult},
     mark_task_after_work_item_finished,
@@ -35,47 +33,16 @@ pub(super) async fn finish_codex_steer_request(
     cancelled: bool,
     error: Option<String>,
 ) -> CommandResult<()> {
-    let (status, completed_at, run_id) = if success {
-        (
-            "done",
-            "strftime('%Y-%m-%dT%H:%M:%f+00:00','now')",
-            Some(steer.run_id),
-        )
+    let (status, completed, run_id) = if success {
+        ("done", true, Some(steer.run_id))
     } else if cancelled {
         // The user stopped this turn; follow-ups merged into it must not
         // requeue and revive the agent.
-        (
-            "cancelled",
-            "strftime('%Y-%m-%dT%H:%M:%f+00:00','now')",
-            Some(steer.run_id),
-        )
+        ("cancelled", true, Some(steer.run_id))
     } else {
-        ("queued", "null", None)
+        ("queued", false, None)
     };
-    let mut transaction = pool.begin().await.map_err(to_string)?;
-    sqlx::query(&format!(
-        r#"
-        update agent_work_items
-        set status = $2,
-            run_id = $3,
-            completed_at = {completed_at},
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id = $1
-        "#
-    ))
-    .bind(steer.work_item_id)
-    .bind(status)
-    .bind(run_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-    enqueue_ui_work_item_changed_in_tx(
-        &mut transaction,
-        steer.work_item_id,
-        "codex_turn_steer_result",
-    )
-    .await?;
-    transaction.commit().await.map_err(to_string)?;
+    settle_codex_steer(pool, steer.work_item_id, status, run_id, completed).await?;
     reconcile_work_item_change(pool, steer.work_item_id, "codex_turn_steer_result").await?;
     if success {
         advance_agent_target_watermark_for_work_item(pool, agent_id, steer.work_item_id, 0).await?;

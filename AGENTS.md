@@ -64,6 +64,10 @@ in [docs/development.md](docs/development.md).
 - Agents working in parallel use separate git worktrees with disjoint write
   scopes. In a new worktree, symlink `node_modules` from the main checkout
   instead of reinstalling.
+- Run, work item and agent statuses change only in
+  `src-tauri/src/runtime/lifecycle.rs`
+  ([run lifecycle](docs/agent-runtime.md#run-lifecycle)); a test rejects
+  status writes anywhere else.
 - A SQLite transaction that reads before it writes, and can run while
   another connection writes, begins with `BEGIN IMMEDIATE`. A deferred
   transaction can fail when it upgrades to a writer instead of waiting for the

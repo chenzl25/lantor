@@ -13,6 +13,7 @@ use crate::{
     channel_wiki::channel_wiki_wake_block,
     context_tool::short_id,
     events::activity::record_agent_activity,
+    runtime::lifecycle::mark_agent_queued_in_tx,
     text::compact_chars_middle,
 };
 
@@ -1133,18 +1134,7 @@ pub(crate) async fn enqueue_agent_work_if_available(
     .execute(&mut *transaction)
     .await
     .map_err(to_string)?;
-    sqlx::query("update agents set status = 'queued' where id = $1")
-        .bind(agent_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-    if joins_active_turn {
-        sqlx::query("update agents set status = 'running' where id = $1")
-            .bind(agent_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(to_string)?;
-    }
+    mark_agent_queued_in_tx(&mut transaction, agent_id, joins_active_turn).await?;
     enqueue_ui_event_in_tx(
         &mut transaction,
         &UiEvent::Refresh {

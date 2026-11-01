@@ -30,24 +30,40 @@ stdout and stderr are preserved only in the run log.
 ## Run Lifecycle
 
 A run, the work item it carries, and its agent each have a status, and they
-change together. `src-tauri/src/runtime/lifecycle.rs` writes every transition
-that ends or stops a run or a work item:
+change together. Only `src-tauri/src/runtime/lifecycle.rs` writes those
+statuses (and a run's `stopped_at`); a test in
+`src-tauri/src/tests/runtime_lifecycle.rs` fails when another file does. It
+has one function per transition:
 
-- A warm turn ends (`end_turn`) or a cold process exits (`end_cold_run`).
-- A launch fails: a cold process cannot spawn (`fail_cold_launch`), a warm turn
-  fails before it starts (`fail_warm_start`), a work item fails before any run
-  (`fail_work_item_before_run`), or a warm runtime cannot spawn
+- Queueing and starting: an agent is queued for a start
+  (`mark_agent_queued_in_tx`), a run is created with its work item running
+  (`create_run_in_tx`), and its process comes up (`mark_run_running_in_tx`).
+  A Claude follow-up that becomes its own turn gets a run that starts running
+  (`start_follow_up_run`).
+- Follow-ups joining a running turn: a Codex steer joins the run
+  (`join_work_item_to_run`), goes back to the queue if it cannot be sent
+  (`return_steer_to_queue`), and settles when the turn ends
+  (`settle_codex_steer`); Claude follow-ups move between their states
+  (`move_follow_up_status`) and finish with the turn that consumed them
+  (`finish_merged_follow_up`).
+- Outcomes during a turn: no visible reply (`mark_work_item_silent`) or a
+  reply held back because newer messages arrived (`mark_work_item_held_in_tx`).
+- Ending: a warm turn ends (`end_turn`) or a cold process exits
+  (`end_cold_run`).
+- Failed launches: a cold process cannot spawn (`fail_cold_launch`), a warm
+  turn fails before it starts (`fail_warm_start`), a work item fails before
+  any run (`fail_work_item_before_run`), or a warm runtime cannot spawn
   (`mark_agent_runtime_failed`).
-- The supervisor closes runs no process owns, at startup
+- Orphans: the supervisor closes runs no process owns, at startup
   (`close_orphaned_runs_at_startup`) and while running (`close_orphaned_run`).
-- A stop or cancel marks the run stopping and its work item cancelling, and
-  finishes whatever can no longer end on its own.
+- Stop and cancel: the run is marked stopping and its work item cancelling,
+  and whatever can no longer end on its own is finished.
 
 Each function updates the rows and enqueues their UI events in one
-transaction. The caller picks the outcome and does what follows the commit:
-task status, reconciliation, and the activity log. Starting a run and taking
-follow-ups into a running turn still write their statuses in the runtime
-modules.
+transaction, or in the caller's transaction for the `_in_tx` variants. The
+caller picks the outcome and does what follows the commit: task status,
+reconciliation, and the activity log. A new transition is a new function in
+that module.
 
 ## Context Tools
 

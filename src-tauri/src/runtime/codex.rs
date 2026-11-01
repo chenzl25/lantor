@@ -24,7 +24,10 @@ use crate::prompts::{
     build_codex_streaming_prompt, codex_developer_instructions, prepend_memory_context,
 };
 use crate::runtime::{
-    lifecycle::{mark_agent_runtime_failed, WarmStartFailure},
+    lifecycle::{
+        create_run_in_tx, join_work_item_to_run, mark_agent_runtime_failed, mark_run_running_in_tx,
+        return_steer_to_queue, NewRun, WarmStartFailure,
+    },
     memory_context_update,
     process::{
         classify_agent_output_activity, cleanup_failed_warm_start,
@@ -42,10 +45,7 @@ use crate::runtime::{
 use crate::subscription_status::{
     codex_subscription_status_from_response, persist_agent_subscription_status,
 };
-use crate::ui_notifications::{
-    enqueue_ui_agent_run_changed_in_tx, enqueue_ui_work_item_changed_in_tx, notify_supervisor_wake,
-    reconcile_work_item_change,
-};
+use crate::ui_notifications::{notify_supervisor_wake, reconcile_work_item_change};
 use crate::usage::{record_run_usage, usage_from_runtime_event};
 use crate::{
     app::{to_string, CommandResult},
@@ -820,23 +820,7 @@ async fn steer_warm_codex_turn_if_same_surface(
         request_id
     };
 
-    let mut transaction = pool.begin().await.map_err(to_string)?;
-    sqlx::query(
-        r#"
-        update agent_work_items
-        set status = 'running',
-            run_id = $2,
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id = $1
-        "#,
-    )
-    .bind(work_item_id)
-    .bind(active_run_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-    enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "work_item_running").await?;
-    transaction.commit().await.map_err(to_string)?;
+    join_work_item_to_run(pool, work_item_id, active_run_id).await?;
     reconcile_work_item_change(pool, work_item_id, "work_item_running").await?;
 
     let write_result = {
@@ -867,23 +851,7 @@ async fn steer_warm_codex_turn_if_same_surface(
                 active.steer_requests.remove(&request_id);
             }
         }
-        let mut transaction = pool.begin().await.map_err(to_string)?;
-        sqlx::query(
-            r#"
-            update agent_work_items
-            set status = 'queued',
-                run_id = null,
-                updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-            where id = $1
-            "#,
-        )
-        .bind(work_item_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-        enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "work_item_queued")
-            .await?;
-        transaction.commit().await.map_err(to_string)?;
+        return_steer_to_queue(pool, work_item_id).await?;
         reconcile_work_item_change(pool, work_item_id, "work_item_queued").await?;
         return Err(err);
     }
@@ -991,22 +959,17 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
     };
 
     let mut transaction = pool.begin().await.map_err(to_string)?;
-    let run_id: Uuid = sqlx::query_scalar(
-        r#"
-        insert into agent_runs (agent_id, work_item_id, command, working_directory, status, log)
-        values ($1, $2, $3, $4, 'starting', $5)
-        returning id
-        "#,
+    let run_id = create_run_in_tx(
+        &mut transaction,
+        &NewRun {
+            agent_id,
+            work_item_id,
+            command: &command_text,
+            working_directory: &working_directory,
+            log: &initial_log,
+        },
     )
-    .bind(agent_id)
-    .bind(work_item_id)
-    .bind(&command_text)
-    .bind(&working_directory)
-    .bind(initial_log)
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-    enqueue_ui_agent_run_changed_in_tx(&mut transaction, run_id, "run_created").await?;
+    .await?;
 
     let (channel_id, thread_root_id) = if let Some(work_item_id) = work_item_id {
         let row = sqlx::query(
@@ -1021,22 +984,6 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
         .fetch_one(&mut *transaction)
         .await
         .map_err(to_string)?;
-        sqlx::query(
-            r#"
-            update agent_work_items
-            set status = 'running',
-                run_id = $2,
-                updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-            where id = $1
-            "#,
-        )
-        .bind(work_item_id)
-        .bind(run_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-        enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, "work_item_running")
-            .await?;
         (
             row.get::<Option<Uuid>, _>("channel_id"),
             row.get::<Option<Uuid>, _>("thread_root_id"),
@@ -1045,18 +992,7 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
         (None, None)
     };
 
-    sqlx::query("update agent_runs set status = 'running', pid = $2 where id = $1")
-        .bind(run_id)
-        .bind(runtime.pid)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-    sqlx::query("update agents set status = 'running' where id = $1")
-        .bind(agent_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-    enqueue_ui_agent_run_changed_in_tx(&mut transaction, run_id, "run_running").await?;
+    mark_run_running_in_tx(&mut transaction, agent_id, run_id, runtime.pid).await?;
     transaction.commit().await.map_err(to_string)?;
     if let Some(work_item_id) = work_item_id {
         reconcile_work_item_change(pool, work_item_id, "work_item_running").await?;

@@ -22,13 +22,15 @@ use crate::app::{to_string, CommandResult};
 use crate::events::activity::record_agent_activity;
 use crate::freshness::advance_agent_target_watermark_for_work_item;
 use crate::runtime::{
-    lifecycle::WarmStartFailure, process::cleanup_failed_warm_start,
-    streaming::ensure_streaming_agent_message, surface::same_codex_surface,
+    lifecycle::{
+        finish_merged_follow_up, move_follow_up_status, start_follow_up_run, NewRun,
+        WarmStartFailure,
+    },
+    process::cleanup_failed_warm_start,
+    streaming::ensure_streaming_agent_message,
+    surface::same_codex_surface,
 };
-use crate::ui_notifications::{
-    enqueue_ui_agent_run_changed_in_tx, enqueue_ui_work_item_changed_in_tx,
-    reconcile_work_item_change,
-};
+use crate::ui_notifications::reconcile_work_item_change;
 use crate::{build_steer_followup_prompt, load_inbox_wake_items_for_work_item};
 
 /// A follow-up written to the CLI that it has not replayed yet.
@@ -264,29 +266,7 @@ pub(super) async fn note_claude_input_replayed(
     let Some(run_id) = merged_into else {
         return Ok(());
     };
-    let mut transaction = pool.begin().await.map_err(to_string)?;
-    sqlx::query(
-        r#"
-        update agent_work_items
-        set status = 'done',
-            run_id = $2,
-            completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id = $1
-        "#,
-    )
-    .bind(steer.work_item_id)
-    .bind(run_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-    enqueue_ui_work_item_changed_in_tx(
-        &mut transaction,
-        steer.work_item_id,
-        "claude_follow_up_merged",
-    )
-    .await?;
-    transaction.commit().await.map_err(to_string)?;
+    finish_merged_follow_up(pool, steer.work_item_id, run_id).await?;
     reconcile_work_item_change(pool, steer.work_item_id, "claude_follow_up_merged").await?;
     append_run_log(
         pool,
@@ -340,50 +320,22 @@ async fn adopt_follow_up_turn(
     runtime: &Arc<WarmClaudeRuntime>,
     steer: ClaudePendingSteer,
 ) -> CommandResult<()> {
-    let mut transaction = pool.begin().await.map_err(to_string)?;
-    let run_id: Uuid = sqlx::query_scalar(
-        r#"
-        insert into agent_runs (agent_id, work_item_id, command, working_directory, status, log, pid)
-        values ($1, $2, $3, $4, 'running', $5, $6)
-        returning id
-        "#,
-    )
-    .bind(agent_id)
-    .bind(steer.work_item_id)
-    .bind(&steer.command_text)
-    .bind(&steer.working_directory)
-    .bind(format!(
+    let log = format!(
         "$ {}\n[warm process reused]\n[follow-up turn uuid={}]\n",
         steer.command_text, steer.uuid
-    ))
-    .bind(runtime.pid)
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-    enqueue_ui_agent_run_changed_in_tx(&mut transaction, run_id, "run_created").await?;
-    sqlx::query(
-        r#"
-        update agent_work_items
-        set status = 'running',
-            run_id = $2,
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id = $1
-        "#,
+    );
+    let run_id = start_follow_up_run(
+        pool,
+        &NewRun {
+            agent_id,
+            work_item_id: Some(steer.work_item_id),
+            command: &steer.command_text,
+            working_directory: &steer.working_directory,
+            log: &log,
+        },
+        runtime.pid,
     )
-    .bind(steer.work_item_id)
-    .bind(run_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(to_string)?;
-    enqueue_ui_work_item_changed_in_tx(&mut transaction, steer.work_item_id, "work_item_running")
-        .await?;
-    sqlx::query("update agents set status = 'running' where id = $1")
-        .bind(agent_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(to_string)?;
-    enqueue_ui_agent_run_changed_in_tx(&mut transaction, run_id, "run_running").await?;
-    transaction.commit().await.map_err(to_string)?;
+    .await?;
     reconcile_work_item_change(pool, steer.work_item_id, "work_item_running").await?;
     record_agent_activity(
         pool,
@@ -498,29 +450,9 @@ async fn set_follow_up_status(
     run_id: Option<Uuid>,
     reason: &'static str,
 ) -> CommandResult<bool> {
-    let mut transaction = pool.begin().await.map_err(to_string)?;
-    let updated = sqlx::query(
-        r#"
-        update agent_work_items
-        set status = $3,
-            run_id = $4,
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where id = $1 and status = $2
-        "#,
-    )
-    .bind(work_item_id)
-    .bind(from)
-    .bind(to)
-    .bind(run_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(to_string)?
-    .rows_affected();
-    if updated == 0 {
+    if !move_follow_up_status(pool, work_item_id, from, to, run_id, reason).await? {
         return Ok(false);
     }
-    enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item_id, reason).await?;
-    transaction.commit().await.map_err(to_string)?;
     reconcile_work_item_change(pool, work_item_id, reason).await?;
     Ok(true)
 }
