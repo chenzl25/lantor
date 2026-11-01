@@ -23,6 +23,13 @@ channel or thread. Lantor routes that text into the correct chat surface. They
 may also emit standalone `LANTOR_EVENT` control lines for structured side
 effects.
 
+Both warm runtimes keep one long-lived process per agent, and they share its
+handling in `src-tauri/src/runtime/warm.rs`: the per-agent registry, reusing
+or retiring a process before a start, the stderr log, what happens when the
+process exits, and the idle stop. `claude.rs` and `codex.rs` implement
+`WarmProvider` and keep what depends on their protocol: spawning and the
+handshake, stdout parsing, turns, follow-ups and interrupts.
+
 Stdout-command runtimes are still supported for custom scripts. They can print
 one line to stdout with the `LANTOR_EVENT ` prefix followed by JSON. Non-matching
 stdout and stderr are preserved only in the run log.

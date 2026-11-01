@@ -94,6 +94,7 @@ impl Fixture {
             }),
             pid: None,
             environment_variables: String::new(),
+            provider: ClaudeCli,
         });
         Self {
             pool,
@@ -527,10 +528,7 @@ async fn live_claude_cli_follow_up_and_interrupt() {
             .unwrap();
         }
     };
-    let runtime_pid = || async {
-        let runtimes = registry.runtimes.lock().await;
-        runtimes.get(&agent).and_then(|runtime| runtime.pid)
-    };
+    let runtime_pid = || async { registry.get(agent).await.and_then(|runtime| runtime.pid) };
 
     // A follow-up sent while a tool runs.
     let first = insert_work_item(&pool, agent, channel, None, "queued").await;

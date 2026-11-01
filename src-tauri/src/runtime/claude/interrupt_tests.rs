@@ -42,6 +42,7 @@ fn runtime_over(
         }),
         pid,
         environment_variables: String::new(),
+        provider: ClaudeCli,
     })
 }
 

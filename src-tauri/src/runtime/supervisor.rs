@@ -118,9 +118,9 @@ pub(crate) async fn close_orphaned_agent_runs(
         let agent_id: Uuid = row.get("agent_id");
         let runtime: String = row.get("runtime");
         let owned = if runtime == "claude" {
-            claude::claude_runtime_owns_turn(claude_registry, agent_id).await
+            claude_registry.owns_turn(agent_id).await
         } else {
-            codex::codex_runtime_owns_turn(codex_registry, agent_id).await
+            codex_registry.owns_turn(agent_id).await
         };
         if !owned {
             close_orphaned_agent_run(pool, agent_id, run_id).await?;
