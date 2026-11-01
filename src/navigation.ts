@@ -1,4 +1,10 @@
 import { withoutAppModal, type AppModal } from "./app-modal-history";
+import { resolveActiveChannelId } from "./state-sync";
+
+export type ActiveTab = "chat" | "tasks" | "github" | "wiki";
+
+/** The thread each channel last showed, so returning to it reopens that thread. */
+export type ChannelThreadMemory = Record<string, string | null>;
 
 /**
  * Which view `App()` shows, kept in one reducer so each navigation step is a
@@ -6,6 +12,11 @@ import { withoutAppModal, type AppModal } from "./app-modal-history";
  * `App()` one group at a time; docs/navigation.md lists the rules they follow.
  */
 export type NavigationState = {
+  activeChannelId: string;
+  /** The thread shown for the active channel. */
+  activeThreadId: string | null;
+  activeTab: ActiveTab;
+  channelThreadMemory: ChannelThreadMemory;
   /** The agent whose panel is open. */
   selectedAgentId: string | null;
   /**
@@ -22,6 +33,20 @@ export type NavigationState = {
 };
 
 export type NavigationAction =
+  /** Makes `channelId` the active channel, switching to `tab` when given. */
+  | { type: "goToChannel"; channelId: string; tab?: ActiveTab }
+  /**
+   * Keeps the active channel when it is still in `channels`; otherwise picks
+   * `preferredChannelId` or the first channel.
+   */
+  | { type: "resolveChannel"; channels: readonly { id: string }[]; preferredChannelId?: string }
+  | { type: "switchTab"; tab: ActiveTab }
+  /** Shows `threadId` (or no thread) and remembers it for `channelId`. */
+  | { type: "selectThread"; threadId: string | null; channelId: string | null }
+  /** Shows no thread, leaving the channel's remembered thread as it is. */
+  | { type: "clearThread" }
+  /** Forgets the thread remembered for `channelId`. */
+  | { type: "forgetChannelThread"; channelId: string }
   /**
    * Opens an agent's panel. `fromHome` marks a panel opened from phone Home.
    * Opening the agent that is already open keeps its origin.
@@ -52,9 +77,15 @@ export type NavigationAction =
   | { type: "openPanel"; modal: AppModal }
   /** Closes the full-screen panel, or only `modal` when given. */
   | { type: "closePanel"; modal?: AppModal }
-  /** Shows the view a browser history entry recorded. */
+  /**
+   * Shows the view a browser history entry recorded. An entry without a
+   * channel keeps the current channel and thread.
+   */
   | {
     type: "restore";
+    activeChannelId: string | null;
+    activeThreadId: string | null;
+    activeTab: ActiveTab;
     selectedAgentId: string | null;
     threadRequested: boolean;
     showMobileSidebar: boolean;
@@ -62,8 +93,20 @@ export type NavigationAction =
   };
 
 /** Phones start on Home. */
-export function initialNavigationState(showMobileSidebar: boolean): NavigationState {
+export function initialNavigationState({
+  activeChannelId = "",
+  channelThreadMemory = {},
+  showMobileSidebar,
+}: {
+  activeChannelId?: string;
+  channelThreadMemory?: ChannelThreadMemory;
+  showMobileSidebar: boolean;
+}): NavigationState {
   return {
+    activeChannelId,
+    activeThreadId: null,
+    activeTab: "chat",
+    channelThreadMemory,
     selectedAgentId: null,
     agentOrigin: null,
     threadRequested: false,
@@ -75,6 +118,26 @@ export function initialNavigationState(showMobileSidebar: boolean): NavigationSt
 /** Returns `state` itself when an action changes nothing. */
 export function navigationReducer(state: NavigationState, action: NavigationAction): NavigationState {
   switch (action.type) {
+    case "goToChannel":
+      return patch(state, action.tab === undefined
+        ? { activeChannelId: action.channelId }
+        : { activeChannelId: action.channelId, activeTab: action.tab });
+    case "resolveChannel":
+      return patch(state, {
+        activeChannelId: resolveActiveChannelId(action.channels, state.activeChannelId, action.preferredChannelId),
+      });
+    case "switchTab":
+      return patch(state, { activeTab: action.tab });
+    case "selectThread":
+      return showThread(state, action.threadId, action.channelId);
+    case "clearThread":
+      return patch(state, { activeThreadId: null });
+    case "forgetChannelThread": {
+      if (!Object.prototype.hasOwnProperty.call(state.channelThreadMemory, action.channelId)) return state;
+      const channelThreadMemory = { ...state.channelThreadMemory };
+      delete channelThreadMemory[action.channelId];
+      return { ...state, channelThreadMemory };
+    }
     case "openAgent":
       return showAgent(state, action.agentId, action.fromHome ? "home" : undefined);
     case "closeAgent":
@@ -106,13 +169,25 @@ export function navigationReducer(state: NavigationState, action: NavigationActi
       return patch(state, {
         activeModal: action.modal === undefined ? null : withoutAppModal(state.activeModal, action.modal),
       });
-    case "restore":
-      return patch(showAgent(state, action.selectedAgentId, undefined), {
+    case "restore": {
+      const withChannel = action.activeChannelId
+        ? showThread(patch(state, { activeChannelId: action.activeChannelId }), action.activeThreadId, action.activeChannelId)
+        : state;
+      return patch(showAgent(withChannel, action.selectedAgentId, undefined), {
+        activeTab: action.activeTab,
         threadRequested: action.threadRequested,
         showMobileSidebar: action.showMobileSidebar,
         activeModal: action.activeModal,
       });
+    }
   }
+}
+
+function showThread(state: NavigationState, activeThreadId: string | null, channelId: string | null): NavigationState {
+  const remember = Boolean(channelId) && state.channelThreadMemory[channelId!] !== activeThreadId;
+  return patch(state, remember
+    ? { activeThreadId, channelThreadMemory: { ...state.channelThreadMemory, [channelId!]: activeThreadId } }
+    : { activeThreadId });
 }
 
 /** An origin of `undefined` keeps the current one while the same agent stays open. */

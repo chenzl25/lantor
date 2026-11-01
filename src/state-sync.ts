@@ -454,7 +454,7 @@ export function applySnapshot(
 }
 
 export function resolveActiveChannelId(
-  channels: Channel[],
+  channels: readonly { id: string }[],
   currentChannelId: string,
   preferredChannelId?: string,
 ) {
