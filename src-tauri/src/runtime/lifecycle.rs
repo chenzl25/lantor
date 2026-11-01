@@ -14,7 +14,8 @@ use uuid::Uuid;
 use crate::app::{to_string, CommandResult};
 use crate::runtime::turn_outcome::retry_transient_sqlite;
 use crate::ui_notifications::{
-    enqueue_ui_agent_run_changed_in_tx, enqueue_ui_work_item_changed_in_tx,
+    enqueue_ui_agent_run_changed_in_tx, enqueue_ui_event_in_tx, enqueue_ui_work_item_changed_in_tx,
+    UiEvent,
 };
 
 /// How a warm runtime start failed before its turn was actually sent.
@@ -262,54 +263,95 @@ pub(crate) async fn idle_agent_waiting_for_login(
     Ok(())
 }
 
+/// A work item the startup sweep finished.
+pub(crate) struct SweptWorkItem {
+    pub(crate) id: Uuid,
+    pub(crate) agent_id: Uuid,
+    pub(crate) run_id: Option<Uuid>,
+    pub(crate) status: String,
+}
+
+/// What the startup sweep closed, for the caller's follow-up.
+pub(crate) struct StartupSweep {
+    /// Closed runs with their agents.
+    pub(crate) runs: Vec<(Uuid, Uuid)>,
+    pub(crate) work_items: Vec<SweptWorkItem>,
+}
+
 /// At supervisor startup no run is live any more: close every run still
 /// marked live, fail their running work items, finish cancels nothing can
 /// complete now, and return busy agents to idle.
-pub(crate) async fn close_orphaned_runs_at_startup(pool: &SqlitePool) -> CommandResult<()> {
-    sqlx::query(
+pub(crate) async fn close_orphaned_runs_at_startup(
+    pool: &SqlitePool,
+) -> CommandResult<StartupSweep> {
+    let mut transaction = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(to_string)?;
+    let runs: Vec<(Uuid, Uuid)> = sqlx::query(
         r#"
         update agent_runs
         set status = 'unknown', stopped_at = coalesce(stopped_at, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
         where stopped_at is null and status in ('starting', 'running', 'stopping')
+        returning id, agent_id
         "#,
     )
-    .execute(pool)
+    .fetch_all(&mut *transaction)
     .await
-    .map_err(to_string)?;
-    sqlx::query(
+    .map_err(to_string)?
+    .into_iter()
+    .map(|row| (row.get("id"), row.get("agent_id")))
+    .collect();
+    let agents_reset = sqlx::query(
         "update agents set status = 'idle' where status in ('queued', 'running', 'stopping')",
     )
-    .execute(pool)
+    .execute(&mut *transaction)
     .await
-    .map_err(to_string)?;
-    sqlx::query(
-        r#"
-        update agent_work_items
-        set status = 'failed',
-            completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where status = 'running'
-        "#,
-    )
-    .execute(pool)
-    .await
-    .map_err(to_string)?;
+    .map_err(to_string)?
+    .rows_affected();
     // A `cancelling` item can only be completed by a live stop path; after a
     // restart none exists, so finalize it instead of leaving it stuck forever.
-    sqlx::query(
+    let work_items: Vec<SweptWorkItem> = sqlx::query(
         r#"
         update agent_work_items
-        set status = 'cancelled',
+        set status = case status when 'cancelling' then 'cancelled' else 'failed' end,
             completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
             updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-        where status = 'cancelling'
+        where status in ('running', 'cancelling')
+        returning id, agent_id, run_id, status
         "#,
     )
-    .execute(pool)
+    .fetch_all(&mut *transaction)
     .await
-    .map_err(to_string)?;
+    .map_err(to_string)?
+    .into_iter()
+    .map(|row| SweptWorkItem {
+        id: row.get("id"),
+        agent_id: row.get("agent_id"),
+        run_id: row.get("run_id"),
+        status: row.get("status"),
+    })
+    .collect();
 
-    Ok(())
+    for (run_id, _) in &runs {
+        enqueue_ui_agent_run_changed_in_tx(&mut transaction, *run_id, "orphaned_run_closed")
+            .await?;
+    }
+    for work_item in &work_items {
+        enqueue_ui_work_item_changed_in_tx(&mut transaction, work_item.id, "work_item_finished")
+            .await?;
+    }
+    if agents_reset > 0 {
+        enqueue_ui_event_in_tx(
+            &mut transaction,
+            &UiEvent::Refresh {
+                reason: "agent_updated",
+            },
+        )
+        .await?;
+    }
+    transaction.commit().await.map_err(to_string)?;
+    Ok(StartupSweep { runs, work_items })
 }
 
 /// Closes a live run no runtime owns. Returns the work items it finished with
