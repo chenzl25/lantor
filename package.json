@@ -26,6 +26,7 @@
     "test:channel-reading": "node tests/channel-reading-position.e2e.mjs",
     "test:mobile-performance": "node tests/mobile-performance.e2e.mjs",
     "test:avatar-cache": "node tests/avatar-cache.e2e.mjs",
+    "test:navigation": "node tests/navigation-history.e2e.mjs",
     "dev": "vite --host 127.0.0.1",
     "web:backend": "cargo run --manifest-path src-tauri/Cargo.toml -- --web-only",
     "web:dev": "npm run build && npm run web:backend",
