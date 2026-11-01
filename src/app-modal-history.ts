@@ -1,4 +1,19 @@
-export type AppModal = "search" | "activity" | "saved" | "needs";
+export const APP_MODALS = ["search", "activity", "saved", "needs"] as const;
+
+/** The full-screen app panels. At most one is open at a time. */
+export type AppModal = (typeof APP_MODALS)[number];
+
+export function isAppModal(value: unknown): value is AppModal {
+  return typeof value === "string" && (APP_MODALS as readonly string[]).includes(value);
+}
+
+/**
+ * The open panel after `modal` is dismissed: dismissing a panel that is not
+ * the open one leaves the open one alone.
+ */
+export function withoutAppModal(current: AppModal | null, modal: AppModal): AppModal | null {
+  return current === modal ? null : current;
+}
 
 export type AppModalHistoryEntry = {
   index: number;

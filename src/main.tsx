@@ -38,10 +38,12 @@ import { APP_DISPLAY_NAME } from "./branding";
 import startupLogo from "../public/lantor-icon-v2.png";
 import "../public/startup.css";
 import {
+  isAppModal,
   resolveAppModalHistoryPop,
   shouldPopAppModalHistory,
   shouldReplaceActiveAppModalHistory,
   shouldReplaceAppModalHistory,
+  withoutAppModal,
   type AppModal,
 } from "./app-modal-history";
 import { AgentDetailDrawer } from "./components/AgentDetailDrawer";
@@ -381,13 +383,7 @@ function isAppHistoryState(value: unknown): value is AppHistoryState {
     && typeof state.showMobileSidebar === "boolean"
     && (state.selectedAgentId === null || typeof state.selectedAgentId === "string")
     && (state.focusedMessageId === undefined || state.focusedMessageId === null || typeof state.focusedMessageId === "string")
-    && (
-      state.activeModal === null ||
-      state.activeModal === "search" ||
-      state.activeModal === "activity" ||
-      state.activeModal === "saved" ||
-      state.activeModal === "needs"
-    );
+    && (state.activeModal === null || isAppModal(state.activeModal));
 }
 
 function appHistoryKey(state: AppHistoryState) {
@@ -811,10 +807,15 @@ function App() {
   const createChannelSubmittingRef = useRef(false);
   const createChannelOpenedFromMobileHomeRef = useRef(false);
   const createAgentOpenedFromMobileHomeRef = useRef(false);
-  const [showSearchModal, setShowSearchModal] = useState(false);
-  const [showActivityFeedModal, setShowActivityFeedModal] = useState(false);
-  const [showSavedModal, setShowSavedModal] = useState(false);
-  const [showNeedsYouModal, setShowNeedsYouModal] = useState(false);
+  const [activeAppModal, setActiveAppModal] = useState<AppModal | null>(null);
+  const showSearchModal = activeAppModal === "search";
+  const showActivityFeedModal = activeAppModal === "activity";
+  const showSavedModal = activeAppModal === "saved";
+  const showNeedsYouModal = activeAppModal === "needs";
+  /** Closes `modal` if it is the open panel. */
+  function dismissAppModal(modal: AppModal) {
+    setActiveAppModal((current) => withoutAppModal(current, modal));
+  }
   const [showOwnerProfileModal, setShowOwnerProfileModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => getStoredThemePreference());
@@ -1008,15 +1009,6 @@ function App() {
   const searchResultAgentIdRef = useRef<string | null>(null);
   const [appHistoryIndex, setAppHistoryIndex] = useState(0);
   const [appHistoryMaxIndex, setAppHistoryMaxIndex] = useState(0);
-  const activeAppModal: AppModal | null = showSearchModal
-    ? "search"
-    : showActivityFeedModal
-      ? "activity"
-      : showSavedModal
-        ? "saved"
-        : showNeedsYouModal
-          ? "needs"
-          : null;
   const appSurfaceStateRef = useRef({
     activeModal: activeAppModal,
     blockingModalOpen: false,
@@ -2565,10 +2557,7 @@ function App() {
         event.preventDefault();
         navigateBack(() => {
           if (artifactViewer) closeArtifactViewer();
-          else if (showSearchModal) setShowSearchModal(false);
-          else if (showActivityFeedModal) setShowActivityFeedModal(false);
-          else if (showSavedModal) setShowSavedModal(false);
-          else if (showNeedsYouModal) setShowNeedsYouModal(false);
+          else if (activeAppModal) setActiveAppModal(null);
           else if (selectedAgentId) setSelectedAgentId(null);
           else if (showThread) setShowThread(false);
         });
@@ -2584,24 +2573,10 @@ function App() {
       if (event.key === "Escape") {
         const surface = appSurfaceStateRef.current;
         if (!shouldDismissOnEscape(event) || activeDialog() || surface.blockingModalOpen) return;
-        if (surface.activeModal === "search") {
+        if (surface.activeModal) {
+          const modal = surface.activeModal;
           event.preventDefault();
-          closeAppModal("search", () => setShowSearchModal(false));
-          return;
-        }
-        if (surface.activeModal === "activity") {
-          event.preventDefault();
-          closeAppModal("activity", () => setShowActivityFeedModal(false));
-          return;
-        }
-        if (surface.activeModal === "saved") {
-          event.preventDefault();
-          closeAppModal("saved", () => setShowSavedModal(false));
-          return;
-        }
-        if (surface.activeModal === "needs") {
-          event.preventDefault();
-          closeAppModal("needs", () => setShowNeedsYouModal(false));
+          closeAppModal(modal, () => dismissAppModal(modal));
           return;
         }
         if (isTextInput(event.target)) return;
@@ -2714,10 +2689,7 @@ function App() {
       setMobileSidebarDragPx(0);
       setSelectedAgentId(historyState.selectedAgentId);
       setFocusedMessageId(historyState.focusedMessageId ?? null);
-      setShowSearchModal(historyState.activeModal === "search");
-      setShowActivityFeedModal(historyState.activeModal === "activity");
-      setShowSavedModal(historyState.activeModal === "saved");
-      setShowNeedsYouModal(historyState.activeModal === "needs");
+      setActiveAppModal(historyState.activeModal);
     }
 
     window.addEventListener("popstate", onPopState);
@@ -4014,10 +3986,7 @@ function App() {
   }
 
   function returnToMobileHome() {
-    setShowSearchModal(false);
-    setShowActivityFeedModal(false);
-    setShowSavedModal(false);
-    setShowNeedsYouModal(false);
+    setActiveAppModal(null);
     setSelectedAgentId(null);
     setShowThread(false);
     setShowMobileSidebar(true);
@@ -4031,10 +4000,7 @@ function App() {
     }
     setShowMobileSidebar(false);
     setMobileSidebarFocus("home");
-    setShowActivityFeedModal(false);
-    setShowSavedModal(false);
-    setShowNeedsYouModal(false);
-    setShowSearchModal(true);
+    setActiveAppModal("search");
     void reloadUiState(["agent_work_items", "agent_activities", "thread_activities", "read_inbox_items", "dismissed_inbox_items"])
       .catch((err) => setAppError(errorMessage(err, "Couldn’t open this")));
   }
@@ -4045,10 +4011,7 @@ function App() {
     }
     setShowMobileSidebar(false);
     setMobileSidebarFocus("home");
-    setShowSearchModal(false);
-    setShowSavedModal(false);
-    setShowNeedsYouModal(false);
-    setShowActivityFeedModal(true);
+    setActiveAppModal("activity");
     void Promise.all([
       hydrateActivityFeedMessages(),
       reloadUiState(["thread_activities", "read_inbox_items", "dismissed_inbox_items"]),
@@ -4061,10 +4024,7 @@ function App() {
     }
     setShowMobileSidebar(false);
     setMobileSidebarFocus("home");
-    setShowSearchModal(false);
-    setShowActivityFeedModal(false);
-    setShowNeedsYouModal(false);
-    setShowSavedModal(true);
+    setActiveAppModal("saved");
     void markSavedMessagesRead();
   }
 
@@ -4074,10 +4034,7 @@ function App() {
     }
     setShowMobileSidebar(false);
     setMobileSidebarFocus("home");
-    setShowSearchModal(false);
-    setShowActivityFeedModal(false);
-    setShowSavedModal(false);
-    setShowNeedsYouModal(true);
+    setActiveAppModal("needs");
     void reloadUiState(["decisions", "tasks", "thread_activities"])
       .catch((err) => setAppError(errorMessage(err, "Couldn’t load Needs you")));
   }
@@ -4087,17 +4044,14 @@ function App() {
     revealThread(decision.thread_root_id ?? decision.message_id, decision.channel_id);
     setFocusedMessageId(decision.message_id);
     setActiveTab("chat");
-    setShowNeedsYouModal(false);
+    dismissAppModal("needs");
   }
 
   /** A notification tap: land in the conversation, whatever was open. */
   function openPushTarget(target: PushTarget) {
     if (!data?.channels.some((item) => item.id === target.channel_id)) return;
     setShowMobileSidebar(false);
-    setShowSearchModal(false);
-    setShowActivityFeedModal(false);
-    setShowSavedModal(false);
-    setShowNeedsYouModal(false);
+    setActiveAppModal(null);
     selectChannel(target.channel_id);
     revealThread(target.thread_root_id ?? target.message_id, target.channel_id);
     setFocusedMessageId(target.message_id);
@@ -4106,7 +4060,7 @@ function App() {
   openPushTargetRef.current = openPushTarget;
 
   function openNeedsYouTask(task: Task) {
-    setShowNeedsYouModal(false);
+    dismissAppModal("needs");
     openTask(task);
   }
 
@@ -4699,7 +4653,7 @@ function App() {
   async function openSearchResult(result: SearchResult) {
     const openedFromSearch = showSearchModal;
     if (result.kind === "wiki") {
-      setShowSearchModal(false);
+      dismissAppModal("search");
       if (result.channelId) {
         selectChannel(result.channelId);
         setActiveTab("wiki");
@@ -4713,7 +4667,7 @@ function App() {
     }
     if (result.kind === "artifact") {
       const artifact = data?.artifacts.find((item) => item.id === result.id);
-      setShowSearchModal(false);
+      dismissAppModal("search");
       if (artifact) {
         void openArtifact(artifact);
       } else {
@@ -4727,7 +4681,7 @@ function App() {
         searchResultThreadIdRef.current = result.threadId;
         searchResultAgentIdRef.current = null;
       }
-      setShowSearchModal(false);
+      dismissAppModal("search");
       try {
         const { threadId } = await revealMessageById(result.id);
         if (openedFromSearch) {
@@ -4757,7 +4711,7 @@ function App() {
       searchResultThreadIdRef.current = result.threadId ?? null;
       searchResultAgentIdRef.current = result.threadId ? null : openedAgentId;
     }
-    setShowSearchModal(false);
+    dismissAppModal("search");
   }
 
   function openSavedMessage(item: SavedMessage) {
@@ -4766,7 +4720,7 @@ function App() {
     revealThread(item.thread_root_id ?? item.message_id, item.channel_id);
     setFocusedMessageId(item.message_id);
     setActiveTab("chat");
-    setShowSavedModal(false);
+    dismissAppModal("saved");
   }
 
   async function persistReadActivityFeedItems(items: ActivityFeedItem[], readUntil?: string | ((item: ActivityFeedItem) => string)) {
@@ -4804,7 +4758,7 @@ function App() {
     if (item.messageId || targetThreadId) {
       try {
         await revealMessageById(item.messageId ?? targetThreadId!);
-        setShowActivityFeedModal(false);
+        dismissAppModal("activity");
       } catch (err) {
         setAppError(errorMessage(err, "Couldn’t open this"));
         console.error(err);
@@ -4816,7 +4770,7 @@ function App() {
     setActiveTab("chat");
     openThread(null, item.channelId ?? activeChannelId);
     setShowThread(false);
-    setShowActivityFeedModal(false);
+    dismissAppModal("activity");
   }
 
   async function markActivityFeedItemRead(item: ActivityFeedItem) {
@@ -5220,7 +5174,7 @@ function App() {
         onTimeRangeChange={setSearchTimeRange}
         onOpenResult={openSearchResult}
         onClear={() => setSearchQuery("")}
-        onClose={() => closeAppModal("search", () => setShowSearchModal(false))}
+        onClose={() => closeAppModal("search", () => dismissAppModal("search"))}
       />
 
       <ActivityFeedModal
@@ -5235,7 +5189,7 @@ function App() {
         onDismissItem={dismissActivityFeedItem}
         onDismissItems={dismissActivityFeedItems}
         onMarkAllRead={markAllActivityFeedRead}
-        onClose={() => closeAppModal("activity", () => setShowActivityFeedModal(false))}
+        onClose={() => closeAppModal("activity", () => dismissAppModal("activity"))}
       />
 
       <SavedMessagesModal
@@ -5246,7 +5200,7 @@ function App() {
         ownerProfile={data.owner_profile}
         onOpenItem={openSavedMessage}
         onUnsaveItem={unsaveSavedMessage}
-        onClose={() => closeAppModal("saved", () => setShowSavedModal(false))}
+        onClose={() => closeAppModal("saved", () => dismissAppModal("saved"))}
       />
 
       <NeedsYouModal
@@ -5257,7 +5211,7 @@ function App() {
         onOpenDecision={openDecision}
         onOpenTask={openNeedsYouTask}
         onMarkTaskDone={(task) => updateTaskStatus(task, "done")}
-        onClose={() => closeAppModal("needs", () => setShowNeedsYouModal(false))}
+        onClose={() => closeAppModal("needs", () => dismissAppModal("needs"))}
       />
 
       <ArtifactViewerModal
