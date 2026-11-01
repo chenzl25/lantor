@@ -28,7 +28,9 @@ Mod+] all walk the same list.
   so Forward reopens it.
 - Switching straight from one panel to another replaces the entry.
 - Opening a quoted message or thread pushes one entry; Back returns to the
-  quoting message and highlights it.
+  quoting message and highlights it. This holds when the quote is in the same
+  channel and Back changes nothing else on screen: the next view still gets
+  its own entry.
 - A new view after going back drops the forward entries, as browsers do.
 - Each entry stores the view in `history.state` (`AppHistoryState`); reload
   keeps the current position without adding entries.

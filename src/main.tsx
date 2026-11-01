@@ -1015,6 +1015,9 @@ function App() {
   const searchResultThreadIdRef = useRef<string | null>(null);
   const searchResultAgentIdRef = useRef<string | null>(null);
   const [appHistoryIndex, setAppHistoryIndex] = useState(0);
+  // Bumped on each restore so the history effect runs even when the restored
+  // view looks the same, and the restore mark cannot outlive its restore.
+  const [appHistoryRestoreCount, setAppHistoryRestoreCount] = useState(0);
   const [appHistoryMaxIndex, setAppHistoryMaxIndex] = useState(0);
   const appSurfaceStateRef = useRef({
     activeModal: activeAppModal,
@@ -2671,6 +2674,7 @@ function App() {
         return;
       }
       restoringAppHistoryRef.current = true;
+      setAppHistoryRestoreCount((count) => count + 1);
       appHistoryReadyRef.current = true;
       setAppHistoryPosition(historyState.index);
       const activeChannelIdFromState = historyState.activeChannelId ?? null;
@@ -2789,6 +2793,7 @@ function App() {
     activeAppModal,
     showMobileSidebar,
     showThread,
+    appHistoryRestoreCount,
   ]);
 
   useEffect(() => {

@@ -20,8 +20,9 @@ const message = (n, channel_id, body, extra = {}) => ({ id: id(n), seq: n, chann
 const alphaRoot = message(1, alphaId, "Alpha root");
 const betaRoot = message(3, betaId, "Beta root");
 const betaQuote = message(5, betaId, `Compare [[message:${alphaRoot.id}]] with [[thread:${alphaRoot.id}]]`);
+const betaLocalQuote = message(7, betaId, `Recall [[message:${betaRoot.id}]]`);
 const messages = [alphaRoot, message(2, alphaId, "Alpha reply", { thread_root_id: alphaRoot.id }),
-  betaRoot, message(4, betaId, "Beta reply", { thread_root_id: betaRoot.id }), betaQuote, message(6, dmId, "Direct conversation")];
+  betaRoot, message(4, betaId, "Beta reply", { thread_root_id: betaRoot.id }), betaQuote, message(6, dmId, "Direct conversation"), betaLocalQuote];
 const channels = [{ id: alphaId, name: "alpha", kind: "channel", dm_agent_id: null },
   { id: betaId, name: "beta", kind: "channel", dm_agent_id: null },
   { id: dmId, name: `dm:${agent.id}`, kind: "dm", dm_agent_id: agent.id }]
@@ -77,7 +78,8 @@ const view = page => page.evaluate(() => {
       .map(d => d.getAttribute("aria-label") ?? document.getElementById(d.getAttribute("aria-labelledby"))?.textContent).join(",") || null,
     home: document.querySelector("main.app")?.classList.contains("mobile-sidebar-open") ?? false,
     jumped: [...document.querySelectorAll(".conversation [data-jump-focused=true]")]
-      .map(row => row.textContent.includes("Compare") ? "quote" : row.textContent.includes("Alpha root") ? "alpha" : "other").join(",") || null,
+      .map(row => row.textContent.includes("Compare") ? "quote" : row.textContent.includes("Alpha root") ? "alpha"
+        : row.textContent.includes("Beta root") ? "beta" : "other").join(",") || null,
     index: history.state?.index ?? null,
     entries: history.length,
     back: document.querySelector("[aria-label='Go back']")?.disabled === false,
@@ -199,6 +201,19 @@ async function references(page, name) {
   await expectView(page, { channel: "alpha", thread: "alpha", index: 2, entries: entries + 1 }, "a quoted thread is one entry");
   await page.goBack();
   await expectView(page, { channel: "beta", thread: null, index: 1 }, "one Back closes the quoted thread");
+
+  // A quote of a message in the same view: Back changes nothing on screen, and
+  // the next view still gets its own entry.
+  const localQuote = page.locator(`.conversation [data-message-id="${betaLocalQuote.id}"]`);
+  await localQuote.locator(".message-reference-card.reference-message").click();
+  await expectView(page, { channel: "beta", thread: null, jumped: "beta", index: 2 }, "a quote in the same channel is one entry");
+  await page.goBack();
+  await expectView(page, { channel: "beta", thread: null, index: 1 }, "Back returns to the quote in the same channel");
+  const betaRow = page.locator(`.conversation [data-message-id="${betaRoot.id}"]`);
+  await betaRow.hover(); await betaRow.getByRole("button", { name: "View replies", exact: true }).click();
+  await expectView(page, { channel: "beta", thread: "beta", index: 2 }, "the next view after that Back is its own entry");
+  await page.goBack();
+  await expectView(page, { channel: "beta", thread: null, index: 1 }, "Back closes that thread");
   console.log(`${name}: desktop quote navigation passed`);
 }
 
