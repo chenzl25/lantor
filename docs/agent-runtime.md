@@ -39,7 +39,10 @@ has one function per transition:
   (`mark_agent_queued_in_tx`), a run is created with its work item running
   (`create_run_in_tx`), and its process comes up (`mark_run_running_in_tx`).
   A Claude follow-up that becomes its own turn gets a run that starts running
-  (`start_follow_up_run`).
+  (`start_follow_up_run`). A start command that ends without leaving a run
+  (its request already finished, the budget is spent, the runtime would not
+  start) returns a still-queued agent to idle
+  (`idle_agent_after_start_command_in_tx`).
 - Follow-ups joining a running turn: a Codex steer joins the run
   (`join_work_item_to_run`), goes back to the queue if it cannot be sent
   (`return_steer_to_queue`), and settles when the turn ends

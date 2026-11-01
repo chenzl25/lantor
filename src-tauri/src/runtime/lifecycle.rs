@@ -254,6 +254,54 @@ pub(crate) async fn mark_agent_runtime_failed(
     transaction.commit().await.map_err(to_string)
 }
 
+/// A start command that ended without leaving a run behind: an agent still
+/// queued for it goes back to idle, unless another start is pending or a run
+/// of it is live. Runs in the caller's transaction, after the command is
+/// marked finished.
+pub(crate) async fn idle_agent_after_start_command_in_tx(
+    transaction: &mut Transaction<'_, Sqlite>,
+    agent_id: Uuid,
+) -> CommandResult<()> {
+    let idled = sqlx::query(
+        r#"
+        update agents
+        set status = 'idle'
+        where id = $1
+          and status = 'queued'
+          and not exists (
+              select 1
+              from agent_runs
+              where agent_id = $1
+                and stopped_at is null
+                and status in ('starting', 'running', 'stopping')
+          )
+          and not exists (
+              select 1
+              from supervisor_commands
+              where agent_id = $1
+                and command_type = 'start_agent'
+                and status in ('pending', 'running')
+          )
+        "#,
+    )
+    .bind(agent_id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(to_string)?
+    .rows_affected()
+        > 0;
+    if idled {
+        enqueue_ui_event_in_tx(
+            transaction,
+            &UiEvent::Refresh {
+                reason: "agent_updated",
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 /// A queued agent whose provider needs a login goes back to idle; its request
 /// stays queued for when the login works again.
 pub(crate) async fn idle_agent_waiting_for_login(
