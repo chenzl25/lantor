@@ -46,7 +46,12 @@ import {
   shouldReplaceAppModalHistory,
   type AppModal,
 } from "./app-modal-history";
-import { initialNavigationState, navigationReducer } from "./navigation";
+import {
+  initialNavigationState,
+  navigationReducer,
+  type ActiveTab,
+  type ChannelThreadMemory,
+} from "./navigation";
 import { AgentDetailDrawer } from "./components/AgentDetailDrawer";
 import type { AgentPerformance } from "./components/AgentDetailDrawer";
 import { AgentFormModal } from "./components/AgentFormModal";
@@ -129,7 +134,6 @@ import {
   reconcileHydratedMessageDelta,
   reconcileHydration,
   reconcileThreadHydration,
-  resolveActiveChannelId,
   type MessageDelta,
   type UiBackendEvent,
 } from "./state-sync";
@@ -312,8 +316,6 @@ type ArtifactViewerState = {
   loading: boolean;
   error: string | null;
 };
-
-type ActiveTab = "chat" | "tasks" | "github" | "wiki";
 
 type AppHistoryState = {
   __lantorUiHistory?: true;
@@ -568,8 +570,6 @@ type ComposerDraftState = {
   attachments: DraftAttachment[];
 };
 
-type ChannelThreadMemory = Record<string, string | null>;
-
 const EMPTY_COMPOSER_DRAFT: ComposerDraftState = {
   text: "",
   attachments: [],
@@ -767,13 +767,20 @@ function App() {
       setData(update);
     });
   }, []);
-  const [activeChannelId, setActiveChannelId] = useState<string>(() => getStoredActiveChannelId());
+  const [navigation, dispatchNavigation] = useReducer(
+    navigationReducer,
+    null,
+    () => initialNavigationState({
+      activeChannelId: getStoredActiveChannelId(),
+      channelThreadMemory: loadChannelThreadMemory(),
+      showMobileSidebar: isMobileViewport(),
+    }),
+  );
+  const { activeChannelId, activeThreadId, activeTab, channelThreadMemory } = navigation;
+  const switchTab = useCallback((tab: ActiveTab) => dispatchNavigation({ type: "switchTab", tab }), []);
   // Backend event subscriptions are long-lived; refresh callbacks must read the
   // latest channel instead of the value captured when the listener was created.
   const activeChannelIdRef = useRef(activeChannelId);
-  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
-  const [channelThreadMemory, setChannelThreadMemory] = useState<ChannelThreadMemory>(() => loadChannelThreadMemory());
-  const [activeTab, setActiveTab] = useState<ActiveTab>("chat");
   const [rootComposerDrafts, setRootComposerDrafts] = useState<Record<string, ComposerDraftState>>({});
   const [replyComposerDrafts, setReplyComposerDrafts] = useState<Record<string, ComposerDraftState>>({});
   const [taskTitleDrafts, setTaskTitleDrafts] = useState<Record<string, string>>({});
@@ -797,11 +804,6 @@ function App() {
   const [agentDraft, setAgentDraft] = useState<AgentForm>(() => newAgentDraft());
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [agentEdit, setAgentEdit] = useState<AgentForm>(EMPTY_AGENT_FORM);
-  const [navigation, dispatchNavigation] = useReducer(
-    navigationReducer,
-    null,
-    () => initialNavigationState(isMobileViewport()),
-  );
   const selectedAgentId = navigation.selectedAgentId;
   const activeAppModal = navigation.activeModal;
   const showMobileSidebar = navigation.showMobileSidebar;
@@ -1249,15 +1251,13 @@ function App() {
         .map(([scope]) => [scope, current[scope]]));
       return { ...reconciled.data, ...liveScopes };
     });
-    setActiveChannelId((prev) => {
-      // Use the merged list so a still-optimistic channel keeps the active
-      // selection instead of falling back to channels[0] when a stale bootstrap
-      // that predates its creation lands.
-      return resolveActiveChannelId(
-        refreshed.channels,
-        prev,
-        preferredActiveChannelId,
-      );
+    // Use the merged list so a still-optimistic channel keeps the active
+    // selection instead of falling back to channels[0] when a stale bootstrap
+    // that predates its creation lands.
+    dispatchNavigation({
+      type: "resolveChannel",
+      channels: refreshed.channels,
+      preferredChannelId: preferredActiveChannelId,
     });
     const applyEndedAt = performance.now();
     if (perf) {
@@ -1356,7 +1356,7 @@ function App() {
           for (const channel of optimistic.channels.values()) {
             if (!selectable.some((item) => item.id === channel.id) && !optimistic.removedChannelIds.has(channel.id)) selectable.push(channel);
           }
-          setActiveChannelId((current) => resolveActiveChannelId(selectable, current));
+          dispatchNavigation({ type: "resolveChannel", channels: selectable });
         }
       }
     })().finally(() => {
@@ -2647,7 +2647,7 @@ function App() {
     selectChannel(message.channel_id);
     revealThread(message.thread_root_id ?? message.id, message.channel_id);
     setFocusedMessageId(message.id);
-    setActiveTab("chat");
+    dispatchNavigation({ type: "switchTab", tab: "chat" });
     window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}`);
   }, [data]);
 
@@ -2683,14 +2683,11 @@ function App() {
         activeThreadId: activeThreadIdFromState,
         activeTab: activeTabFromState,
       });
-      if (activeChannelIdFromState) {
-        setActiveChannelId(activeChannelIdFromState);
-        setActiveThreadId(activeThreadIdFromState);
-        rememberChannelThread(activeChannelIdFromState, activeThreadIdFromState);
-      }
-      setActiveTab(activeTabFromState);
       dispatchNavigation({
         type: "restore",
+        activeChannelId: activeChannelIdFromState,
+        activeThreadId: activeThreadIdFromState,
+        activeTab: activeTabFromState,
         selectedAgentId: historyState.selectedAgentId,
         threadRequested: historyState.showThread,
         showMobileSidebar: historyState.showMobileSidebar,
@@ -3028,8 +3025,7 @@ function App() {
       && !message.thread_root_id
     ));
     if (rootExists || loadingThreadIdsRef.current.has(activeThreadId)) return;
-    setActiveThreadId(null);
-    rememberChannelThread(activeChannelId, null);
+    dispatchNavigation({ type: "selectThread", threadId: null, channelId: activeChannelId });
   }, [activeChannelId, activeThreadId, data]);
 
   const replies = useMemo(() => {
@@ -3467,7 +3463,7 @@ function App() {
 
   useEffect(() => {
     if (channel?.kind !== "dm") return;
-    setActiveTab("chat");
+    dispatchNavigation({ type: "switchTab", tab: "chat" });
     setShowChannelSettingsModal(false);
     setShowChannelAgentsModal(false);
   }, [channel?.id, channel?.kind]);
@@ -3566,7 +3562,7 @@ function App() {
     if (shouldReturnToMobileHome) {
       returnToMobileHome();
     } else if (result.channelId) {
-      setActiveChannelId(result.channelId);
+      dispatchNavigation({ type: "goToChannel", channelId: result.channelId });
       dispatchNavigation({ type: "hideHome" });
       openThread(null, result.channelId);
     }
@@ -3646,7 +3642,7 @@ function App() {
         setShowChannelSettingsModal(false);
         forgetChannelThread(channelToDelete.id);
         if (activeChannelId === channelToDelete.id) {
-          setActiveChannelId(fallbackChannelId);
+          dispatchNavigation({ type: "goToChannel", channelId: fallbackChannelId });
           openThread(rememberedThreadForChannel(fallbackChannelId), fallbackChannelId);
           if (isMobileViewport()) {
             returnToMobileHome();
@@ -3689,14 +3685,6 @@ function App() {
   function rememberedThreadForChannel(channelId: string) {
     const hydration = threadHydrationForChannel(channelId);
     return hydration.status === "ready" ? hydration.threadId : null;
-  }
-
-  function rememberChannelThread(channelId: string | null | undefined, threadId: string | null) {
-    if (!channelId) return;
-    setChannelThreadMemory((current) => {
-      if (current[channelId] === threadId) return current;
-      return { ...current, [channelId]: threadId };
-    });
   }
 
   function latestThreadActivity(threadId: string): ThreadActivity | null {
@@ -3742,12 +3730,7 @@ function App() {
 
   function forgetChannelThread(channelId: string | null | undefined) {
     if (!channelId) return;
-    setChannelThreadMemory((current) => {
-      if (!Object.prototype.hasOwnProperty.call(current, channelId)) return current;
-      const next = { ...current };
-      delete next[channelId];
-      return next;
-    });
+    dispatchNavigation({ type: "forgetChannelThread", channelId });
   }
 
   function restoreRememberedThreadForChannel(channelId: string) {
@@ -3763,13 +3746,10 @@ function App() {
     const needsMessageLoad = !initializedOlderChannelIdsRef.current.has(channelId);
     historyFocusedMessageIdRef.current = null;
     dispatchNavigation({ type: "showChannel" });
-    setActiveChannelId(channelId);
-    if (nextChannel?.kind === "dm") {
-      setActiveTab("chat");
-    }
+    dispatchNavigation({ type: "goToChannel", channelId, tab: nextChannel?.kind === "dm" ? "chat" : undefined });
     if (needsMessageLoad) {
       pendingChannelRestoreRef.current.add(channelId);
-      setActiveThreadId(null);
+      dispatchNavigation({ type: "clearThread" });
       setFocusedMessageId(null);
     } else {
       restoreRememberedThreadForChannel(channelId);
@@ -3778,8 +3758,7 @@ function App() {
 
   function openThread(threadId: string | null, channelId = activeChannelId) {
     historyFocusedMessageIdRef.current = null;
-    setActiveThreadId(threadId);
-    rememberChannelThread(channelId, threadId);
+    dispatchNavigation({ type: "selectThread", threadId, channelId });
     setFocusedMessageId(null);
     if (!threadId) return;
     setThreadUnreadCounts((current) => {
@@ -3802,8 +3781,7 @@ function App() {
     dispatchNavigation({ type: "closeAgent" });
     // An expanded thread hides the channel column, so locating must bring it back.
     setThreadExpanded(false);
-    setActiveTab("chat");
-    setActiveChannelId(message.channel_id);
+    dispatchNavigation({ type: "goToChannel", channelId: message.channel_id, tab: "chat" });
     if (isMobileViewport()) {
       dispatchNavigation({ type: "hideThread" });
     }
@@ -3903,8 +3881,7 @@ function App() {
     pendingChannelRestoreRef.current.delete(channelId);
     historyFocusedMessageIdRef.current = target.id;
     dispatchNavigation({ type: "showChannel" });
-    setActiveChannelId(channelId);
-    setActiveTab("chat");
+    dispatchNavigation({ type: "goToChannel", channelId, tab: "chat" });
     openThread(threadId, channelId);
     dispatchNavigation({ type: "revealThread" });
     setFocusedMessageId(null);
@@ -3925,8 +3902,7 @@ function App() {
       const target = messageReferenceLocation(kind, targetMessage);
       pendingChannelRestoreRef.current.delete(target.channelId);
       dispatchNavigation({ type: "showChannel" });
-      setActiveTab("chat");
-      setActiveChannelId(target.channelId);
+      dispatchNavigation({ type: "goToChannel", channelId: target.channelId, tab: "chat" });
       openThread(target.threadId, target.channelId);
       dispatchNavigation({ type: target.showThread ? "revealThread" : "hideThread" });
       // After openThread, which clears the history focus this entry records.
@@ -4043,7 +4019,7 @@ function App() {
     selectChannel(decision.channel_id);
     revealThread(decision.thread_root_id ?? decision.message_id, decision.channel_id);
     setFocusedMessageId(decision.message_id);
-    setActiveTab("chat");
+    dispatchNavigation({ type: "switchTab", tab: "chat" });
     dismissAppModal("needs");
   }
 
@@ -4055,7 +4031,7 @@ function App() {
     selectChannel(target.channel_id);
     revealThread(target.thread_root_id ?? target.message_id, target.channel_id);
     setFocusedMessageId(target.message_id);
-    setActiveTab("chat");
+    dispatchNavigation({ type: "switchTab", tab: "chat" });
   }
   openPushTargetRef.current = openPushTarget;
 
@@ -4472,7 +4448,7 @@ function App() {
         dispatchNavigation({ type: "closeAgent", agentId: agent.id });
         if (agentDm) forgetChannelThread(agentDm.id);
         if (agentDm && activeChannelId === agentDm.id) {
-          setActiveChannelId(fallbackChannelId ?? "");
+          dispatchNavigation({ type: "goToChannel", channelId: fallbackChannelId ?? "" });
           openThread(rememberedThreadForChannel(fallbackChannelId ?? ""), fallbackChannelId ?? "");
         }
       },
@@ -4531,9 +4507,8 @@ function App() {
       const channelId = await apiInvoke("open_dm_with_agent", { agentId: agent.id });
       await reloadUiState(["channels", "channel_members"]);
       dispatchNavigation({ type: "closeAgent" });
-      setActiveChannelId(channelId);
+      dispatchNavigation({ type: "goToChannel", channelId, tab: "chat" });
       restoreRememberedThreadForChannel(channelId);
-      setActiveTab("chat");
     } catch (err) {
       const message = errorMessage(err, "Couldn’t open chat");
       setAppError(message);
@@ -4596,9 +4571,8 @@ function App() {
   }
 
   function openTask(task: Task) {
-    setActiveChannelId(task.channel_id);
+    dispatchNavigation({ type: "goToChannel", channelId: task.channel_id, tab: "chat" });
     revealThread(task.message_id, task.channel_id);
-    setActiveTab("chat");
     setFocusedMessageId(null);
     window.requestAnimationFrame(() => {
       setFocusedMessageId(task.message_id);
@@ -4612,9 +4586,8 @@ function App() {
       pullNumber,
       agentId,
     });
-    setActiveChannelId(channel.id);
+    dispatchNavigation({ type: "goToChannel", channelId: channel.id, tab: "chat" });
     revealThread(result.thread_root_id, channel.id);
-    setActiveTab("chat");
     setFocusedMessageId(result.thread_root_id);
     return result;
   }
@@ -4626,18 +4599,17 @@ function App() {
       issueNumber,
       agentId,
     });
-    setActiveChannelId(channel.id);
+    dispatchNavigation({ type: "goToChannel", channelId: channel.id, tab: "chat" });
     revealThread(result.thread_root_id, channel.id);
-    setActiveTab("chat");
     setFocusedMessageId(result.thread_root_id);
     return result;
   }
 
   async function openWorkItem(item: AgentWorkItem, focusedMessageIdOverride?: string | null) {
-    if (item.channel_id) setActiveChannelId(item.channel_id);
+    if (item.channel_id) dispatchNavigation({ type: "goToChannel", channelId: item.channel_id });
     if (item.thread_root_id) {
       revealThread(item.thread_root_id, item.channel_id ?? activeChannelId);
-      setActiveTab("chat");
+      dispatchNavigation({ type: "switchTab", tab: "chat" });
     }
     const agent = data?.agents.find((candidate) => candidate.id === item.agent_id);
     if (agent) dispatchNavigation({ type: "openAgent", agentId: agent.id });
@@ -4660,7 +4632,7 @@ function App() {
       dismissAppModal("search");
       if (result.channelId) {
         selectChannel(result.channelId);
-        setActiveTab("wiki");
+        dispatchNavigation({ type: "switchTab", tab: "wiki" });
       }
       if (openedFromSearch) {
         replaceNextAppHistoryEntryRef.current = true;
@@ -4708,7 +4680,7 @@ function App() {
     if (result.channelId) selectChannel(result.channelId);
     if (result.threadId) {
       revealThread(result.threadId, result.channelId ?? activeChannelId);
-      setActiveTab("chat");
+      dispatchNavigation({ type: "switchTab", tab: "chat" });
     }
     if (openedFromSearch) {
       replaceNextAppHistoryEntryRef.current = true;
@@ -4723,7 +4695,7 @@ function App() {
     selectChannel(item.channel_id);
     revealThread(item.thread_root_id ?? item.message_id, item.channel_id);
     setFocusedMessageId(item.message_id);
-    setActiveTab("chat");
+    dispatchNavigation({ type: "switchTab", tab: "chat" });
     dismissAppModal("saved");
   }
 
@@ -4771,7 +4743,7 @@ function App() {
     }
     if (item.channelId) selectChannel(item.channelId);
     dispatchNavigation({ type: "closeAgent" });
-    setActiveTab("chat");
+    dispatchNavigation({ type: "switchTab", tab: "chat" });
     openThread(null, item.channelId ?? activeChannelId);
     dispatchNavigation({ type: "hideThread" });
     dismissAppModal("activity");
@@ -5270,7 +5242,7 @@ function App() {
         draft={draft}
         draftAttachments={draftAttachments}
         taskTitleDrafts={taskTitleDrafts}
-        setActiveTab={setActiveTab}
+        setActiveTab={switchTab}
         setActiveThreadId={revealThread}
         openMobileSidebar={openMobileSidebarFromContent}
         canNavigateBack={appHistoryIndex > 0}

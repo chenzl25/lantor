@@ -8,8 +8,8 @@ import {
   type NavigationState,
 } from "../src/navigation";
 
-const desktop = initialNavigationState(false);
-const phone = initialNavigationState(true);
+const desktop = initialNavigationState({ activeChannelId: "c1", showMobileSidebar: false });
+const phone = initialNavigationState({ activeChannelId: "c1", showMobileSidebar: true });
 
 function run(start: NavigationState, ...actions: NavigationAction[]): NavigationState {
   return actions.reduce(navigationReducer, start);
@@ -17,6 +17,10 @@ function run(start: NavigationState, ...actions: NavigationAction[]): Navigation
 
 test("phones start on Home, desktops on the channel", () => {
   assert.deepEqual(phone, {
+    activeChannelId: "c1",
+    activeThreadId: null,
+    activeTab: "chat",
+    channelThreadMemory: {},
     selectedAgentId: null,
     agentOrigin: null,
     threadRequested: false,
@@ -119,17 +123,35 @@ test("closing a given panel leaves another panel open", () => {
 
 test("restoring a history entry shows its view; the agent's Home origin survives only for the same agent", () => {
   const fromHome = run(desktop, { type: "openAgent", agentId: "a", fromHome: true });
-  const entry = { selectedAgentId: "b", threadRequested: true, showMobileSidebar: false, activeModal: "saved" } as const;
-  assert.deepEqual(navigationReducer(fromHome, { type: "restore", ...entry }), { ...entry, agentOrigin: null });
+  const entry = {
+    activeChannelId: "c2",
+    activeThreadId: "t2",
+    activeTab: "tasks",
+    selectedAgentId: "b",
+    threadRequested: true,
+    showMobileSidebar: false,
+    activeModal: "saved",
+  } as const;
+  assert.deepEqual(navigationReducer(fromHome, { type: "restore", ...entry }), {
+    ...entry,
+    channelThreadMemory: { c2: "t2" },
+    agentOrigin: null,
+  });
 
   const sameAgent = navigationReducer(fromHome, {
     type: "restore",
+    activeChannelId: "c1",
+    activeThreadId: null,
+    activeTab: "chat",
     selectedAgentId: "a",
     threadRequested: false,
     showMobileSidebar: false,
     activeModal: null,
   });
-  assert.equal(sameAgent, fromHome);
+  assert.equal(sameAgent.selectedAgentId, "a");
+  assert.equal(sameAgent.agentOrigin, "home");
+  // Restoring a channel also remembers the entry's thread for it.
+  assert.deepEqual(sameAgent.channelThreadMemory, { c1: null });
 });
 
 test("actions that change nothing return the same state, so React skips the render", () => {
@@ -140,7 +162,21 @@ test("actions that change nothing return the same state, so React skips the rend
     { type: "showChannel" },
     { type: "hideHome" },
     { type: "closePanel" },
-    { type: "restore", selectedAgentId: null, threadRequested: false, showMobileSidebar: false, activeModal: null },
+    {
+      type: "restore",
+      activeChannelId: null,
+      activeThreadId: null,
+      activeTab: "chat",
+      selectedAgentId: null,
+      threadRequested: false,
+      showMobileSidebar: false,
+      activeModal: null,
+    },
+    { type: "goToChannel", channelId: "c1" },
+    { type: "resolveChannel", channels: [{ id: "c0" }, { id: "c1" }] },
+    { type: "switchTab", tab: "chat" },
+    { type: "clearThread" },
+    { type: "forgetChannelThread", channelId: "c9" },
   ];
   for (const action of unchanged) {
     assert.equal(navigationReducer(desktop, action), desktop, action.type);
@@ -148,4 +184,69 @@ test("actions that change nothing return the same state, so React skips the rend
   assert.equal(navigationReducer(phone, { type: "returnHome" }), phone);
   assert.equal(navigationReducer(phone, { type: "showHome" }), phone);
   assert.equal(navigationReducer(phone, { type: "showSidebar" }), phone);
+});
+
+test("going to a channel switches the tab only when one is given", () => {
+  const tasks = run(desktop, { type: "switchTab", tab: "tasks" });
+  const kept = navigationReducer(tasks, { type: "goToChannel", channelId: "c2" });
+  assert.equal(kept.activeChannelId, "c2");
+  assert.equal(kept.activeTab, "tasks");
+  assert.equal(navigationReducer(tasks, { type: "goToChannel", channelId: "c2", tab: "chat" }).activeTab, "chat");
+});
+
+test("resolving the channel keeps it while it exists, else the preferred or first channel", () => {
+  const channels = [{ id: "c0" }, { id: "c1" }];
+  assert.equal(navigationReducer(desktop, { type: "resolveChannel", channels }), desktop);
+  assert.equal(
+    navigationReducer(desktop, { type: "resolveChannel", channels, preferredChannelId: "c0" }).activeChannelId,
+    "c0",
+  );
+  assert.equal(navigationReducer(desktop, { type: "resolveChannel", channels: [{ id: "c5" }] }).activeChannelId, "c5");
+  assert.equal(navigationReducer(desktop, { type: "resolveChannel", channels: [] }).activeChannelId, "");
+});
+
+test("selecting a thread remembers it for its channel; clearing it does not", () => {
+  const selected = run(desktop, { type: "selectThread", threadId: "t1", channelId: "c1" });
+  assert.equal(selected.activeThreadId, "t1");
+  assert.deepEqual(selected.channelThreadMemory, { c1: "t1" });
+
+  const cleared = navigationReducer(selected, { type: "clearThread" });
+  assert.equal(cleared.activeThreadId, null);
+  assert.deepEqual(cleared.channelThreadMemory, { c1: "t1" });
+
+  const closed = navigationReducer(selected, { type: "selectThread", threadId: null, channelId: "c1" });
+  assert.deepEqual(closed.channelThreadMemory, { c1: null });
+
+  const noChannel = navigationReducer(selected, { type: "selectThread", threadId: "t2", channelId: null });
+  assert.equal(noChannel.activeThreadId, "t2");
+  assert.equal(noChannel.channelThreadMemory, selected.channelThreadMemory);
+});
+
+test("forgetting a channel's thread removes only that channel", () => {
+  const remembered = run(
+    desktop,
+    { type: "selectThread", threadId: "t1", channelId: "c1" },
+    { type: "selectThread", threadId: "t2", channelId: "c2" },
+  );
+  assert.deepEqual(
+    navigationReducer(remembered, { type: "forgetChannelThread", channelId: "c1" }).channelThreadMemory,
+    { c2: "t2" },
+  );
+});
+
+test("a history entry without a channel keeps the current channel and thread", () => {
+  const inThread = run(desktop, { type: "selectThread", threadId: "t1", channelId: "c1" });
+  const restored = navigationReducer(inThread, {
+    type: "restore",
+    activeChannelId: null,
+    activeThreadId: "ignored",
+    activeTab: "wiki",
+    selectedAgentId: null,
+    threadRequested: false,
+    showMobileSidebar: false,
+    activeModal: null,
+  });
+  assert.equal(restored.activeChannelId, "c1");
+  assert.equal(restored.activeThreadId, "t1");
+  assert.equal(restored.activeTab, "wiki");
 });
