@@ -25,8 +25,9 @@ use crate::prompts::{
 };
 use crate::runtime::{
     lifecycle::{
-        create_run_in_tx, join_work_item_to_run, mark_agent_runtime_failed, mark_run_running_in_tx,
-        return_steer_to_queue, NewRun, WarmStartFailure,
+        create_run_in_tx, fail_work_item_before_run, join_work_item_to_run,
+        mark_agent_runtime_failed, mark_run_running_in_tx, return_steer_to_queue, NewRun,
+        WarmStartFailure,
     },
     memory_context_update,
     process::{
@@ -882,7 +883,7 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
 ) -> CommandResult<()> {
     let command_text = "codex app-server --listen stdio://".to_owned();
     let codex_prompt = build_codex_streaming_prompt(&work_item_prompt);
-    let runtime = get_or_spawn_warm_codex_runtime(
+    let runtime = match get_or_spawn_warm_codex_runtime(
         pool,
         codex_registry,
         agent_id,
@@ -892,7 +893,19 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
         &working_directory,
         &environment_variables,
     )
-    .await?;
+    .await
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            // Left queued, the request would be started again on the next
+            // pass, at once when the app-server exits during startup.
+            if let Some(work_item_id) = work_item_id {
+                fail_work_item_before_run(pool, work_item_id, "work_item_failed").await?;
+                reconcile_work_item_change(pool, work_item_id, "work_item_failed").await?;
+            }
+            return Err(err);
+        }
+    };
     let _ = request_codex_rate_limits(&runtime).await;
 
     {
@@ -2211,5 +2224,59 @@ mod tests {
         .await;
         drop_test_schema(pool, schema).await;
         result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_codex_runtime_that_cannot_start_fails_its_request() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let agent_id = insert_test_agent(&pool, "codex-start-failure").await?;
+            let work_item_id: uuid::Uuid = sqlx::query_scalar(
+                "insert into agent_work_items (agent_id, title, status) values ($1, 'start me', 'queued') returning id",
+            )
+            .bind(agent_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            // No process can start in a directory that does not exist.
+            let missing_directory = std::env::temp_dir()
+                .join(format!("lantor-missing-{}", uuid::Uuid::new_v4().simple()))
+                .to_string_lossy()
+                .into_owned();
+
+            let started = super::supervisor_start_codex_streaming_agent(
+                &pool,
+                &super::WarmCodexRegistry::default(),
+                agent_id,
+                Some(work_item_id),
+                "codex-start-failure".to_owned(),
+                String::new(),
+                String::new(),
+                String::new(),
+                missing_directory,
+                String::new(),
+                "start me".to_owned(),
+                None,
+            )
+            .await;
+            assert!(started.is_err());
+
+            // As with Claude, the request fails rather than waiting in the
+            // queue for the next start attempt.
+            let (status, completed): (String, bool) = sqlx::query_as(
+                "select status, completed_at is not null from agent_work_items where id = $1",
+            )
+            .bind(work_item_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            assert_eq!((status.as_str(), completed), ("failed", true));
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        assert!(result.is_ok(), "{:?}", result.err());
     }
 }
