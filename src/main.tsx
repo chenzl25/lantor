@@ -2696,7 +2696,11 @@ function App() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  useEffect(() => {
+  // A layout effect, so the entry for a view is written while React commits
+  // it. As a passive effect it could still be pending when a Back arrived;
+  // popstate then marked the restore, the pending run took that mark for
+  // itself, and the restored view was pushed as a new entry.
+  useLayoutEffect(() => {
     if (!data || !activeChannelId) return;
     if (isMobileViewport()) {
       if (isAppHistoryState(window.history.state)) {

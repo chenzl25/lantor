@@ -22,6 +22,8 @@ Mod+] all walk the same list.
 - A new view after going back drops the forward entries, as browsers do.
 - Each entry stores the view in `history.state` (`AppHistoryState`); reload
   keeps the current position without adding entries.
+- Entries are written in a layout effect, while React commits the view, so a
+  Back that arrives right after a change cannot find an entry still pending.
 
 ## Phone navigation
 
