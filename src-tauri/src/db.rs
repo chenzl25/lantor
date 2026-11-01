@@ -856,6 +856,7 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "text not null default ''",
     )
     .await?;
+    ensure_text_column(pool, "agents", "runtime_restart_requested_at", "text").await?;
     ensure_text_column(
         pool,
         "channel_github_repositories",

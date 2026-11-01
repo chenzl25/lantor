@@ -330,12 +330,13 @@ async fn get_or_spawn_warm_codex_runtime(
     let rotation_candidate =
         codex_context_rotation_candidate(pool, agent_id, context_rotate_threshold).await?;
     if let Some(runtime) = reusable_runtime(
+        pool,
         registry,
         agent_id,
         environment_variables,
         rotation_candidate.is_some(),
     )
-    .await
+    .await?
     {
         return Ok(runtime);
     }

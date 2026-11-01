@@ -311,8 +311,14 @@ async fn get_or_spawn_warm_claude_runtime(
     agent_id: Uuid,
     config: ClaudeRuntimeConfig<'_>,
 ) -> CommandResult<Arc<WarmClaudeRuntime>> {
-    if let Some(runtime) =
-        reusable_runtime(registry, agent_id, config.environment_variables, false).await
+    if let Some(runtime) = reusable_runtime(
+        pool,
+        registry,
+        agent_id,
+        config.environment_variables,
+        false,
+    )
+    .await?
     {
         return Ok(runtime);
     }
