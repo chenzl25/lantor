@@ -35,19 +35,21 @@ const api = createHttpServer(async (request,response) => {
   requests.push({path:url.pathname,method:request.method,query:url.search,xhr:request.headers["x-requested-with"]});
   if (networkOffline) { request.socket.destroy(); return; }
   if (url.pathname === "/__test_login") {
+    // Like Access, completing sign-in returns to the URL that needed it.
+    const back = url.searchParams.get("redirect_url") || "/";
     if (url.searchParams.has("complete")) {
       authExpired = false;
-      response.writeHead(302, { location: "/", "cache-control": "no-store" }).end();
+      response.writeHead(302, { location: back, "cache-control": "no-store" }).end();
     } else {
       response.writeHead(200, { "content-type": "text/html", "cache-control": "no-store" })
-        .end('<a href="/__test_login?complete=1">Complete sign-in</a>');
+        .end(`<a href="/__test_login?complete=1&redirect_url=${encodeURIComponent(back)}">Complete sign-in</a>`);
     }
     return;
   }
   if (authExpired) {
     // Simulate Access: AJAX gets 401; document/SSE requests get a login redirect.
     response.writeHead(request.headers["x-requested-with"] === "XMLHttpRequest" ? 401 : 302,
-      { location: "/__test_login", "cache-control": "no-store" }).end("Sign in required");
+      { location: `/__test_login?redirect_url=${encodeURIComponent(url.pathname + url.search)}`, "cache-control": "no-store" }).end("Sign in required");
     return;
   }
   if (url.pathname === "/api/events") {
@@ -159,6 +161,7 @@ try {
   assert.ok(requests.some((r)=>r.path==="/"&&r.query==="?lantor-auth=1"),"sign-in navigation bypasses the cached homepage");
   await login.getByRole("link",{name:"Complete sign-in"}).click();
   await login.getByText("Online workspace data",{exact:true}).waitFor();
+  assert.equal(new URL(login.url()).search,"","the sign-in marker is dropped after returning");
   await login.close();
   await cold.bringToFront();
   await cold.evaluate(()=>window.dispatchEvent(new Event("focus")));
@@ -172,6 +175,23 @@ try {
   assert.deepEqual(await cacheState(),initial,"authentication and login responses never enter CacheStorage");
   const afterLogin=message(90,"SSE recovered after sign-in"); state.messages.push(afterLogin); publish({type:"message_upsert",message:afterLogin});
   await page.getByText(afterLogin.body,{exact:true}).waitFor();
+
+  // The Home Screen app has no tabs, so sign-in replaces the app in place.
+  authExpired=true;
+  const home=await context.newPage();
+  await home.addInitScript(()=>Object.defineProperty(Navigator.prototype,"standalone",{configurable:true,get:()=>true}));
+  await home.goto(origin+"/?standalone=1");
+  await home.getByText("Signing in reloads Lantor. Copy any unsent text first.",{exact:true}).waitFor();
+  const openPages=context.pages().length;
+  await home.getByRole("button",{name:"Sign in again",exact:true}).click();
+  await home.getByRole("link",{name:"Complete sign-in"}).click();
+  await home.getByText("Online workspace data",{exact:true}).waitFor();
+  assert.equal(context.pages().length,openPages,"standalone sign-in opens no new window");
+  assert.equal(new URL(home.url()).search,"","standalone sign-in returns without the marker");
+  await home.close();
+  await page.bringToFront();
+  await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
+  await page.getByRole("button",{name:"Sign in again",exact:true}).waitFor({state:"hidden"});
   // WebKit's automation offline mode fails navigation even for a worker that
   // only returns a constant Response. Sever the actual server connections
   // instead, supplying just the OS online/offline signal to that engine's UI.
@@ -267,7 +287,7 @@ try {
   await devPage.getByText(recovered.body,{exact:true}).waitFor();
   assert.equal(await devPage.evaluate(async()=> (await navigator.serviceWorker.getRegistrations()).length),0);
   await devContext.close();
-  console.log(JSON.stringify({browser:isWebKit ? "webkit" : "chromium",precacheEntries:manifests.b.entries.length,versionA:manifests.a.version,versionB:manifests.b.version,checks:"proxy expiry, paused SSE retries, mobile sign-in notice, network-only sign-in, preserved drafts/attachments, cold expired-session recovery, cache allowlist, API/SSE/attachment bypass, offline open+reload, cold online recovery, SSE recovery, failed install rollback, concurrent install/cleanup, update prompt, preserved draft/stream/old lazy chunks, explicit refresh, old cache cleanup, Tauri/dev exclusion"}));
+  console.log(JSON.stringify({browser:isWebKit ? "webkit" : "chromium",precacheEntries:manifests.b.entries.length,versionA:manifests.a.version,versionB:manifests.b.version,checks:"proxy expiry, paused SSE retries, mobile sign-in notice, network-only sign-in, standalone in-place sign-in, preserved drafts/attachments, cold expired-session recovery, cache allowlist, API/SSE/attachment bypass, offline open+reload, cold online recovery, SSE recovery, failed install rollback, concurrent install/cleanup, update prompt, preserved draft/stream/old lazy chunks, explicit refresh, old cache cleanup, Tauri/dev exclusion"}));
 } finally {
   releaseAsset?.();
   await browser?.close(); await dev?.close();

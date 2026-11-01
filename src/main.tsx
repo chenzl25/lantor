@@ -75,7 +75,7 @@ import { SettingsModal, type ChatTextSize, type FontPreset, type ThemePreference
 import { Sidebar } from "./components/Sidebar";
 import { ThreadPanel } from "./components/ThreadPanel";
 import { WebAppStatus } from "./components/WebAppStatus";
-import { isWebSessionExpired, subscribeWebSession } from "./web-session";
+import { clearWebSignInMarker, isWebSessionExpired, subscribeWebSession } from "./web-session";
 import { useWebOnline } from "./hooks/useWebOnline";
 import { useVisibleChannelRead } from "./hooks/useVisibleChannelRead";
 import { useVisibleThreadRead } from "./hooks/useVisibleThreadRead";
@@ -5506,6 +5506,7 @@ const app = (
 );
 
 watchWindowErrors();
+if (!isTauriRuntime()) clearWebSignInMarker();
 createRoot(document.getElementById("root")!).render(
   shouldEnablePerfTelemetry() || shouldEnableBenchProfiler()
     ? <Profiler id="LantorApp" onRender={recordAppCommit}>{app}</Profiler>

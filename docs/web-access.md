@@ -110,6 +110,9 @@ without discarding unsent text or attachments. Failed mutations are not
 automatically resubmitted. Keep the original tab open until you have sent or
 saved its drafts.
 
+The Home Screen web app has no tabs, so there **Sign in again** signs in on the
+same page and Lantor reloads afterwards. Copy any unsent text before signing in.
+
 The sign-in navigation uses `/?lantor-auth=1`, which bypasses the app-shell
 service worker cache so the request reaches Access. API requests send
 `X-Requested-With: XMLHttpRequest` so Access returns an explicit `401` on

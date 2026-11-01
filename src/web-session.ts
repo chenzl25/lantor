@@ -61,12 +61,23 @@ export function checkWebSession(): Promise<void> {
   return probe;
 }
 
+const SIGN_IN_MARKER = "lantor-auth";
+
 export function webSignInUrl() {
   const url = new URL(window.location.href);
   url.pathname = "/";
-  url.search = "?lantor-auth=1";
+  url.search = `?${SIGN_IN_MARKER}=1`;
   url.hash = "";
   return url.href;
+}
+
+/** Access returns to the sign-in URL. Drop its marker so later reloads use the
+ * cached app shell again. */
+export function clearWebSignInMarker() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has(SIGN_IN_MARKER)) return;
+  url.searchParams.delete(SIGN_IN_MARKER);
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
 /** Keep the original page (including File objects and drafts) alive while the
