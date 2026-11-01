@@ -28,12 +28,30 @@ function publish(event) {
   const entry = {cursor:events.length+1,event:JSON.stringify(event)};
   events.push(entry); for (const client of clients) client.write(sse(entry));
 }
-let deployment = "a", brokenAsset = null, releaseAsset, waitingAsset, networkOffline = false;
+let deployment = "a", brokenAsset = null, releaseAsset, waitingAsset, networkOffline = false, authExpired = false;
 const mime = {".js":"application/javascript", ".css":"text/css", ".html":"text/html", ".png":"image/png", ".woff":"font/woff", ".woff2":"font/woff2", ".ttf":"font/ttf", ".webmanifest":"application/manifest+json"};
 const api = createHttpServer(async (request,response) => {
   const url = new URL(request.url,"http://localhost");
-  requests.push({path:url.pathname,method:request.method});
+  requests.push({path:url.pathname,method:request.method,query:url.search,xhr:request.headers["x-requested-with"]});
   if (networkOffline) { request.socket.destroy(); return; }
+  if (url.pathname === "/__test_login") {
+    // Like Access, completing sign-in returns to the URL that needed it.
+    const back = url.searchParams.get("redirect_url") || "/";
+    if (url.searchParams.has("complete")) {
+      authExpired = false;
+      response.writeHead(302, { location: back, "cache-control": "no-store" }).end();
+    } else {
+      response.writeHead(200, { "content-type": "text/html", "cache-control": "no-store" })
+        .end(`<a href="/__test_login?complete=1&redirect_url=${encodeURIComponent(back)}">Complete sign-in</a>`);
+    }
+    return;
+  }
+  if (authExpired) {
+    // Simulate Access: AJAX gets 401; document/SSE requests get a login redirect.
+    response.writeHead(request.headers["x-requested-with"] === "XMLHttpRequest" ? 401 : 302,
+      { location: `/__test_login?redirect_url=${encodeURIComponent(url.pathname + url.search)}`, "cache-control": "no-store" }).end("Sign in required");
+    return;
+  }
   if (url.pathname === "/api/events") {
     response.writeHead(200,{"content-type":"text/event-stream","cache-control":"no-cache"}); response.write(": ready\n\n");
     for (const entry of events) if (entry.cursor > Number(url.searchParams.get("cursor"))) response.write(sse(entry));
@@ -114,6 +132,66 @@ try {
 
   const draft=page.getByPlaceholder("Message #shell-test");
   await draft.fill("Keep my unsent draft");
+  await page.locator('input[type="file"]').first().setInputFiles({name:"unsent.txt",mimeType:"text/plain",buffer:Buffer.from("draft attachment")});
+  await page.getByText("unsent.txt",{exact:true}).waitFor();
+  authExpired=true;
+  for (const client of clients) client.destroy();
+  await page.getByRole("button",{name:"Sign in again",exact:true}).waitFor();
+  await page.setViewportSize({width:390,height:844});
+  const notice=await page.locator(".web-app-status").boundingBox();
+  assert.ok(notice&&notice.x>=0&&notice.x+notice.width<=390,"session notice fits mobile width");
+  if (process.env.SHELL_SCREENSHOT) await page.screenshot({path:process.env.SHELL_SCREENSHOT+"-auth.png"});
+  await page.setViewportSize({width:1200,height:900});
+  const sseAttempts=requests.filter((r)=>r.path==="/api/events").length;
+  await page.waitForTimeout(2200);
+  assert.equal(requests.filter((r)=>r.path==="/api/events").length,sseAttempts,"SSE retries pause while authentication is expired");
+  assert.ok(requests.some((r)=>r.path==="/api/health"&&r.xhr==="XMLHttpRequest"));
+  assert.equal(await draft.inputValue(),"Keep my unsent draft");
+
+  // A cached cold launch also gets an actionable sign-in notice, not a dead boot screen.
+  const cold=await context.newPage();
+  assert.equal((await cold.goto(origin+"/?expired-cold=1")).fromServiceWorker(),true);
+  await cold.getByRole("button",{name:"Sign in again",exact:true}).waitFor();
+  assert.equal(await cold.getByText("Online workspace data",{exact:true}).count(),0);
+
+  const popupPromise=context.waitForEvent("page");
+  await page.getByRole("button",{name:"Sign in again",exact:true}).click();
+  const login=await popupPromise;
+  await login.getByRole("link",{name:"Complete sign-in"}).waitFor();
+  assert.ok(requests.some((r)=>r.path==="/"&&r.query==="?lantor-auth=1"),"sign-in navigation bypasses the cached homepage");
+  await login.getByRole("link",{name:"Complete sign-in"}).click();
+  await login.getByText("Online workspace data",{exact:true}).waitFor();
+  assert.equal(new URL(login.url()).search,"","the sign-in marker is dropped after returning");
+  await login.close();
+  await cold.bringToFront();
+  await cold.evaluate(()=>window.dispatchEvent(new Event("focus")));
+  await cold.getByText("Online workspace data",{exact:true}).waitFor();
+  await cold.close();
+  await page.bringToFront();
+  await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
+  await page.getByRole("button",{name:"Sign in again",exact:true}).waitFor({state:"hidden"});
+  assert.equal(await draft.inputValue(),"Keep my unsent draft");
+  await page.getByText("unsent.txt",{exact:true}).waitFor();
+  assert.deepEqual(await cacheState(),initial,"authentication and login responses never enter CacheStorage");
+  const afterLogin=message(90,"SSE recovered after sign-in"); state.messages.push(afterLogin); publish({type:"message_upsert",message:afterLogin});
+  await page.getByText(afterLogin.body,{exact:true}).waitFor();
+
+  // The Home Screen app has no tabs, so sign-in replaces the app in place.
+  authExpired=true;
+  const home=await context.newPage();
+  await home.addInitScript(()=>Object.defineProperty(Navigator.prototype,"standalone",{configurable:true,get:()=>true}));
+  await home.goto(origin+"/?standalone=1");
+  await home.getByText("Signing in reloads Lantor. Copy any unsent text first.",{exact:true}).waitFor();
+  const openPages=context.pages().length;
+  await home.getByRole("button",{name:"Sign in again",exact:true}).click();
+  await home.getByRole("link",{name:"Complete sign-in"}).click();
+  await home.getByText("Online workspace data",{exact:true}).waitFor();
+  assert.equal(context.pages().length,openPages,"standalone sign-in opens no new window");
+  assert.equal(new URL(home.url()).search,"","standalone sign-in returns without the marker");
+  await home.close();
+  await page.bringToFront();
+  await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
+  await page.getByRole("button",{name:"Sign in again",exact:true}).waitFor({state:"hidden"});
   // WebKit's automation offline mode fails navigation even for a worker that
   // only returns a constant Response. Sever the actual server connections
   // instead, supplying just the OS online/offline signal to that engine's UI.
@@ -209,7 +287,7 @@ try {
   await devPage.getByText(recovered.body,{exact:true}).waitFor();
   assert.equal(await devPage.evaluate(async()=> (await navigator.serviceWorker.getRegistrations()).length),0);
   await devContext.close();
-  console.log(JSON.stringify({browser:isWebKit ? "webkit" : "chromium",precacheEntries:manifests.b.entries.length,versionA:manifests.a.version,versionB:manifests.b.version,checks:"cache allowlist, API/SSE/attachment bypass, offline open+reload, cold online recovery, SSE recovery, failed install rollback, concurrent install/cleanup, update prompt, preserved draft/stream/old lazy chunks, explicit refresh, old cache cleanup, Tauri/dev exclusion"}));
+  console.log(JSON.stringify({browser:isWebKit ? "webkit" : "chromium",precacheEntries:manifests.b.entries.length,versionA:manifests.a.version,versionB:manifests.b.version,checks:"proxy expiry, paused SSE retries, mobile sign-in notice, network-only sign-in, standalone in-place sign-in, preserved drafts/attachments, cold expired-session recovery, cache allowlist, API/SSE/attachment bypass, offline open+reload, cold online recovery, SSE recovery, failed install rollback, concurrent install/cleanup, update prompt, preserved draft/stream/old lazy chunks, explicit refresh, old cache cleanup, Tauri/dev exclusion"}));
 } finally {
   releaseAsset?.();
   await browser?.close(); await dev?.close();

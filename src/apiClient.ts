@@ -9,6 +9,7 @@ import type {
 } from "./api-contract";
 
 import { subscribeWebEvents, type EventSubscription } from "./web-event-stream";
+import { sessionFetch } from "./web-session";
 
 const UI_REFRESH_EVENT = "lantor://refresh";
 
@@ -94,7 +95,7 @@ async function desktopFetch(path: string, init: RequestInit = {}): Promise<Respo
 }
 
 function apiFetch(path: string, init?: RequestInit): Promise<Response> {
-  return isTauriRuntime() ? desktopFetch(path, init) : fetch(path, init);
+  return isTauriRuntime() ? desktopFetch(path, init) : sessionFetch(path, init);
 }
 
 function requestApi(command: string, args: Record<string, unknown>): Promise<Response> {

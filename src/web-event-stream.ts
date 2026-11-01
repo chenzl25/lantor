@@ -1,3 +1,5 @@
+import { checkWebSession, isWebSessionExpired, subscribeWebSession } from "./web-session";
+
 export type EventReplay = {
   cursor: number;
   replayGap: boolean;
@@ -39,7 +41,7 @@ export function subscribeWebEvents(
     return true;
   }
   function connect() {
-    if (disposed || source) return;
+    if (disposed || source || isWebSessionExpired()) return;
     const connection = new EventSource(`/api/events?cursor=${cursor}`);
     source = connection;
     lastStreamActivityAt = Date.now();
@@ -68,17 +70,31 @@ export function subscribeWebEvents(
       if (stableTimer !== null) clearTimeout(stableTimer);
       stableTimer = null;
       retryTimer = setTimeout(() => { retryTimer = null; connect(); }, eventRetryDelay(attempt++));
+      void checkWebSession();
     };
   }
+  const unsubscribeSession = subscribeWebSession(() => {
+    if (isWebSessionExpired()) {
+      source?.close();
+      source = null;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      if (stableTimer !== null) clearTimeout(stableTimer);
+      retryTimer = stableTimer = null;
+    } else {
+      attempt = 0;
+      connect();
+    }
+  });
   const stop = (() => {
     disposed = true;
+    unsubscribeSession();
     source?.close();
     source = null;
     if (retryTimer !== null) clearTimeout(retryTimer);
     if (stableTimer !== null) clearTimeout(stableTimer);
   }) as EventSubscription;
   stop.reconcile = () => {
-    if (disposed) return Promise.resolve();
+    if (disposed || isWebSessionExpired()) return Promise.resolve();
     if (reconciliation) return reconciliation;
     // Foreground/online recovery gets one immediate reconnect, independent of
     // a timer that may have been suspended while the page was in the background.

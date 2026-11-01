@@ -1,5 +1,6 @@
 import { isTauriRuntime } from "./apiClient";
 import { isStandaloneDisplay } from "./display-mode";
+import { sessionFetch } from "./web-session";
 
 /**
  * Web Push for the mobile web app. The server announces new "needs you" items
@@ -42,7 +43,7 @@ async function workerRegistration() {
 }
 
 async function pushApi<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(`/api/push/${path}`, body === undefined ? undefined : {
+  const response = await sessionFetch(`/api/push/${path}`, body === undefined ? undefined : {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
