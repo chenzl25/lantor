@@ -33,12 +33,8 @@ const state = { db_url: "synthetic://navigation-history", web_base_url: null, ow
   agent_runs: [], agent_work_items: [], agent_activities: [], decisions: [], supervisor: { pid: null, status: "stopped", updated_at: null },
   launch_agent: { label: "", plist_path: "", installed: false, loaded: false }, ui_event_cursor: 0 };
 
-let pendingRequests = 0;
 const api = createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
-  if (url.pathname.startsWith("/api/") && url.pathname !== "/api/events") {
-    pendingRequests++; res.on("close", () => pendingRequests--);
-  }
   if (!url.pathname.startsWith("/api/")) {
     const file = resolve("dist", url.pathname === "/" ? "index.html" : url.pathname.slice(1));
     if (!file.startsWith(resolve("dist") + "/")) { res.writeHead(404).end(); return; }
@@ -89,29 +85,12 @@ const view = page => page.evaluate(() => {
   };
 });
 
-// History is written from a passive effect. Under load, a Back that arrives
-// before an earlier render's effect has run (one from the step itself, or
-// from the data a panel loads when it opens) can add an entry. Each check
-// therefore also waits until no API request is open and pending effects have
-// run, so the suite checks where each step lands rather than that race.
-async function settle(page) {
-  for (;;) {
-    while (pendingRequests > 0) await new Promise(done => setTimeout(done, 10));
-    await page.evaluate(() => new Promise(done =>
-      requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 0)))));
-    if (pendingRequests === 0) return;
-  }
-}
-
 async function expectView(page, expected, label) {
   const deadline = Date.now() + 4000;
   let actual;
   while (Date.now() < deadline) {
     actual = await view(page);
-    if (Object.entries(expected).every(([key, value]) => actual[key] === value)) {
-      await settle(page);
-      return;
-    }
+    if (Object.entries(expected).every(([key, value]) => actual[key] === value)) return;
     await page.waitForTimeout(50);
   }
   assert.deepEqual(Object.fromEntries(Object.keys(expected).map(key => [key, actual[key]])), expected, label);
