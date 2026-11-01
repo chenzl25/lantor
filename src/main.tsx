@@ -807,6 +807,8 @@ function App() {
   const createChannelSubmittingRef = useRef(false);
   const createChannelOpenedFromMobileHomeRef = useRef(false);
   const createAgentOpenedFromMobileHomeRef = useRef(false);
+  // The agent whose panel was opened from mobile Home, so its Back returns Home.
+  const agentOpenedFromMobileHomeRef = useRef<string | null>(null);
   const [activeAppModal, setActiveAppModal] = useState<AppModal | null>(null);
   const showSearchModal = activeAppModal === "search";
   const showActivityFeedModal = activeAppModal === "activity";
@@ -3951,6 +3953,12 @@ function App() {
   const openAgentDetail = useCallback((agent: Agent) => {
     setSelectedAgentId(agent.id);
   }, []);
+  // Forget the Home origin once that agent's panel is closed or replaced.
+  useLayoutEffect(() => {
+    if (agentOpenedFromMobileHomeRef.current !== selectedAgentId) {
+      agentOpenedFromMobileHomeRef.current = null;
+    }
+  }, [selectedAgentId]);
   const navigateToReferencedMessageRef = useRef(navigateToReferencedMessage);
   const navigateToReferencedThreadRef = useRef(navigateToReferencedThread);
   useLayoutEffect(() => {
@@ -4113,6 +4121,10 @@ function App() {
   }
 
   function closeSelectedAgent() {
+    if (isMobileViewport() && selectedAgentId && agentOpenedFromMobileHomeRef.current === selectedAgentId) {
+      returnToMobileHome();
+      return;
+    }
     if (selectedAgentId && searchResultAgentIdRef.current === selectedAgentId) {
       searchResultAgentIdRef.current = null;
       replaceNextAppHistoryEntryRef.current = true;
@@ -5145,6 +5157,7 @@ function App() {
           openDmWithAgent(agent);
         }}
         openAgentDetail={(agent) => {
+          agentOpenedFromMobileHomeRef.current = isMobileHomeOpen() ? agent.id : null;
           setShowMobileSidebar(false);
           setMobileSidebarDragPx(0);
           setSelectedAgentId(agent.id);
