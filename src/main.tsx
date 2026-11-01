@@ -44,7 +44,6 @@ import {
   shouldPopAppModalHistory,
   shouldReplaceActiveAppModalHistory,
   shouldReplaceAppModalHistory,
-  withoutAppModal,
   type AppModal,
 } from "./app-modal-history";
 import { initialNavigationState, navigationReducer } from "./navigation";
@@ -798,8 +797,15 @@ function App() {
   const [agentDraft, setAgentDraft] = useState<AgentForm>(() => newAgentDraft());
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [agentEdit, setAgentEdit] = useState<AgentForm>(EMPTY_AGENT_FORM);
-  const [threadRequested, setShowThread] = useState(false);
-  const showThread = threadRequested && Boolean(activeThreadId);
+  const [navigation, dispatchNavigation] = useReducer(
+    navigationReducer,
+    null,
+    () => initialNavigationState(isMobileViewport()),
+  );
+  const selectedAgentId = navigation.selectedAgentId;
+  const activeAppModal = navigation.activeModal;
+  const showMobileSidebar = navigation.showMobileSidebar;
+  const showThread = navigation.threadRequested && Boolean(activeThreadId);
   const [showCreateChannelModal, setShowCreateChannelModal] = useState(false);
   const [showChannelSettingsModal, setShowChannelSettingsModal] = useState(false);
   const [showChannelAgentsModal, setShowChannelAgentsModal] = useState(false);
@@ -809,14 +815,13 @@ function App() {
   const createChannelSubmittingRef = useRef(false);
   const createChannelOpenedFromMobileHomeRef = useRef(false);
   const createAgentOpenedFromMobileHomeRef = useRef(false);
-  const [activeAppModal, setActiveAppModal] = useState<AppModal | null>(null);
   const showSearchModal = activeAppModal === "search";
   const showActivityFeedModal = activeAppModal === "activity";
   const showSavedModal = activeAppModal === "saved";
   const showNeedsYouModal = activeAppModal === "needs";
   /** Closes `modal` if it is the open panel. */
   function dismissAppModal(modal: AppModal) {
-    setActiveAppModal((current) => withoutAppModal(current, modal));
+    dispatchNavigation({ type: "closePanel", modal });
   }
   const [showOwnerProfileModal, setShowOwnerProfileModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -824,13 +829,10 @@ function App() {
   const [chatTextSize, setChatTextSize] = useState<ChatTextSize>(() => getStoredChatTextSize());
   const [fontPreset, setFontPreset] = useState<FontPreset>(() => getStoredFontPreset());
   const [showImageThumbnails, setShowImageThumbnails] = useState(() => getStoredShowImageThumbnails());
-  const [showMobileSidebar, setShowMobileSidebar] = useState(() => isMobileViewport());
   const [mobileSidebarFocus, setMobileSidebarFocus] = useState<"home" | "dms">("home");
   const [mobileSidebarDragPx, setMobileSidebarDragPx] = useState(0);
   const [mobileDragSurface, setMobileDragSurface] = useState<"sidebar" | "panel" | null>(null);
   const [mobileComposerFocused, setMobileComposerFocused] = useState(false);
-  const [navigation, dispatchNavigation] = useReducer(navigationReducer, initialNavigationState);
-  const selectedAgentId = navigation.selectedAgentId;
   const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null);
   const openPushTargetRef = useRef<(target: PushTarget) => void>(() => {});
   const [appError, setAppError] = useState<string | null>(null);
@@ -2560,9 +2562,9 @@ function App() {
         event.preventDefault();
         navigateBack(() => {
           if (artifactViewer) closeArtifactViewer();
-          else if (activeAppModal) setActiveAppModal(null);
+          else if (activeAppModal) dispatchNavigation({ type: "closePanel" });
           else if (selectedAgentId) dispatchNavigation({ type: "closeAgent" });
-          else if (showThread) setShowThread(false);
+          else if (showThread) dispatchNavigation({ type: "hideThread" });
         });
         return;
       }
@@ -2687,12 +2689,15 @@ function App() {
         rememberChannelThread(activeChannelIdFromState, activeThreadIdFromState);
       }
       setActiveTab(activeTabFromState);
-      setShowThread(historyState.showThread);
-      setShowMobileSidebar(historyState.showMobileSidebar);
+      dispatchNavigation({
+        type: "restore",
+        selectedAgentId: historyState.selectedAgentId,
+        threadRequested: historyState.showThread,
+        showMobileSidebar: historyState.showMobileSidebar,
+        activeModal: historyState.activeModal,
+      });
       setMobileSidebarDragPx(0);
-      dispatchNavigation({ type: "restore", selectedAgentId: historyState.selectedAgentId });
       setFocusedMessageId(historyState.focusedMessageId ?? null);
-      setActiveAppModal(historyState.activeModal);
     }
 
     window.addEventListener("popstate", onPopState);
@@ -3008,7 +3013,7 @@ function App() {
     pendingChannelRestoreRef.current.delete(activeChannelId);
     openThread(hydration.threadId, activeChannelId);
     if (!isMobileViewport()) {
-      setShowThread(Boolean(hydration.threadId));
+      dispatchNavigation({ type: "restoreThreadPanel", open: Boolean(hydration.threadId) });
     }
   }, [activeChannelId, data?.messages, loadingOlderChannelIds]);
 
@@ -3562,7 +3567,7 @@ function App() {
       returnToMobileHome();
     } else if (result.channelId) {
       setActiveChannelId(result.channelId);
-      setShowMobileSidebar(false);
+      dispatchNavigation({ type: "hideHome" });
       openThread(null, result.channelId);
     }
     requestUiState(["channels", "channel_members"]);
@@ -3749,7 +3754,7 @@ function App() {
     const nextThreadId = rememberedThreadForChannel(channelId);
     openThread(nextThreadId, channelId);
     if (!isMobileViewport()) {
-      setShowThread(Boolean(nextThreadId));
+      dispatchNavigation({ type: "restoreThreadPanel", open: Boolean(nextThreadId) });
     }
   }
 
@@ -3757,9 +3762,8 @@ function App() {
     const nextChannel = data?.channels.find((item) => item.id === channelId) ?? null;
     const needsMessageLoad = !initializedOlderChannelIdsRef.current.has(channelId);
     historyFocusedMessageIdRef.current = null;
-    dispatchNavigation({ type: "closeAgent" });
+    dispatchNavigation({ type: "showChannel" });
     setActiveChannelId(channelId);
-    setShowMobileSidebar(false);
     if (nextChannel?.kind === "dm") {
       setActiveTab("chat");
     }
@@ -3790,8 +3794,7 @@ function App() {
   function revealThread(threadId: string | null, channelId = activeChannelId) {
     openThread(threadId, channelId);
     if (threadId) {
-      dispatchNavigation({ type: "closeAgent" });
-      setShowThread(true);
+      dispatchNavigation({ type: "revealThread" });
     }
   }
 
@@ -3802,7 +3805,7 @@ function App() {
     setActiveTab("chat");
     setActiveChannelId(message.channel_id);
     if (isMobileViewport()) {
-      setShowThread(false);
+      dispatchNavigation({ type: "hideThread" });
     }
     setFocusedMessageId(null);
     window.requestAnimationFrame(() => {
@@ -3899,12 +3902,11 @@ function App() {
     const threadId = target.thread_root_id ?? target.id;
     pendingChannelRestoreRef.current.delete(channelId);
     historyFocusedMessageIdRef.current = target.id;
-    dispatchNavigation({ type: "closeAgent" });
+    dispatchNavigation({ type: "showChannel" });
     setActiveChannelId(channelId);
-    setShowMobileSidebar(false);
     setActiveTab("chat");
     openThread(threadId, channelId);
-    setShowThread(true);
+    dispatchNavigation({ type: "revealThread" });
     setFocusedMessageId(null);
     window.requestAnimationFrame(() => setFocusedMessageId(target.id));
     return { target, threadId };
@@ -3922,12 +3924,11 @@ function App() {
       if (referenceNavigationRequestRef.current !== requestId) return;
       const target = messageReferenceLocation(kind, targetMessage);
       pendingChannelRestoreRef.current.delete(target.channelId);
-      dispatchNavigation({ type: "closeAgent" });
+      dispatchNavigation({ type: "showChannel" });
       setActiveTab("chat");
-      setShowMobileSidebar(false);
       setActiveChannelId(target.channelId);
       openThread(target.threadId, target.channelId);
-      setShowThread(target.showThread);
+      dispatchNavigation({ type: target.showThread ? "revealThread" : "hideThread" });
       // After openThread, which clears the history focus this entry records.
       pushReferenceMessageHistory(originMessageId, target);
       setFocusedMessageId(null);
@@ -3976,13 +3977,11 @@ function App() {
   function openMobileSidebarFromContent() {
     setMobileSidebarFocus("home");
     if (isMobileViewport()) {
-      setShowThread(false);
-      dispatchNavigation({ type: "closeAgent" });
-      setShowMobileSidebar(true);
+      dispatchNavigation({ type: "showHome" });
       setMobileSidebarDragPx(0);
       return;
     }
-    setShowMobileSidebar(true);
+    dispatchNavigation({ type: "showSidebar" });
   }
 
   function openMobileHome() {
@@ -3994,10 +3993,7 @@ function App() {
   }
 
   function returnToMobileHome() {
-    setActiveAppModal(null);
-    dispatchNavigation({ type: "closeAgent" });
-    setShowThread(false);
-    setShowMobileSidebar(true);
+    dispatchNavigation({ type: "returnHome" });
     setMobileSidebarDragPx(0);
     setMobileSidebarFocus("home");
   }
@@ -4006,9 +4002,8 @@ function App() {
     if (shouldReplaceAppModalHistory(appSurfaceStateRef.current.activeModal, "search")) {
       replaceNextAppHistoryEntryRef.current = true;
     }
-    setShowMobileSidebar(false);
     setMobileSidebarFocus("home");
-    setActiveAppModal("search");
+    dispatchNavigation({ type: "openPanel", modal: "search" });
     void reloadUiState(["agent_work_items", "agent_activities", "thread_activities", "read_inbox_items", "dismissed_inbox_items"])
       .catch((err) => setAppError(errorMessage(err, "Couldn’t open this")));
   }
@@ -4017,9 +4012,8 @@ function App() {
     if (shouldReplaceAppModalHistory(appSurfaceStateRef.current.activeModal, "activity")) {
       replaceNextAppHistoryEntryRef.current = true;
     }
-    setShowMobileSidebar(false);
     setMobileSidebarFocus("home");
-    setActiveAppModal("activity");
+    dispatchNavigation({ type: "openPanel", modal: "activity" });
     void Promise.all([
       hydrateActivityFeedMessages(),
       reloadUiState(["thread_activities", "read_inbox_items", "dismissed_inbox_items"]),
@@ -4030,9 +4024,8 @@ function App() {
     if (shouldReplaceAppModalHistory(appSurfaceStateRef.current.activeModal, "saved")) {
       replaceNextAppHistoryEntryRef.current = true;
     }
-    setShowMobileSidebar(false);
     setMobileSidebarFocus("home");
-    setActiveAppModal("saved");
+    dispatchNavigation({ type: "openPanel", modal: "saved" });
     void markSavedMessagesRead();
   }
 
@@ -4040,9 +4033,8 @@ function App() {
     if (shouldReplaceAppModalHistory(appSurfaceStateRef.current.activeModal, "needs")) {
       replaceNextAppHistoryEntryRef.current = true;
     }
-    setShowMobileSidebar(false);
     setMobileSidebarFocus("home");
-    setActiveAppModal("needs");
+    dispatchNavigation({ type: "openPanel", modal: "needs" });
     void reloadUiState(["decisions", "tasks", "thread_activities"])
       .catch((err) => setAppError(errorMessage(err, "Couldn’t load Needs you")));
   }
@@ -4058,8 +4050,8 @@ function App() {
   /** A notification tap: land in the conversation, whatever was open. */
   function openPushTarget(target: PushTarget) {
     if (!data?.channels.some((item) => item.id === target.channel_id)) return;
-    setShowMobileSidebar(false);
-    setActiveAppModal(null);
+    dispatchNavigation({ type: "hideHome" });
+    dispatchNavigation({ type: "closePanel" });
     selectChannel(target.channel_id);
     revealThread(target.thread_root_id ?? target.message_id, target.channel_id);
     setFocusedMessageId(target.message_id);
@@ -4135,7 +4127,7 @@ function App() {
     }
     replaceNextAppHistoryEntryRef.current = true;
     openThread(null);
-    setShowThread(false);
+    dispatchNavigation({ type: "hideThread" });
   }
 
   function optimisticMessageAttachments(messageId: string, attachments: DraftAttachment[]): MessageAttachment[] {
@@ -4781,7 +4773,7 @@ function App() {
     dispatchNavigation({ type: "closeAgent" });
     setActiveTab("chat");
     openThread(null, item.channelId ?? activeChannelId);
-    setShowThread(false);
+    dispatchNavigation({ type: "hideThread" });
     dismissAppModal("activity");
   }
 
@@ -5126,13 +5118,13 @@ function App() {
           const openedFromMobileHome = isMobileHomeOpen();
           createChannelOpenedFromMobileHomeRef.current = openedFromMobileHome;
           if (!openedFromMobileHome) {
-            setShowMobileSidebar(false);
+            dispatchNavigation({ type: "hideHome" });
           }
           setReturnToCreateChannelAfterAgent(false);
           setShowCreateChannelModal(true);
         }}
         selectChannel={(channelId) => {
-          setShowMobileSidebar(false);
+          dispatchNavigation({ type: "hideHome" });
           setMobileSidebarFocus("home");
           setMobileSidebarDragPx(0);
           selectChannel(channelId);
@@ -5143,30 +5135,30 @@ function App() {
           setReturnToCreateChannelAfterAgent(false);
           createAgentOpenedFromMobileHomeRef.current = openedFromMobileHome;
           if (!openedFromMobileHome) {
-            setShowMobileSidebar(false);
+            dispatchNavigation({ type: "hideHome" });
           }
           setShowCreateAgentModal(true);
         }}
         openDmWithAgent={(agent) => {
-          setShowMobileSidebar(false);
+          dispatchNavigation({ type: "hideHome" });
           openDmWithAgent(agent);
         }}
         openAgentDetail={(agent) => {
           const fromHome = isMobileHomeOpen();
-          setShowMobileSidebar(false);
+          dispatchNavigation({ type: "hideHome" });
           setMobileSidebarDragPx(0);
           dispatchNavigation({ type: "openAgent", agentId: agent.id, fromHome });
         }}
         openOwnerProfileModal={() => {
           setOwnerProfileDraft(ownerProfileToForm(data.owner_profile));
           if (!isMobileHomeOpen()) {
-            setShowMobileSidebar(false);
+            dispatchNavigation({ type: "hideHome" });
           }
           setShowOwnerProfileModal(true);
         }}
         openSettingsModal={() => {
           if (!isMobileHomeOpen()) {
-            setShowMobileSidebar(false);
+            dispatchNavigation({ type: "hideHome" });
           }
           setShowSettingsModal(true);
         }}
