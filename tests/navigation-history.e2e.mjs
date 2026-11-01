@@ -48,7 +48,9 @@ const api = createServer(async (req, res) => {
   if (url.pathname === "/api/events") {
     res.writeHead(200, { "content-type": "text/event-stream" }); res.write(": ready\n\n"); return;
   }
-  let raw = ""; for await (const chunk of req) raw += chunk;
+  let raw = "";
+  // The browser drops in-flight requests on reload; reading one throws.
+  try { for await (const chunk of req) raw += chunk; } catch { return; }
   const args = raw ? JSON.parse(raw) : {};
   let result = { ok: true };
   switch (url.pathname) {
@@ -263,6 +265,12 @@ async function mobile(page, name) {
   console.log(`${name}: mobile in-app navigation passed`);
 }
 
+// WebKit logs a request the app starts while the page unloads for a reload as
+// "Fetch API cannot load <url> due to access control checks.", even when the
+// app handles the rejection, and Playwright reports that log as a page error.
+const interruptedFetch = error => error.name.startsWith("Fetch API cannot load ")
+  && error.message.includes("/api/") && error.message.endsWith(" due to access control checks.");
+
 let browser;
 try {
   for (const [name, engine] of Object.entries({ chromium, webkit })) {
@@ -270,7 +278,7 @@ try {
     for (const [run, viewport] of [[desktop, { width: 1440, height: 960 }], [references, { width: 1440, height: 960 }], [mobile, { width: 390, height: 844 }]]) {
       const context = await browser.newContext({ serviceWorkers: "block", viewport });
       const page = await context.newPage(); page.setDefaultTimeout(8000);
-      const errors = []; page.on("pageerror", error => errors.push(error.message));
+      const errors = []; page.on("pageerror", error => { if (!interruptedFetch(error)) errors.push(error.message); });
       await run(page, name);
       assert.deepEqual(errors, [], `${name} ${run.name}: no page errors`);
       await context.close();
