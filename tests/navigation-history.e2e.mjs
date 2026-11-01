@@ -223,7 +223,13 @@ async function mobile(page, name) {
   await page.locator(".sidebar").getByRole("button", { name: "@Hancock’s profile", exact: true }).click();
   await expectView(page, { agent: true, home: false, entries }, "an agent from Home");
   await page.locator(".agent-drawer").getByRole("button", { name: "Back", exact: true }).click();
-  await expectView(page, { agent: false, channel: "beta", home: false, entries }, "agent Back lands on the last channel");
+  await expectView(page, { agent: false, home: true, entries }, "agent Back returns Home when opened from Home");
+  await page.locator(".sidebar").getByRole("button", { name: "Message @Hancock", exact: true }).click();
+  await expectView(page, { channel: "Hancock", home: false, entries }, "the agent's DM");
+  await page.locator(".conversation").getByRole("button", { name: "@Hancock’s profile", exact: true }).click();
+  await expectView(page, { agent: true, home: false, entries }, "the agent from its DM");
+  await page.locator(".agent-drawer").getByRole("button", { name: "Back", exact: true }).click();
+  await expectView(page, { agent: false, channel: "Hancock", home: false, entries }, "agent Back returns to the channel it was opened from");
   await headerBack.click();
   await expectView(page, { home: true, entries }, "Home again");
   await sidebarRow("alpha").click();

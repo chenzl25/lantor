@@ -32,7 +32,8 @@ Home Screen app has no browser Back. Navigation is in-app:
 
 - Home lists channels; tapping one opens it, and its Back returns Home.
 - Tapping a message opens its thread; the thread's Back returns to the channel.
-- The agent panel's Back closes it and shows the last channel.
+- The agent panel's Back returns to where it was opened: Home, or the channel
+  it was opened from.
 - The bottom bar swaps panels in place; Home closes the open panel.
 
 `npm run test:navigation` checks these rules in Chromium and WebKit.
