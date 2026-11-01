@@ -3914,7 +3914,6 @@ function App() {
       const targetMessage = await loadReferencedMessage(targetMessageId);
       if (referenceNavigationRequestRef.current !== requestId) return;
       const target = messageReferenceLocation(kind, targetMessage);
-      pushReferenceMessageHistory(originMessageId, target);
       pendingChannelRestoreRef.current.delete(target.channelId);
       setSelectedAgentId(null);
       setActiveTab("chat");
@@ -3922,6 +3921,8 @@ function App() {
       setActiveChannelId(target.channelId);
       openThread(target.threadId, target.channelId);
       setShowThread(target.showThread);
+      // After openThread, which clears the history focus this entry records.
+      pushReferenceMessageHistory(originMessageId, target);
       setFocusedMessageId(null);
       window.requestAnimationFrame(() => {
         if (referenceNavigationRequestRef.current === requestId) {

@@ -17,6 +17,8 @@ Mod+] all walk the same list.
 - Closing a panel (Close or Escape) or the agent panel's Close goes back one
   entry, so Forward reopens it.
 - Switching straight from one panel to another replaces the entry.
+- Opening a quoted message or thread pushes one entry; Back returns to the
+  quoting message and highlights it.
 - A new view after going back drops the forward entries, as browsers do.
 - Each entry stores the view in `history.state` (`AppHistoryState`); reload
   keeps the current position without adding entries.
