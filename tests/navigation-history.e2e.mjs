@@ -164,7 +164,7 @@ async function desktop(page, name) {
   await page.goForward();
   await expectView(page, { agent: true, modal: "Search", index: 5, forward: false, entries: entries + 5 }, "forward to the last entry");
 
-  // Closing a panel or the agent steps back, so forward reopens it.
+  // Closing a panel or the agent (Close or Escape) steps back, so forward reopens it.
   await page.keyboard.press("Escape");
   await expectView(page, { agent: true, modal: null, index: 4, forward: true }, "Escape closes the panel by going back");
   await page.goForward();
@@ -173,6 +173,10 @@ async function desktop(page, name) {
   await expectView(page, { agent: true, modal: null, index: 4, forward: true }, "the panel's Close goes back");
   await page.locator(".agent-drawer").getByRole("button", { name: "Close", exact: true }).click();
   await expectView(page, { agent: false, tab: "tasks", index: 3, forward: true }, "the agent's Close goes back");
+  await page.locator(".sidebar").getByRole("button", { name: "@Hancock’s profile", exact: true }).click();
+  await expectView(page, { agent: true, index: 4, forward: false }, "reopening the agent");
+  await page.keyboard.press("Escape");
+  await expectView(page, { agent: false, tab: "tasks", index: 3, forward: true }, "Escape closes the agent by going back");
 
   // A new view drops the forward entries.
   await page.locator(".tabs").getByRole("button", { name: "Chat" }).click();

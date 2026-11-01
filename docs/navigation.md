@@ -14,8 +14,8 @@ Mod+] all walk the same list.
   pushes an entry. Switching channel can also reopen that channel's thread;
   that stays one entry.
 - Closing a thread replaces the current entry.
-- Closing a panel (Close or Escape) or the agent panel's Close goes back one
-  entry, so Forward reopens it.
+- Closing a panel or the agent panel (Close or Escape) goes back one entry,
+  so Forward reopens it.
 - Switching straight from one panel to another replaces the entry.
 - Opening a quoted message or thread pushes one entry; Back returns to the
   quoting message and highlights it.

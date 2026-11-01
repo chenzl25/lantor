@@ -2582,7 +2582,7 @@ function App() {
         if (isTextInput(event.target)) return;
         if (surface.selectedAgentId) {
           event.preventDefault();
-          setSelectedAgentId(null);
+          closeSelectedAgent();
         } else if (surface.showThread) {
           event.preventDefault();
           closeThreadPanel();
