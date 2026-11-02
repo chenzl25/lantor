@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::agent_inbox_wake::enqueue_agent_work_if_available;
 use crate::app::{to_string, CommandResult};
+use crate::context_tool::compact_message_body;
 use crate::events::activity::record_agent_activity;
 use crate::message_store::load_message_patch_in_tx;
 use crate::runtime::lifecycle::mark_work_item_held_in_tx;
@@ -811,7 +812,8 @@ async fn render_surface_context_delta(
                 created_at,
                 sender_role,
                 sender_name,
-                compact_chars_middle(&body.replace('\n', " "), FRESHNESS_RETRY_BODY_LIMIT)
+                compact_message_body(&body, FRESHNESS_RETRY_BODY_LIMIT, message_id)
+                    .replace('\n', " ")
             )
         })
         .collect::<Vec<_>>();

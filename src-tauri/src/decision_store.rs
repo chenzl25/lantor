@@ -18,7 +18,7 @@ use crate::agent_routing::upsert_agent_thread_subscription;
 use crate::app::{to_string, CommandResult};
 use crate::message_store::{load_message_patch_in_tx, send_owner_message_in_pool};
 use crate::models::{Decision, DecisionOption};
-use crate::text::compact_chars_middle;
+use crate::text::{compact_chars_middle, uuid_prefix_hex};
 use crate::ui_notifications::{enqueue_ui_event, enqueue_ui_event_in_tx, UiEvent};
 
 pub(crate) const DECISION_MAX_OPTIONS: usize = 6;
@@ -655,22 +655,10 @@ pub(crate) async fn dismiss_decision_in_pool(
     notify_decision_changed(pool).await
 }
 
-/// Normalizes a message reference as shown by history tools (`msg=6e0853de`)
-/// or a full UUID into lowercase hex without dashes.
 fn message_ref_hex(message_ref: &str) -> CommandResult<String> {
-    let hex: String = message_ref
-        .trim()
-        .trim_start_matches("msg=")
-        .chars()
-        .filter(|ch| *ch != '-')
-        .collect::<String>()
-        .to_lowercase();
-    if hex.len() < 8 || hex.len() > 32 || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        return Err(
-            "decision_withdraw message_id must be a message UUID or its 8+ hex prefix".to_owned(),
-        );
-    }
-    Ok(hex)
+    uuid_prefix_hex(message_ref).ok_or_else(|| {
+        "decision_withdraw message_id must be a message UUID or its 8+ hex prefix".to_owned()
+    })
 }
 
 /// The requesting agent withdraws its own open decision, e.g. because the owner

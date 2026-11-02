@@ -1,11 +1,11 @@
 use super::{
     agent_context_agent_inspect, agent_context_attachment_info, agent_context_github_sync,
     agent_context_history_read, agent_context_inbox_archive, agent_context_inbox_list,
-    agent_context_inbox_read, agent_context_memory_read, agent_context_message_search,
-    agent_context_run_read, agent_context_wiki_log, agent_context_wiki_read,
-    agent_context_wiki_write, agent_context_workspace_info, agent_context_workspace_list,
-    decision_list_for_agent, decision_request_for_agent, decision_withdraw_for_agent,
-    render_agent_context_github_sync, short_id,
+    agent_context_inbox_read, agent_context_memory_read, agent_context_message_read,
+    agent_context_message_search, agent_context_run_read, agent_context_wiki_log,
+    agent_context_wiki_read, agent_context_wiki_write, agent_context_workspace_info,
+    agent_context_workspace_list, decision_list_for_agent, decision_request_for_agent,
+    decision_withdraw_for_agent, render_agent_context_github_sync, short_id,
 };
 use crate::channels::open_dm_with_agent_in_pool;
 use crate::events::activity::record_agent_activity;
@@ -139,6 +139,100 @@ async fn agent_context_tool_reads_thread_history_and_searches_messages() {
         let search = agent_context_message_search(&pool, &search_args).await?;
         assert!(search.contains("root message with needle"));
         assert!(search.contains("[target=#context-tools msg="));
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    assert!(result.is_ok(), "{:?}", result.err());
+}
+
+#[tokio::test]
+async fn truncated_message_rows_point_at_message_read_for_the_full_text() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let channel_id = insert_test_channel(&pool, "long-messages").await?;
+        let body = format!("opening line\n{}\nthe hidden middle fact\n{}\nclosing line", "a".repeat(3_000), "b".repeat(3_000));
+        let root_id: Uuid = sqlx::query_scalar(
+            r#"
+            insert into messages (channel_id, sender_name, sender_role, body, is_task)
+            values ($1, 'Dylan', 'owner', $2, false)
+            returning id
+            "#,
+        )
+        .bind(channel_id)
+        .bind(&body)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        sqlx::query(
+            r#"
+            insert into messages (channel_id, thread_root_id, sender_name, sender_role, body, is_task)
+            values ($1, $2, 'agent', 'agent', 'short reply', false)
+            "#,
+        )
+        .bind(channel_id)
+        .bind(root_id)
+        .execute(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+
+        let history = agent_context_history_read(
+            &pool,
+            &["history-read".to_owned(), "--target".to_owned(), "#long-messages".to_owned()],
+        )
+        .await?;
+        assert!(!history.contains("the hidden middle fact"));
+        assert!(history.contains(&format!(
+            "here; message-read --message-id {} prints the full message",
+            short_id(root_id)
+        )));
+
+        let read = agent_context_message_read(
+            &pool,
+            &[
+                "message-read".to_owned(),
+                "--message-id".to_owned(),
+                format!("msg={}", short_id(root_id)),
+            ],
+        )
+        .await?;
+        assert!(read.contains(&format!("Lantor message {root_id}")));
+        assert!(read.contains("target=#long-messages"));
+        assert!(read.contains("sender=Dylan type=owner"));
+        assert!(read.contains("thread_replies=1"));
+        assert!(read.contains(&format!("body ({} chars):", body.chars().count())));
+        assert!(read.contains("opening line\n"));
+        assert!(read.contains("the hidden middle fact"));
+        assert!(read.contains("closing line"));
+
+        let capped = agent_context_message_read(
+            &pool,
+            &[
+                "message-read".to_owned(),
+                "--message-id".to_owned(),
+                root_id.to_string(),
+                "--max-chars".to_owned(),
+                "100".to_owned(),
+            ],
+        )
+        .await?;
+        assert!(!capped.contains("the hidden middle fact"));
+        assert!(capped.contains("pass a larger --max-chars"));
+
+        let missing = agent_context_message_read(
+            &pool,
+            &["message-read".to_owned(), "--message-id".to_owned(), "00000000".to_owned()],
+        )
+        .await;
+        assert!(missing.unwrap_err().contains("no message matches"));
+        let malformed = agent_context_message_read(
+            &pool,
+            &["message-read".to_owned(), "--message-id".to_owned(), "abc".to_owned()],
+        )
+        .await;
+        assert!(malformed.unwrap_err().contains("8+ hex prefix"));
         Ok(())
     }
     .await;

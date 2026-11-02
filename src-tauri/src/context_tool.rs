@@ -30,10 +30,15 @@ use crate::ui_notifications::{enqueue_ui_event_in_tx, UiEvent};
 use crate::{
     app::{to_string, CommandResult},
     attachments::{attachment_summary_sql, format_attachment_size},
-    text::{compact_chars_middle, read_compact_memory_file},
+    text::{
+        compact_chars_middle, compact_chars_middle_with_note, read_compact_memory_file,
+        uuid_prefix_hex,
+    },
 };
 
 const AGENT_CONTEXT_TOOL_MESSAGE_LIMIT: usize = 2_000;
+const MESSAGE_READ_DEFAULT_CHARS: usize = 40_000;
+const MESSAGE_READ_MAX_CHARS: usize = 400_000;
 
 struct AgentContextTarget {
     channel_id: Uuid,
@@ -111,6 +116,19 @@ fn parse_context_tool_named_usize(
 
 pub(crate) fn short_id(id: Uuid) -> String {
     id.to_string().chars().take(8).collect()
+}
+
+/// Bounds a message body for agent context. When the middle is cut, the
+/// marker names the message so the agent can read the full text back.
+pub(crate) fn compact_message_body(body: &str, limit: usize, message_id: Uuid) -> String {
+    compact_chars_middle_with_note(
+        body,
+        limit,
+        &format!(
+            "here; message-read --message-id {} prints the full message",
+            short_id(message_id)
+        ),
+    )
 }
 
 fn tail_chars(value: &str, limit: usize) -> String {
@@ -303,22 +321,38 @@ fn format_context_message_target(row: &SqliteRow, target_label: Option<&str>) ->
     target
 }
 
-fn format_context_message_row(row: &SqliteRow, target_label: Option<&str>) -> String {
+/// Renders one message as an agent-context row:
+/// `[target=... msg=... time=... type=...] sender: body`, plus task and
+/// attachment details when the query selected them. Requires `id`,
+/// `sender_name`, `sender_role`, `body` and `created_at`; `delivery_state`,
+/// `task_number`, `task_status` and `attachment_summary` are optional.
+pub(crate) fn format_context_message_row(
+    row: &SqliteRow,
+    target_label: Option<&str>,
+    body_limit: usize,
+) -> String {
     let id: Uuid = row.get("id");
     let sender_name: String = row.get("sender_name");
     let sender_role: String = row.get("sender_role");
     let body: String = row.get("body");
     let created_at: DateTime<Utc> = row.get("created_at");
-    let task_number: Option<i64> = row.get("task_number");
-    let task_status: Option<String> = row.get("task_status");
+    let task_number: Option<i64> = row.try_get("task_number").ok().flatten();
+    let task_status: Option<String> = row.try_get("task_status").ok().flatten();
+    let delivery_suffix = row
+        .try_get::<String, _>("delivery_state")
+        .ok()
+        .filter(|state| state != "complete")
+        .map(|state| format!(" delivery={state}"))
+        .unwrap_or_default();
     let target = format_context_message_target(row, target_label);
-    let body = compact_chars_middle(&body, AGENT_CONTEXT_TOOL_MESSAGE_LIMIT).replace('\n', " ");
+    let body = compact_message_body(&body, body_limit, id).replace('\n', " ");
     let mut output = format!(
-        "[target={} msg={} time={} type={}] {}: {}",
+        "[target={} msg={} time={} type={}{}] {}: {}",
         target,
         short_id(id),
         created_at.to_rfc3339(),
         sender_role,
+        delivery_suffix,
         sender_name,
         body
     );
@@ -435,7 +469,11 @@ pub(crate) async fn agent_context_history_read(
         .max()
         .unwrap_or(0);
     for row in rows.into_iter().rev() {
-        output.push(format_context_message_row(&row, Some(&target.label)));
+        output.push(format_context_message_row(
+            &row,
+            Some(&target.label),
+            AGENT_CONTEXT_TOOL_MESSAGE_LIMIT,
+        ));
     }
     if let Some(agent_id) = current_agent_id_from_env(pool).await? {
         advance_agent_target_watermark(
@@ -448,6 +486,119 @@ pub(crate) async fn agent_context_history_read(
         .await?;
     }
     Ok(output.join("\n\n"))
+}
+
+/// Prints one message in full, so an agent can read past the truncation
+/// marker that context rows and inbox previews leave behind.
+pub(crate) async fn agent_context_message_read(
+    pool: &SqlitePool,
+    args: &[String],
+) -> CommandResult<String> {
+    let message_ref = arg_value(args, "--message-id")
+        .or_else(|| arg_value(args, "--msg"))
+        .or_else(|| arg_value(args, "--id"))
+        .ok_or_else(|| "message-read requires --message-id <uuid-or-prefix>".to_owned())?;
+    let prefix = uuid_prefix_hex(&message_ref).ok_or_else(|| {
+        "message-read --message-id must be a message UUID or its 8+ hex prefix".to_owned()
+    })?;
+    let max_chars = parse_context_tool_named_usize(
+        args,
+        "--max-chars",
+        MESSAGE_READ_DEFAULT_CHARS,
+        MESSAGE_READ_MAX_CHARS,
+    )?;
+    let rows = sqlx::query(&format!(
+        r#"
+        select
+            m.id, m.thread_root_id, m.sender_name, m.sender_role, m.body,
+            m.delivery_state, m.created_at,
+            c.name as channel_name, c.kind as channel_kind,
+            t.number as task_number, t.status as task_status,
+            (select count(*) from messages r where r.thread_root_id = m.id) as reply_count,
+            {}
+        from messages m
+        join channels c on c.id = m.channel_id
+        left join tasks t on t.message_id = m.id
+        where substr(lower(hex(m.id)), 1, length($1)) = $1
+        limit 2
+        "#,
+        attachment_summary_sql()
+    ))
+    .bind(&prefix)
+    .fetch_all(pool)
+    .await
+    .map_err(to_string)?;
+    let row = match rows.as_slice() {
+        [row] => row,
+        [] => return Err(format!("no message matches {message_ref}")),
+        _ => {
+            return Err(format!(
+                "message reference {message_ref} is ambiguous; pass more of the id"
+            ))
+        }
+    };
+
+    let id: Uuid = row.get("id");
+    let body: String = row.get("body");
+    let body_chars = body.chars().count();
+    let target = format_context_message_target(row, None);
+    let mut output = vec![
+        format!("Lantor message {id}"),
+        format!("target={target}"),
+        format!(
+            "time={}",
+            row.get::<DateTime<Utc>, _>("created_at").to_rfc3339()
+        ),
+        format!(
+            "sender={} type={}",
+            row.get::<String, _>("sender_name"),
+            row.get::<String, _>("sender_role")
+        ),
+    ];
+    let delivery_state: String = row.get("delivery_state");
+    if delivery_state != "complete" {
+        output.push(format!("delivery={delivery_state}"));
+    }
+    match row.get::<Option<Uuid>, _>("thread_root_id") {
+        Some(thread_root_id) => output.push(format!("thread_root_id={thread_root_id}")),
+        None => {
+            let reply_count: i64 = row.get("reply_count");
+            if reply_count > 0 {
+                output.push(format!(
+                    "thread_replies={reply_count} (history-read --target \"{target}:{}\")",
+                    short_id(id)
+                ));
+            }
+        }
+    }
+    if let Some(task_number) = row.get::<Option<i64>, _>("task_number") {
+        output.push(format!(
+            "task=#{task_number} status={}",
+            row.get::<Option<String>, _>("task_status")
+                .unwrap_or_else(|| "unknown".to_owned())
+        ));
+    }
+    let body = if body_chars > max_chars {
+        compact_chars_middle_with_note(
+            &body,
+            max_chars,
+            "here; pass a larger --max-chars to read them",
+        )
+    } else {
+        body.trim().to_owned()
+    };
+    output.push(format!("body ({body_chars} chars):\n{body}"));
+    let attachment_summary: String = row.get("attachment_summary");
+    if !attachment_summary.trim().is_empty() {
+        output.push("attachments:".to_owned());
+        for line in attachment_summary.lines() {
+            output.push(format!("- {line}"));
+        }
+        output.push(
+            "To inspect an attachment, run attachment-info with its attachment_id.".to_owned(),
+        );
+    }
+    Ok(output.join("\n"))
 }
 
 pub(crate) async fn agent_context_message_search(
@@ -524,7 +675,11 @@ pub(crate) async fn agent_context_message_search(
         if rows.len() == 1 { "" } else { "s" }
     )];
     for row in rows {
-        output.push(format_context_message_row(&row, None));
+        output.push(format_context_message_row(
+            &row,
+            None,
+            AGENT_CONTEXT_TOOL_MESSAGE_LIMIT,
+        ));
     }
 
     let wiki_rows = if let Some(channel_id) = wiki_channel_filter {
@@ -1211,7 +1366,11 @@ pub(crate) async fn agent_context_run_read(
     if !messages.is_empty() {
         output.push("visible_messages:".to_owned());
         for row in messages {
-            output.push(format_context_message_row(&row, None));
+            output.push(format_context_message_row(
+                &row,
+                None,
+                AGENT_CONTEXT_TOOL_MESSAGE_LIMIT,
+            ));
         }
     }
 
@@ -1869,7 +2028,10 @@ pub(crate) async fn agent_context_inbox_read(
     if !body_preview.is_empty() {
         output.push(format!("preview:\n{body_preview}"));
     }
-    if let Some(source_body) = row.get::<Option<String>, _>("source_body") {
+    if let (Some(source_body), Some(source_message_id)) = (
+        row.get::<Option<String>, _>("source_body"),
+        row.get::<Option<Uuid>, _>("source_message_id"),
+    ) {
         let source_sender = row
             .get::<Option<String>, _>("source_sender_name")
             .unwrap_or_else(|| "unknown".to_owned());
@@ -1885,7 +2047,11 @@ pub(crate) async fn agent_context_inbox_read(
             source_sender,
             source_role,
             source_created,
-            compact_chars_middle(source_body.trim(), AGENT_CONTEXT_TOOL_MESSAGE_LIMIT)
+            compact_message_body(
+                &source_body,
+                AGENT_CONTEXT_TOOL_MESSAGE_LIMIT,
+                source_message_id
+            )
         );
         let attachment_summary: String = row.get("attachment_summary");
         if !attachment_summary.trim().is_empty() {
@@ -2310,7 +2476,7 @@ async fn decision_list_for_agent(
 pub(crate) async fn run_agent_context_tool(args: &[String]) -> CommandResult<String> {
     if args.is_empty() || has_arg(args, "--help") || has_arg(args, "-h") {
         return Ok(
-            "Lantor agent context tool\n\nCommands:\n  inbox-list [--state active|unread|processing|archived|all] [--limit 20]\n  inbox-read --inbox-id <uuid-or-prefix>\n  inbox-archive --inbox-id <uuid-or-prefix>\n  workspace-info [--target @handle]\n  workspace-list [--target @handle] [--max-depth 2] [--limit 80]\n  memory-read [--target @handle] [--limit 16000]\n  run-read --run-id <uuid-or-prefix> [--target @handle] [--limit 8] [--log-limit 8000]\n  history-read --target \"#channel[:thread]\" [--limit 30]\n  message-search --query <text> [--target \"#channel\"] [--limit 30]\n  wiki-read --channel \"#channel\"\n  wiki-write --channel \"#channel\" [--parent <rev>] --file <markdown-path> | --content <text> [--note \"<one-line reason>\"]\n  wiki-log --channel \"#channel\" [--limit 10]\n  github sync --channel \"#channel\"\n  attachment-info --attachment-id <uuid>\n  artifact-read --artifact-id <uuid>\n  agent-inspect --target @handle\n  decision-request --stdin | --json <payload> | --file <path> | --title <question> [--context <why>] [--target \"#channel[:thread]\"]\n  decision-withdraw --message-id <card-msg-id> [--reason <why>]\n  decision-list [--state open|all] [--limit 20]\n\nTargets may be #channel, #channel:<message-id-prefix>, dm:@agent, channel UUID, or channel UUID:<message-id-prefix>. Inbox, run, workspace, and memory commands default to the current LANTOR_AGENT_ID when invoked by an agent."
+            "Lantor agent context tool\n\nCommands:\n  inbox-list [--state active|unread|processing|archived|all] [--limit 20]\n  inbox-read --inbox-id <uuid-or-prefix>\n  inbox-archive --inbox-id <uuid-or-prefix>\n  workspace-info [--target @handle]\n  workspace-list [--target @handle] [--max-depth 2] [--limit 80]\n  memory-read [--target @handle] [--limit 16000]\n  run-read --run-id <uuid-or-prefix> [--target @handle] [--limit 8] [--log-limit 8000]\n  history-read --target \"#channel[:thread]\" [--limit 30]\n  message-read --message-id <uuid-or-prefix> [--max-chars 40000]\n  message-search --query <text> [--target \"#channel\"] [--limit 30]\n  wiki-read --channel \"#channel\"\n  wiki-write --channel \"#channel\" [--parent <rev>] --file <markdown-path> | --content <text> [--note \"<one-line reason>\"]\n  wiki-log --channel \"#channel\" [--limit 10]\n  github sync --channel \"#channel\"\n  attachment-info --attachment-id <uuid>\n  artifact-read --artifact-id <uuid>\n  agent-inspect --target @handle\n  decision-request --stdin | --json <payload> | --file <path> | --title <question> [--context <why>] [--target \"#channel[:thread]\"]\n  decision-withdraw --message-id <card-msg-id> [--reason <why>]\n  decision-list [--state open|all] [--limit 20]\n\nTargets may be #channel, #channel:<message-id-prefix>, dm:@agent, channel UUID, or channel UUID:<message-id-prefix>. Inbox, run, workspace, and memory commands default to the current LANTOR_AGENT_ID when invoked by an agent."
                 .to_owned(),
         );
     }
@@ -2331,6 +2497,7 @@ pub(crate) async fn run_agent_context_tool(args: &[String]) -> CommandResult<Str
         "memory-read" | "read-memory" | "memory" => agent_context_memory_read(&pool, args).await,
         "run-read" | "read-run" | "run" => agent_context_run_read(&pool, args).await,
         "history-read" | "read-history" | "read" => agent_context_history_read(&pool, args).await,
+        "message-read" | "read-message" => agent_context_message_read(&pool, args).await,
         "message-search" | "search-messages" | "search" => {
             agent_context_message_search(&pool, args).await
         }

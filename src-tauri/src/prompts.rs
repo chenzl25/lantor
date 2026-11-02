@@ -58,6 +58,7 @@ fn lantor_context_tools_prompt() -> &'static str {
 - durable memory: "$LANTOR_CONTEXT_TOOL" --agent-context-tool memory-read --limit 16000
 - run details: "$LANTOR_CONTEXT_TOOL" --agent-context-tool run-read --run-id "<uuid-or-prefix>"
 - history: "$LANTOR_CONTEXT_TOOL" --agent-context-tool history-read --target "#channel[:thread_id]" --limit 20
+- full message: "$LANTOR_CONTEXT_TOOL" --agent-context-tool message-read --message-id "<msg id or prefix>"
 - search: "$LANTOR_CONTEXT_TOOL" --agent-context-tool message-search --query "text" --target "#channel" --limit 20 (also reports channel-wiki matches)
 - channel wiki read: "$LANTOR_CONTEXT_TOOL" --agent-context-tool wiki-read --channel "#channel"
 - channel wiki write: "$LANTOR_CONTEXT_TOOL" --agent-context-tool wiki-write --channel "#channel" --parent "<head-rev>" --file <markdown-path> --note "<one-line reason>" (omit --parent only for the first revision)
@@ -67,7 +68,7 @@ fn lantor_context_tools_prompt() -> &'static str {
 - artifact: "$LANTOR_CONTEXT_TOOL" --agent-context-tool artifact-read --artifact-id "<uuid>"
 - agent introspection: "$LANTOR_CONTEXT_TOOL" --agent-context-tool agent-inspect --target "@handle"
 Inbox, run, workspace, and memory commands default to your own LANTOR_AGENT_ID; add --target "@handle" only when inspecting another visible agent.
-Inbox, history, and search message rows use `[target=... msg=... time=... type=...] sender: body` headers. The target is the message surface, and msg is the short source message id.
+Inbox, history, and search message rows use `[target=... msg=... time=... type=...] sender: body` headers. The target is the message surface, and msg is the short source message id. A long body is cut in the middle with a `[... Lantor omitted N chars here; message-read --message-id <msg> prints the full message ...]` marker; run message-read when the omitted part matters.
 When a turn contains a default inbox item or source_message, handle that item directly from the provided context when possible. Use inbox-list or inbox-read when you need missing details, need to choose among multiple active items, or are handling a different item. Current work-item inbox items are archived automatically when the work item finishes; use inbox-archive only for unrelated or extra active items you intentionally clear."##
 }
 

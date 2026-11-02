@@ -38,6 +38,12 @@ thread. A process that is in a turn is replaced at the first start after that
 turn. Use it when something the provider reads only at startup has changed,
 such as an MCP login.
 
+A work item's prompt carries the recent messages of its channel or thread.
+An inbox wake stores the thread's last messages when it is queued, and Codex
+reads that copy. Claude reads the channel or thread again when the turn
+starts (`runtime/surface.rs`) and drops the stored copy, so each message
+appears once, including anything posted while the wake waited.
+
 Stdout-command runtimes are still supported for custom scripts. They can print
 one line to stdout with the `LANTOR_EVENT ` prefix followed by JSON. Non-matching
 stdout and stderr are preserved only in the run log.
@@ -101,6 +107,7 @@ requested by the user or a reminder.
 "$LANTOR_CONTEXT_TOOL" --agent-context-tool memory-read --limit 16000
 "$LANTOR_CONTEXT_TOOL" --agent-context-tool run-read --run-id "<uuid-or-prefix>"
 "$LANTOR_CONTEXT_TOOL" --agent-context-tool history-read --target "#channel[:thread_id]" --limit 20
+"$LANTOR_CONTEXT_TOOL" --agent-context-tool message-read --message-id "<msg id or prefix>"
 "$LANTOR_CONTEXT_TOOL" --agent-context-tool message-search --query "<text>" --target "#channel" --limit 20
 "$LANTOR_CONTEXT_TOOL" --agent-context-tool github sync --channel "#channel"
 "$LANTOR_CONTEXT_TOOL" --agent-context-tool attachment-info --attachment-id "<uuid>"
@@ -112,6 +119,13 @@ JSON
 "$LANTOR_CONTEXT_TOOL" --agent-context-tool decision-withdraw --message-id "<card msg id>" --reason "<why>"
 "$LANTOR_CONTEXT_TOOL" --agent-context-tool decision-list --state open
 ```
+
+Message rows in wake prompts, inbox previews, history and search keep long
+bodies to a bounded length by cutting the middle. The marker left in the cut
+names the message: `[... Lantor omitted N chars here; message-read
+--message-id <msg> prints the full message ...]`. `message-read` accepts a full
+id or the 8+ character prefix shown as `msg=` and prints the whole body (up to
+`--max-chars`, 40,000 by default), with its thread, task and attachments.
 
 Inbox, workspace, and memory commands default to the current agent. Use
 `--target "@handle"` only when inspecting another visible agent.
