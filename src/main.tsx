@@ -1073,6 +1073,11 @@ function App() {
 
   function setAppHistoryPosition(index: number, maxIndex?: number) {
     const nextMaxIndex = maxIndex ?? Math.max(appHistoryMaxIndexRef.current, index);
+    // The history effect reruns on every data change, and on phones it resets
+    // the position each run. Setting unchanged state while a transition update
+    // to data is pending still schedules a sync render, which re-applies data's
+    // later updates into a new object and reruns the effect: React error #185.
+    if (index === appHistoryIndexRef.current && nextMaxIndex === appHistoryMaxIndexRef.current) return;
     appHistoryIndexRef.current = index;
     appHistoryMaxIndexRef.current = nextMaxIndex;
     setAppHistoryIndex(index);

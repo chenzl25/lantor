@@ -34,6 +34,13 @@ const state = { db_url: "synthetic://navigation-history", web_base_url: null, ow
   agent_runs: [], agent_work_items: [], agent_activities: [], decisions: [], supervisor: { pid: null, status: "stopped", updated_at: null },
   launch_agent: { label: "", plist_path: "", installed: false, loaded: false }, ui_event_cursor: 0 };
 
+const eventClients = new Set();
+let eventCursor = 0;
+function publish(event) {
+  eventCursor += 1;
+  for (const client of eventClients) client.write(`id: ${eventCursor}\nevent: lantor\ndata: ${JSON.stringify(event)}\n\n`);
+}
+
 const api = createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   if (!url.pathname.startsWith("/api/")) {
@@ -46,7 +53,8 @@ const api = createServer(async (req, res) => {
     return;
   }
   if (url.pathname === "/api/events") {
-    res.writeHead(200, { "content-type": "text/event-stream" }); res.write(": ready\n\n"); return;
+    res.writeHead(200, { "content-type": "text/event-stream" }); res.write(": ready\n\n");
+    eventClients.add(res); res.on("close", () => eventClients.delete(res)); return;
   }
   let raw = "";
   // The browser drops in-flight requests on reload; reading one throws.
@@ -60,7 +68,7 @@ const api = createServer(async (req, res) => {
     case "/api/load_thread_messages": result = messages.filter(m => m.id === args.threadRootId || m.thread_root_id === args.threadRootId); break;
     case "/api/load_message": result = messages.find(m => m.id === args.messageId); break;
     case "/api/load_ui_state": result = Object.fromEntries(args.scopes.map(scope => [scope, state[scope]])); break;
-    case "/api/replay_ui_events": result = { cursor: 0, replayGap: false, events: [] }; break;
+    case "/api/replay_ui_events": result = { cursor: eventCursor, replayGap: false, events: [] }; break;
     case "/api/open_dm_with_agent": result = dmId; break;
   }
   res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(result));
@@ -265,6 +273,32 @@ async function mobile(page, name) {
   console.log(`${name}: mobile in-app navigation passed`);
 }
 
+// A turn ends with progress updates still buffered, which land as a transition
+// update, and then non-transition run and work-item updates. While the
+// transition is pending, every sync render re-applies those later updates into
+// a new data object, so the mobile history effect (it reruns on data) must
+// not set state each run: that looped until React gave up (error #185).
+async function mobileTurnEnd(page, name) {
+  await page.goto(appUrl, { waitUntil: "domcontentloaded" });
+  await page.locator(".sidebar .channel").filter({ hasText: "alpha" }).first().click();
+  await expectView(page, { channel: "alpha", home: false, index: null }, "a channel before the turn ends");
+  const at = () => new Date().toISOString();
+  for (let turn = 0; turn < 40; turn += 1) {
+    publish({ type: "activity_upsert", reason: "activity", activity: { id: id(5000 + turn), agent_id: agent.id,
+      agent_handle: agent.handle, run_id: id(6000 + turn), kind: "tools", phase: "event", status: "active",
+      title: "Running command", summary: "", detail: "", metadata: {}, created_at: at() } });
+    await page.waitForTimeout(turn % 20);
+    publish({ type: "work_item_upsert", reason: "work_item_finished", work_item: { id: id(7000 + turn), agent_id: agent.id,
+      agent_handle: agent.handle, channel_id: alphaId, channel_name: "alpha", thread_root_id: null, source_message_id: null,
+      task_id: null, task_number: null, source_kind: "mention", title: "Reply", status: "completed", run_id: id(6000 + turn),
+      created_at: at(), updated_at: at(), completed_at: at() } });
+  }
+  await page.waitForTimeout(500);
+  assert.equal(await page.locator(".fatal-shell").count(), 0, `${name}: a turn ending on a phone leaves the app running`);
+  await expectView(page, { channel: "alpha", home: false, index: null }, "the channel after the turn ends");
+  console.log(`${name}: mobile turn end passed`);
+}
+
 // WebKit logs a request the app starts while the page unloads for a reload as
 // "Fetch API cannot load <url> due to access control checks.", even when the
 // app handles the rejection, and Playwright reports that log as a page error.
@@ -275,7 +309,7 @@ let browser;
 try {
   for (const [name, engine] of Object.entries({ chromium, webkit })) {
     browser = await engine.launch();
-    for (const [run, viewport] of [[desktop, { width: 1440, height: 960 }], [references, { width: 1440, height: 960 }], [mobile, { width: 390, height: 844 }]]) {
+    for (const [run, viewport] of [[desktop, { width: 1440, height: 960 }], [references, { width: 1440, height: 960 }], [mobile, { width: 390, height: 844 }], [mobileTurnEnd, { width: 393, height: 793 }]]) {
       const context = await browser.newContext({ serviceWorkers: "block", viewport });
       const page = await context.newPage(); page.setDefaultTimeout(8000);
       const errors = []; page.on("pageerror", error => { if (!interruptedFetch(error)) errors.push(error.message); });
