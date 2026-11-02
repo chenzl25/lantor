@@ -20,10 +20,7 @@ use super::{
         effective_launch_command, start_process_agent, terminate_process_group, ProcessAgentLaunch,
     },
     streaming::settle_orphaned_streaming_messages,
-    surface::{
-        render_claude_work_item_context, same_codex_surface, ClaudeWorkItemSurface,
-        CodexActiveTurnScheduleState,
-    },
+    surface::{append_surface_context, same_codex_surface, CodexActiveTurnScheduleState},
 };
 use crate::{
     agent_inbox_wake::{
@@ -725,7 +722,6 @@ async fn supervisor_start_agent(
                 r#"
                 select
                     w.channel_id,
-                    w.source_kind,
                     w.title,
                     w.context,
                     c.name as channel_name,
@@ -748,25 +744,16 @@ async fn supervisor_start_agent(
             let channel_name: Option<String> = row.get("channel_name");
             let task_number: Option<i64> = row.get("task_number");
             let thread_root_id: Option<Uuid> = row.get("thread_root_id");
-            let context = if runtime.eq_ignore_ascii_case("claude") {
-                let source_kind: String = row.get("source_kind");
-                let rendered = render_claude_work_item_context(
-                    pool,
-                    ClaudeWorkItemSurface {
-                        id: work_item_id,
-                        source_kind: &source_kind,
-                        stored_context: &context,
-                        channel_id,
-                        channel_name: channel_name.as_deref(),
-                        thread_root_id,
-                    },
-                )
-                .await?;
-                rendered_context_max_seq = rendered.max_seq;
-                rendered.context
-            } else {
-                context
-            };
+            let rendered = append_surface_context(
+                pool,
+                &context,
+                channel_id,
+                channel_name.as_deref(),
+                thread_root_id,
+            )
+            .await?;
+            rendered_context_max_seq = rendered.max_seq;
+            let context = rendered.context;
             let available_agents = load_channel_agent_roster(pool, channel_id, agent_id).await?;
             let github_reference_lines =
                 crate::github::load_agent_github_reference_lines(pool, channel_id).await?;
@@ -821,6 +808,7 @@ async fn supervisor_start_agent(
             working_directory,
             environment_variables,
             work_item_prompt,
+            rendered_context_max_seq,
             memory_context,
         )
         .await;
@@ -854,6 +842,7 @@ async fn supervisor_start_agent(
             command_text,
             environment_variables,
             work_item_prompt,
+            rendered_context_max_seq,
         },
     )
     .await
@@ -1741,6 +1730,7 @@ mod tests {
                         missing_directory.clone(),
                         String::new(),
                         String::new(),
+                        0,
                         None,
                     )
                     .await

@@ -1,10 +1,10 @@
-use super::{append_claude_thread_context, same_codex_surface};
+use super::{append_surface_context, same_codex_surface};
 use crate::channels::open_dm_with_agent_in_pool;
 use crate::test_support::{drop_test_schema, insert_test_agent, insert_test_channel, test_pool};
 use uuid::Uuid;
 
 #[tokio::test]
-async fn claude_thread_context_injects_only_current_thread_messages() {
+async fn surface_context_injects_only_current_thread_messages() {
     let Some((pool, schema)) = test_pool().await else {
         return;
     };
@@ -46,14 +46,15 @@ async fn claude_thread_context_injects_only_current_thread_messages() {
         .await
         .map_err(|err| err.to_string())?;
 
-        let context = append_claude_thread_context(
+        let context = append_surface_context(
             &pool,
             "Default inbox item: summarize",
             Some(channel_id),
             Some("claude-context"),
             Some(thread_a),
         )
-        .await?;
+        .await?
+        .context;
         assert!(context.contains("Same-thread recent context"));
         assert!(context.contains("Resolve contextual follow-ups from this block"));
         assert!(context.contains("thread A root"));

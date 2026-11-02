@@ -38,11 +38,12 @@ thread. A process that is in a turn is replaced at the first start after that
 turn. Use it when something the provider reads only at startup has changed,
 such as an MCP login.
 
-A work item's prompt carries the recent messages of its channel or thread.
-An inbox wake stores the thread's last messages when it is queued, and Codex
-reads that copy. Claude reads the channel or thread again when the turn
-starts (`runtime/surface.rs`) and drops the stored copy, so each message
-appears once, including anything posted while the wake waited.
+A work item's prompt carries the recent messages of its channel or thread,
+read when the turn starts (`runtime/surface.rs`) for every runtime. Queued
+work stores only what woke the agent, so each message appears once, including
+anything posted while the work waited. The highest message in that block marks
+what the agent has seen, which the freshness check compares against before
+posting a reply.
 
 Stdout-command runtimes are still supported for custom scripts. They can print
 one line to stdout with the `LANTOR_EVENT ` prefix followed by JSON. Non-matching
