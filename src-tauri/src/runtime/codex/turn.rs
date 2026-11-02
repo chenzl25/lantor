@@ -43,7 +43,13 @@ pub(super) async fn finish_codex_steer_request(
     settle_codex_steer(pool, steer.work_item_id, status, run_id, completed).await?;
     reconcile_work_item_change(pool, steer.work_item_id, "codex_turn_steer_result").await?;
     if success {
-        advance_agent_target_watermark_for_work_item(pool, agent_id, steer.work_item_id, 0).await?;
+        advance_agent_target_watermark_for_work_item(
+            pool,
+            agent_id,
+            steer.work_item_id,
+            steer.seen_seq,
+        )
+        .await?;
     } else if cancelled {
         let _ = mark_task_after_work_item_finished(
             pool,

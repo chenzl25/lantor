@@ -208,6 +208,9 @@ struct CodexActiveTurn {
 struct CodexSteerRequest {
     work_item_id: Uuid,
     run_id: Uuid,
+    /// Highest message seq the steered prompt showed; 0 for a compact
+    /// follow-up that carries no surface context.
+    seen_seq: i64,
 }
 
 struct CodexAgentMessageStream {
@@ -729,6 +732,7 @@ async fn steer_warm_codex_turn_if_same_surface(
     runtime: &Arc<WarmCodexRuntime>,
     work_item_id: Uuid,
     codex_prompt: &str,
+    rendered_context_max_seq: i64,
 ) -> CommandResult<bool> {
     let row = sqlx::query(
         r#"
@@ -778,15 +782,15 @@ async fn steer_warm_codex_turn_if_same_surface(
     let Some(turn_id) = active_turn_id else {
         return Ok(false);
     };
-    let steer_prompt = if source_kind == "inbox_wake" {
-        let items = load_inbox_wake_items_for_work_item(pool, work_item_id).await?;
-        if items.is_empty() {
-            codex_prompt.to_owned()
-        } else {
-            build_steer_followup_prompt(&items)
-        }
+    let compact_items = if source_kind == "inbox_wake" {
+        load_inbox_wake_items_for_work_item(pool, work_item_id).await?
     } else {
-        codex_prompt.to_owned()
+        Vec::new()
+    };
+    let (steer_prompt, seen_seq) = if compact_items.is_empty() {
+        (codex_prompt.to_owned(), rendered_context_max_seq)
+    } else {
+        (build_steer_followup_prompt(&compact_items), 0)
     };
 
     let request_id = {
@@ -818,6 +822,7 @@ async fn steer_warm_codex_turn_if_same_surface(
                 CodexSteerRequest {
                     work_item_id,
                     run_id,
+                    seen_seq,
                 },
             );
         request_id
@@ -881,6 +886,7 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
     working_directory: String,
     environment_variables: String,
     work_item_prompt: String,
+    rendered_context_max_seq: i64,
     memory_context: Option<String>,
 ) -> CommandResult<()> {
     let command_text = "codex app-server --listen stdio://".to_owned();
@@ -924,6 +930,7 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
                     &runtime,
                     work_item_id,
                     &codex_prompt,
+                    rendered_context_max_seq,
                 )
                 .await?
                 {
@@ -1159,7 +1166,13 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
         return Err(err);
     }
     if let Some(work_item_id) = work_item_id {
-        advance_agent_target_watermark_for_work_item(pool, agent_id, work_item_id, 0).await?;
+        advance_agent_target_watermark_for_work_item(
+            pool,
+            agent_id,
+            work_item_id,
+            rendered_context_max_seq,
+        )
+        .await?;
     }
 
     Ok(())
@@ -2169,6 +2182,7 @@ mod tests {
                 missing_directory,
                 String::new(),
                 "start me".to_owned(),
+                0,
                 None,
             )
             .await;

@@ -3,13 +3,12 @@ use std::time::Duration;
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use crate::agent_inbox_wake::inbox_wake_context_without_thread_snapshot;
 use crate::app::{to_string, CommandResult};
 use crate::attachments::attachment_summary_sql;
 use crate::context_tool::{format_context_message_row, short_id};
 
-const CLAUDE_THREAD_CONTEXT_MESSAGE_LIMIT: i64 = 16;
-const CLAUDE_THREAD_CONTEXT_BODY_LIMIT: usize = 1_200;
+const SURFACE_CONTEXT_MESSAGE_LIMIT: i64 = 16;
+const SURFACE_CONTEXT_BODY_LIMIT: usize = 1_200;
 
 pub(crate) struct RenderedThreadContext {
     pub(crate) context: String,
@@ -51,51 +50,10 @@ pub(crate) async fn same_codex_surface(
     Ok(thread_root_id == active_thread_root_id)
 }
 
-pub(crate) struct ClaudeWorkItemSurface<'a> {
-    pub(crate) id: Uuid,
-    pub(crate) source_kind: &'a str,
-    pub(crate) stored_context: &'a str,
-    pub(crate) channel_id: Option<Uuid>,
-    pub(crate) channel_name: Option<&'a str>,
-    pub(crate) thread_root_id: Option<Uuid>,
-}
-
-/// Builds a Claude work item's prompt context: the stored context followed by
-/// the surface's recent messages, read at turn start. An inbox wake drops the
-/// thread snapshot it stored when queued, since the fresh read replaces it.
-pub(crate) async fn render_claude_work_item_context(
-    pool: &SqlitePool,
-    work_item: ClaudeWorkItemSurface<'_>,
-) -> CommandResult<RenderedThreadContext> {
-    let rebuilt = if work_item.source_kind == "inbox_wake" {
-        inbox_wake_context_without_thread_snapshot(pool, work_item.id).await?
-    } else {
-        None
-    };
-    append_claude_thread_context_with_seq(
-        pool,
-        rebuilt.as_deref().unwrap_or(work_item.stored_context),
-        work_item.channel_id,
-        work_item.channel_name,
-        work_item.thread_root_id,
-    )
-    .await
-}
-
-#[cfg(test)]
-pub(crate) async fn append_claude_thread_context(
-    pool: &SqlitePool,
-    context: &str,
-    channel_id: Option<Uuid>,
-    channel_name: Option<&str>,
-    thread_root_id: Option<Uuid>,
-) -> CommandResult<String> {
-    append_claude_thread_context_with_seq(pool, context, channel_id, channel_name, thread_root_id)
-        .await
-        .map(|rendered| rendered.context)
-}
-
-async fn append_claude_thread_context_with_seq(
+/// Appends the surface's recent messages, read when the turn starts, to a
+/// work item's stored context. Every runtime gets this block, so queued work
+/// stores only what woke the agent, never a copy of the thread.
+pub(crate) async fn append_surface_context(
     pool: &SqlitePool,
     context: &str,
     channel_id: Option<Uuid>,
@@ -130,7 +88,7 @@ async fn append_claude_thread_context_with_seq(
         ))
         .bind(channel_id)
         .bind(thread_root_id)
-        .bind(CLAUDE_THREAD_CONTEXT_MESSAGE_LIMIT)
+        .bind(SURFACE_CONTEXT_MESSAGE_LIMIT)
         .fetch_all(pool)
         .await
         .map_err(to_string)?
@@ -153,7 +111,7 @@ async fn append_claude_thread_context_with_seq(
             attachment_summary_sql()
         ))
         .bind(channel_id)
-        .bind(CLAUDE_THREAD_CONTEXT_MESSAGE_LIMIT)
+        .bind(SURFACE_CONTEXT_MESSAGE_LIMIT)
         .fetch_all(pool)
         .await
         .map_err(to_string)?
@@ -170,7 +128,7 @@ async fn append_claude_thread_context_with_seq(
         .max()
         .unwrap_or(0);
 
-    let target = claude_context_target(channel_name, channel_id, thread_root_id);
+    let target = surface_target_label(channel_name, channel_id, thread_root_id);
     let mut lines = vec![
         String::new(),
         "Same-thread recent context (auto-injected by Lantor):".to_owned(),
@@ -180,7 +138,7 @@ async fn append_claude_thread_context_with_seq(
         lines.push(format_context_message_row(
             row,
             Some(&target),
-            CLAUDE_THREAD_CONTEXT_BODY_LIMIT,
+            SURFACE_CONTEXT_BODY_LIMIT,
         ));
     }
 
@@ -195,7 +153,7 @@ async fn append_claude_thread_context_with_seq(
     })
 }
 
-fn claude_context_target(
+fn surface_target_label(
     channel_name: Option<&str>,
     channel_id: Uuid,
     thread_root_id: Option<Uuid>,

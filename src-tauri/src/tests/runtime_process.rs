@@ -345,6 +345,7 @@ async fn cold_launch_failure_fails_run_agent_and_work_item_together() {
                 command_text: "true".to_owned(),
                 environment_variables: String::new(),
                 work_item_prompt: String::new(),
+                rendered_context_max_seq: 0,
             },
         )
         .await
@@ -384,6 +385,104 @@ async fn cold_launch_failure_fails_run_agent_and_work_item_together() {
                 "work_item_upsert:work_item_failed:failed",
             ]
         );
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn process_launch_marks_the_rendered_surface_context_as_seen() {
+    use crate::test_support::{
+        drop_test_schema, insert_test_agent, insert_test_channel, test_pool,
+    };
+    // Process runtimes launch through /bin/zsh, which Linux CI runners lack.
+    if !std::path::Path::new("/bin/zsh").exists() {
+        eprintln!("skipping process launch test: /bin/zsh is missing");
+        return;
+    }
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "seen-launch").await?;
+        let channel_id = insert_test_channel(&pool, "seen-launch").await?;
+        let message_id: uuid::Uuid = sqlx::query_scalar(
+            r#"
+            insert into messages (channel_id, sender_name, sender_role, body, is_task)
+            values ($1, 'Dylan', 'owner', 'shown in the prompt', false)
+            returning id
+            "#,
+        )
+        .bind(channel_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        // seq is assigned by an after-insert trigger, so read it back.
+        let seq: i64 = sqlx::query_scalar("select seq from messages where id = $1")
+            .bind(message_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        assert!(seq > 0);
+        let work_item_id: uuid::Uuid = sqlx::query_scalar(
+            r#"
+            insert into agent_work_items (agent_id, channel_id, title, status)
+            values ($1, $2, 'seen', 'queued')
+            returning id
+            "#,
+        )
+        .bind(agent_id)
+        .bind(channel_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+
+        super::start_process_agent(
+            &pool,
+            super::ProcessAgentLaunch {
+                agent_id,
+                work_item_id: Some(work_item_id),
+                handle: "seen-launch".to_owned(),
+                working_directory: std::env::temp_dir().to_string_lossy().into_owned(),
+                command_text: "true".to_owned(),
+                environment_variables: String::new(),
+                work_item_prompt: "prompt".to_owned(),
+                rendered_context_max_seq: seq,
+            },
+        )
+        .await?;
+
+        // The work item stored no context, so only the rendered surface can
+        // have moved the watermark.
+        let seen: i64 = sqlx::query_scalar(
+            r#"
+            select last_seen_seq
+            from agent_target_watermarks
+            where agent_id = $1 and channel_id = $2 and thread_root_id is null
+            "#,
+        )
+        .bind(agent_id)
+        .bind(channel_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(seen, seq);
+
+        // Let the run settle before the database is dropped.
+        for _ in 0..100 {
+            let status: String =
+                sqlx::query_scalar("select status from agent_work_items where id = $1")
+                    .bind(work_item_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            if status != "queued" && status != "running" {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         Ok(())
     }
     .await;

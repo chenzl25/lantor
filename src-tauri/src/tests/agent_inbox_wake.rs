@@ -1,13 +1,13 @@
 use super::{
     build_steer_followup_prompt, create_agent_inbox_item, ensure_agent_inbox_wake_work_item,
-    inbox_wake_context, inbox_wake_context_with_thread_context, AgentInboxItemInput, InboxWakeItem,
+    inbox_wake_context, inbox_wake_context_with_wiki, AgentInboxItemInput, InboxWakeItem,
 };
 use crate::channels::open_dm_with_agent_in_pool;
 use crate::context_tool::short_id;
 use crate::message_store::send_owner_message_in_pool;
 use crate::models::AttachmentUpload;
 use crate::prompts::WORK_ITEM_FINISH_PROMPT;
-use crate::runtime::surface::{render_claude_work_item_context, ClaudeWorkItemSurface};
+use crate::runtime::surface::append_surface_context;
 use crate::test_support::{drop_test_schema, insert_test_agent, insert_test_channel, test_pool};
 use crate::ui_notifications::reconcile_work_item_change;
 use chrono::Utc;
@@ -51,10 +51,10 @@ fn inbox_wake_context_keeps_selected_message_without_unrelated_summary() {
 }
 
 #[test]
-fn inbox_wake_context_includes_recent_thread_context_without_repeating_policy() {
+fn inbox_wake_context_announces_the_channel_wiki_without_repeating_policy() {
     let thread_root_id = Uuid::new_v4();
     let source_message_id = Uuid::new_v4();
-    let context = inbox_wake_context_with_thread_context(
+    let context = inbox_wake_context_with_wiki(
         &[InboxWakeItem {
             id: Uuid::new_v4(),
             channel_id: Some(Uuid::new_v4()),
@@ -73,12 +73,12 @@ fn inbox_wake_context_includes_recent_thread_context_without_repeating_policy() 
             sender_name: Some("Dylan".to_owned()),
             sender_role: Some("owner".to_owned()),
         }],
-        Some("[target=#support:abc msg=abc time=2026-01-01T00:00:00+00:00 type=agent delivery=error] Agent: partial work"),
         Some("Channel wiki for #support (rev abcd1234, updated 2026-01-01T00:00:00Z by @worker) — required reading before substantive work; skip if you already read this revision:\n# Support playbook"),
     );
 
-    assert!(context.contains("Recent same-thread context"));
-    assert!(context.contains("partial work"));
+    assert!(context.contains("# Support playbook"));
+    assert!(context.contains("@worker continue"));
+    assert!(!context.contains("Recent same-thread context"));
     assert!(!context.contains("Existing-thread context rule"));
 }
 
@@ -154,7 +154,7 @@ fn steer_followup_prompt_uses_compact_inbox_headers() {
 }
 
 #[tokio::test]
-async fn inbox_wake_injects_recent_thread_context_for_existing_thread_mention() {
+async fn inbox_wake_thread_context_is_read_once_at_turn_start() {
     let Some((pool, schema)) = test_pool().await else {
         return;
     };
@@ -246,9 +246,9 @@ async fn inbox_wake_injects_recent_thread_context_for_existing_thread_mention() 
         .await?;
 
         ensure_agent_inbox_wake_work_item(&pool, agent_id).await?;
-        let row = sqlx::query(
+        let context: String = sqlx::query_scalar(
             r#"
-            select id, context
+            select context
             from agent_work_items
             where agent_id = $1 and source_kind = 'inbox_wake'
             "#,
@@ -257,45 +257,35 @@ async fn inbox_wake_injects_recent_thread_context_for_existing_thread_mention() 
         .fetch_one(&pool)
         .await
         .map_err(|err| err.to_string())?;
-        let work_item_id: Uuid = row.get("id");
-        let context: String = row.get("context");
 
-        assert!(!context.contains("Existing-thread context rule"));
-        assert!(context.contains("Recent same-thread context"));
-        assert!(context.contains("please debug the network failure"));
-        assert!(context.contains(&attachment_id.to_string()));
-        assert!(context.contains("debug.log"));
-        assert!(context.contains("attachment-info"));
-        assert!(context.contains("partial investigation before network error"));
-        assert!(context.contains("delivery=error"));
+        // Queued work stores only what woke the agent; the thread is read
+        // when the turn starts, so it appears once and is current.
         assert!(context.contains("@resume-agent resume this thread"));
+        assert!(!context.contains("please debug the network failure"));
+        assert!(!context.contains("partial investigation before network error"));
 
-        // Claude reads the thread again at turn start, so the queued snapshot
-        // must not appear next to it.
-        let claude_context = render_claude_work_item_context(
+        let prompt_context = append_surface_context(
             &pool,
-            ClaudeWorkItemSurface {
-                id: work_item_id,
-                source_kind: "inbox_wake",
-                stored_context: &context,
-                channel_id: Some(channel_id),
-                channel_name: Some("resume-thread"),
-                thread_root_id: Some(thread_root_id),
-            },
+            &context,
+            Some(channel_id),
+            Some("resume-thread"),
+            Some(thread_root_id),
         )
         .await?
         .context;
-        assert!(!claude_context.contains("Recent same-thread context"));
-        assert!(claude_context.contains("Same-thread recent context"));
-        assert!(claude_context.contains("Default inbox item:"));
-        assert_eq!(claude_context.matches("please debug the network failure").count(), 1);
+        assert!(!prompt_context.contains("Existing-thread context rule"));
+        assert!(prompt_context.contains("Default inbox item:"));
+        assert!(prompt_context.contains("Same-thread recent context"));
+        assert_eq!(prompt_context.matches("please debug the network failure").count(), 1);
         assert_eq!(
-            claude_context.matches("partial investigation before network error").count(),
+            prompt_context.matches("partial investigation before network error").count(),
             1
         );
-        assert_eq!(claude_context.matches(&attachment_id.to_string()).count(), 1);
-        assert!(claude_context.contains("delivery=error"));
-        assert!(claude_context.contains(" time="));
+        assert_eq!(prompt_context.matches(&attachment_id.to_string()).count(), 1);
+        assert!(prompt_context.contains("debug.log"));
+        assert!(prompt_context.contains("attachment-info"));
+        assert!(prompt_context.contains("delivery=error"));
+        assert!(prompt_context.contains(" time="));
         Ok(())
     }
     .await;

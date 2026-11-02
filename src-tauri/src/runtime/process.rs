@@ -41,6 +41,8 @@ pub(crate) struct ProcessAgentLaunch {
     pub(crate) command_text: String,
     pub(crate) environment_variables: String,
     pub(crate) work_item_prompt: String,
+    /// Highest message seq in the prompt's surface context.
+    pub(crate) rendered_context_max_seq: i64,
 }
 
 pub(crate) fn truncate_activity_detail(value: &str) -> String {
@@ -537,6 +539,7 @@ pub(crate) async fn start_process_agent(
         command_text,
         environment_variables,
         work_item_prompt,
+        rendered_context_max_seq,
     } = launch;
     let initial_log = if work_item_prompt.is_empty() {
         format!("$ {command_text}\n")
@@ -661,7 +664,13 @@ pub(crate) async fn start_process_agent(
     )
     .await?;
     if let Some(work_item_id) = work_item_id {
-        advance_agent_target_watermark_for_work_item(pool, agent_id, work_item_id, 0).await?;
+        advance_agent_target_watermark_for_work_item(
+            pool,
+            agent_id,
+            work_item_id,
+            rendered_context_max_seq,
+        )
+        .await?;
     }
 
     let mut pipe_tasks = Vec::new();

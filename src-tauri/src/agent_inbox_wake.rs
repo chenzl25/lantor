@@ -11,7 +11,7 @@ use crate::{
     app::{to_string, CommandResult},
     attachments::attachment_summary_sql,
     channel_wiki::channel_wiki_wake_block,
-    context_tool::{compact_message_body, format_context_message_row, short_id},
+    context_tool::{compact_message_body, short_id},
     events::activity::record_agent_activity,
     runtime::lifecycle::mark_agent_queued_in_tx,
     text::compact_chars_middle,
@@ -19,8 +19,6 @@ use crate::{
 
 const DISPATCH_MESSAGE_BODY_LIMIT: usize = 4 * 1024;
 const INBOX_WAKE_BATCH_LIMIT: i64 = 8;
-const INBOX_WAKE_THREAD_CONTEXT_LIMIT: i64 = 10;
-const INBOX_WAKE_THREAD_CONTEXT_BODY_LIMIT: usize = 1200;
 
 pub(crate) struct AgentInboxItemInput<'a> {
     pub(crate) agent_id: Uuid,
@@ -102,11 +100,6 @@ fn compact_inbox_preview(preview: &str, source_message_id: Option<Uuid>) -> Stri
         Some(message_id) => compact_message_body(preview, DISPATCH_MESSAGE_BODY_LIMIT, message_id),
         None => compact_chars_middle(preview, DISPATCH_MESSAGE_BODY_LIMIT),
     }
-}
-
-struct RecentSameThreadContext {
-    body: String,
-    max_seq: i64,
 }
 
 pub(crate) async fn create_agent_inbox_item(
@@ -474,7 +467,7 @@ fn inbox_wake_work_item_title(items: &[InboxWakeItem]) -> String {
 
 #[cfg(test)]
 pub(crate) fn inbox_wake_context(items: &[InboxWakeItem]) -> String {
-    inbox_wake_context_with_thread_context(items, None, None)
+    inbox_wake_context_with_wiki(items, None)
 }
 
 /// Load the channel-wiki announcement block for the batch's primary channel,
@@ -500,9 +493,11 @@ async fn load_channel_wiki_context(
     channel_wiki_wake_block(pool, channel_id, &label).await
 }
 
-pub(crate) fn inbox_wake_context_with_thread_context(
+/// Renders what woke the agent. The surface's recent messages are not stored
+/// here: the supervisor reads them when the turn starts
+/// (`runtime::surface::append_surface_context`).
+pub(crate) fn inbox_wake_context_with_wiki(
     items: &[InboxWakeItem],
-    same_thread_context: Option<&str>,
     channel_wiki_block: Option<&str>,
 ) -> String {
     let Some(primary) = items.first() else {
@@ -527,13 +522,6 @@ pub(crate) fn inbox_wake_context_with_thread_context(
     ];
     if let Some(channel_wiki_block) = channel_wiki_block.filter(|block| !block.trim().is_empty()) {
         lines.push(channel_wiki_block.trim().to_owned());
-        lines.push(String::new());
-    }
-    if let Some(same_thread_context) =
-        same_thread_context.filter(|context| !context.trim().is_empty())
-    {
-        lines.push("Recent same-thread context (oldest to newest):".to_owned());
-        lines.push(same_thread_context.trim().to_owned());
         lines.push(String::new());
     }
     if has_task_available {
@@ -571,110 +559,12 @@ pub(crate) fn inbox_wake_context_with_thread_context(
     lines.join("\n")
 }
 
-/// Rebuilds an inbox wake's context without the same-thread snapshot taken
-/// when the wake was queued. Claude renders the thread again at turn start,
-/// so keeping the snapshot would show the same messages twice.
-pub(crate) async fn inbox_wake_context_without_thread_snapshot(
-    pool: &SqlitePool,
-    work_item_id: Uuid,
-) -> CommandResult<Option<String>> {
-    let items = load_inbox_wake_items_for_work_item(pool, work_item_id).await?;
-    if items.is_empty() {
-        return Ok(None);
-    }
-    let channel_wiki_block = load_channel_wiki_context(pool, &items).await?;
-    Ok(Some(inbox_wake_context_with_thread_context(
-        &items,
-        None,
-        channel_wiki_block.as_deref(),
-    )))
-}
-
-fn inbox_item_is_existing_thread_message(item: &InboxWakeItem) -> bool {
-    matches!(
-        (item.thread_root_id, item.source_message_id),
-        (Some(thread_root_id), Some(source_message_id)) if thread_root_id != source_message_id
-    )
-}
-
-async fn load_recent_same_thread_context(
-    pool: &SqlitePool,
-    items: &[InboxWakeItem],
-) -> CommandResult<Option<RecentSameThreadContext>> {
-    let Some(context_item) = items
-        .iter()
-        .find(|item| inbox_item_is_existing_thread_message(item))
-    else {
-        return Ok(None);
-    };
-    let (Some(channel_id), Some(thread_root_id)) =
-        (context_item.channel_id, context_item.thread_root_id)
-    else {
-        return Ok(None);
-    };
-    let rows = sqlx::query(&format!(
-        r#"
-        select
-            m.id,
-            m.sender_name,
-            m.sender_role,
-            m.body,
-            m.delivery_state,
-            m.seq,
-            m.created_at,
-            {}
-        from messages m
-        where m.channel_id = $1
-          and (m.id = $2 or m.thread_root_id = $2)
-        order by m.seq desc
-        limit $3
-        "#,
-        attachment_summary_sql()
-    ))
-    .bind(channel_id)
-    .bind(thread_root_id)
-    .bind(INBOX_WAKE_THREAD_CONTEXT_LIMIT)
-    .fetch_all(pool)
-    .await
-    .map_err(to_string)?;
-
-    if rows.is_empty() {
-        return Ok(None);
-    }
-
-    let target = context_item.target();
-    let max_seq = rows
-        .iter()
-        .map(|row| row.get::<i64, _>("seq"))
-        .max()
-        .unwrap_or(0);
-    let lines = rows
-        .into_iter()
-        .rev()
-        .map(|row| {
-            format_context_message_row(&row, Some(&target), INBOX_WAKE_THREAD_CONTEXT_BODY_LIMIT)
-        })
-        .collect::<Vec<_>>();
-    Ok(Some(RecentSameThreadContext {
-        body: lines.join("\n"),
-        max_seq,
-    }))
-}
-
-fn inbox_wake_context_max_seq(
-    items: &[InboxWakeItem],
-    same_thread_context: Option<&RecentSameThreadContext>,
-) -> i64 {
-    let item_max = items
+fn inbox_wake_context_max_seq(items: &[InboxWakeItem]) -> i64 {
+    items
         .iter()
         .filter_map(|item| item.message_seq)
         .max()
-        .unwrap_or(0);
-    item_max.max(
-        same_thread_context
-            .map(|context| context.max_seq)
-            .unwrap_or(0),
-    )
+        .unwrap_or(0)
 }
 
 pub(crate) fn build_steer_followup_prompt(items: &[InboxWakeItem]) -> String {
@@ -717,9 +607,8 @@ async fn refresh_inbox_wake_work_item(
     let Some(primary) = items.first() else {
         return Ok(());
     };
-    let same_thread_context = load_recent_same_thread_context(pool, items).await?;
     let channel_wiki_block = load_channel_wiki_context(pool, items).await?;
-    let context_max_seq = inbox_wake_context_max_seq(items, same_thread_context.as_ref());
+    let context_max_seq = inbox_wake_context_max_seq(items);
     let mut transaction = pool.begin().await.map_err(to_string)?;
     sqlx::query(
         r#"
@@ -743,11 +632,8 @@ async fn refresh_inbox_wake_work_item(
     .bind(primary.id)
     .bind(primary.task_id)
     .bind(inbox_wake_work_item_title(items))
-    .bind(inbox_wake_context_with_thread_context(
+    .bind(inbox_wake_context_with_wiki(
         items,
-        same_thread_context
-            .as_ref()
-            .map(|context| context.body.as_str()),
         channel_wiki_block.as_deref(),
     ))
     .bind(context_max_seq)
@@ -864,9 +750,8 @@ pub(crate) async fn ensure_agent_inbox_wake_work_item(
         return Ok(Some((existing_work_item_id, scheduled)));
     }
 
-    let same_thread_context = load_recent_same_thread_context(pool, &batch).await?;
     let channel_wiki_block = load_channel_wiki_context(pool, &batch).await?;
-    let context_max_seq = inbox_wake_context_max_seq(&batch, same_thread_context.as_ref());
+    let context_max_seq = inbox_wake_context_max_seq(&batch);
     let mut transaction = pool.begin().await.map_err(to_string)?;
     let work_item_id: Uuid = sqlx::query_scalar(
         r#"
@@ -885,11 +770,8 @@ pub(crate) async fn ensure_agent_inbox_wake_work_item(
     .bind(batch[0].id)
     .bind(batch[0].task_id)
     .bind(inbox_wake_work_item_title(&batch))
-    .bind(inbox_wake_context_with_thread_context(
+    .bind(inbox_wake_context_with_wiki(
         &batch,
-        same_thread_context
-            .as_ref()
-            .map(|context| context.body.as_str()),
         channel_wiki_block.as_deref(),
     ))
     .bind(context_max_seq)
