@@ -21,7 +21,8 @@ use super::{
     },
     streaming::settle_orphaned_streaming_messages,
     surface::{
-        append_claude_thread_context_with_seq, same_codex_surface, CodexActiveTurnScheduleState,
+        render_claude_work_item_context, same_codex_surface, ClaudeWorkItemSurface,
+        CodexActiveTurnScheduleState,
     },
 };
 use crate::{
@@ -724,6 +725,7 @@ async fn supervisor_start_agent(
                 r#"
                 select
                     w.channel_id,
+                    w.source_kind,
                     w.title,
                     w.context,
                     c.name as channel_name,
@@ -747,12 +749,17 @@ async fn supervisor_start_agent(
             let task_number: Option<i64> = row.get("task_number");
             let thread_root_id: Option<Uuid> = row.get("thread_root_id");
             let context = if runtime.eq_ignore_ascii_case("claude") {
-                let rendered = append_claude_thread_context_with_seq(
+                let source_kind: String = row.get("source_kind");
+                let rendered = render_claude_work_item_context(
                     pool,
-                    &context,
-                    channel_id,
-                    channel_name.as_deref(),
-                    thread_root_id,
+                    ClaudeWorkItemSurface {
+                        id: work_item_id,
+                        source_kind: &source_kind,
+                        stored_context: &context,
+                        channel_id,
+                        channel_name: channel_name.as_deref(),
+                        thread_root_id,
+                    },
                 )
                 .await?;
                 rendered_context_max_seq = rendered.max_seq;

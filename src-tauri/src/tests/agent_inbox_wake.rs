@@ -7,6 +7,7 @@ use crate::context_tool::short_id;
 use crate::message_store::send_owner_message_in_pool;
 use crate::models::AttachmentUpload;
 use crate::prompts::WORK_ITEM_FINISH_PROMPT;
+use crate::runtime::surface::{render_claude_work_item_context, ClaudeWorkItemSurface};
 use crate::test_support::{drop_test_schema, insert_test_agent, insert_test_channel, test_pool};
 use crate::ui_notifications::reconcile_work_item_change;
 use chrono::Utc;
@@ -245,9 +246,9 @@ async fn inbox_wake_injects_recent_thread_context_for_existing_thread_mention() 
         .await?;
 
         ensure_agent_inbox_wake_work_item(&pool, agent_id).await?;
-        let context: String = sqlx::query_scalar(
+        let row = sqlx::query(
             r#"
-            select context
+            select id, context
             from agent_work_items
             where agent_id = $1 and source_kind = 'inbox_wake'
             "#,
@@ -256,6 +257,8 @@ async fn inbox_wake_injects_recent_thread_context_for_existing_thread_mention() 
         .fetch_one(&pool)
         .await
         .map_err(|err| err.to_string())?;
+        let work_item_id: Uuid = row.get("id");
+        let context: String = row.get("context");
 
         assert!(!context.contains("Existing-thread context rule"));
         assert!(context.contains("Recent same-thread context"));
@@ -266,6 +269,33 @@ async fn inbox_wake_injects_recent_thread_context_for_existing_thread_mention() 
         assert!(context.contains("partial investigation before network error"));
         assert!(context.contains("delivery=error"));
         assert!(context.contains("@resume-agent resume this thread"));
+
+        // Claude reads the thread again at turn start, so the queued snapshot
+        // must not appear next to it.
+        let claude_context = render_claude_work_item_context(
+            &pool,
+            ClaudeWorkItemSurface {
+                id: work_item_id,
+                source_kind: "inbox_wake",
+                stored_context: &context,
+                channel_id: Some(channel_id),
+                channel_name: Some("resume-thread"),
+                thread_root_id: Some(thread_root_id),
+            },
+        )
+        .await?
+        .context;
+        assert!(!claude_context.contains("Recent same-thread context"));
+        assert!(claude_context.contains("Same-thread recent context"));
+        assert!(claude_context.contains("Default inbox item:"));
+        assert_eq!(claude_context.matches("please debug the network failure").count(), 1);
+        assert_eq!(
+            claude_context.matches("partial investigation before network error").count(),
+            1
+        );
+        assert_eq!(claude_context.matches(&attachment_id.to_string()).count(), 1);
+        assert!(claude_context.contains("delivery=error"));
+        assert!(claude_context.contains(" time="));
         Ok(())
     }
     .await;

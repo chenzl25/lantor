@@ -32,6 +32,12 @@ pub(crate) fn percent_decode_utf8(value: &str) -> Option<String> {
 }
 
 pub(crate) fn compact_chars_middle(value: &str, limit: usize) -> String {
+    compact_chars_middle_with_note(value, limit, "to keep agent context bounded")
+}
+
+/// Like [`compact_chars_middle`], but the omission marker ends with `note`,
+/// e.g. a command that reads the full text back.
+pub(crate) fn compact_chars_middle_with_note(value: &str, limit: usize, note: &str) -> String {
     let trimmed = value.trim();
     let chars: Vec<char> = trimmed.chars().collect();
     if chars.len() <= limit {
@@ -46,7 +52,21 @@ pub(crate) fn compact_chars_middle(value: &str, limit: usize) -> String {
         .iter()
         .skip(chars.len().saturating_sub(tail_len))
         .collect::<String>();
-    format!("{head}\n\n[... Lantor omitted {omitted} chars to keep agent context bounded ...]\n\n{tail}")
+    format!("{head}\n\n[... Lantor omitted {omitted} chars {note} ...]\n\n{tail}")
+}
+
+/// Normalizes a UUID, or the 8+ hex prefix that agent tools print
+/// (`msg=6e0853de`), into lowercase hex without dashes.
+pub(crate) fn uuid_prefix_hex(raw: &str) -> Option<String> {
+    let hex = raw
+        .trim()
+        .trim_start_matches("msg=")
+        .chars()
+        .filter(|ch| *ch != '-')
+        .collect::<String>()
+        .to_lowercase();
+    (hex.len() >= 8 && hex.len() <= 32 && hex.chars().all(|ch| ch.is_ascii_hexdigit()))
+        .then_some(hex)
 }
 
 fn decode_utf8_head(mut bytes: Vec<u8>, may_end_mid_character: bool) -> Result<String, String> {

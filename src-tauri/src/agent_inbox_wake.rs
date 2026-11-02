@@ -11,7 +11,7 @@ use crate::{
     app::{to_string, CommandResult},
     attachments::attachment_summary_sql,
     channel_wiki::channel_wiki_wake_block,
-    context_tool::short_id,
+    context_tool::{compact_message_body, format_context_message_row, short_id},
     events::activity::record_agent_activity,
     runtime::lifecycle::mark_agent_queued_in_tx,
     text::compact_chars_middle,
@@ -79,8 +79,8 @@ impl InboxWakeItem {
             .as_deref()
             .filter(|name| !name.trim().is_empty())
             .unwrap_or("unknown");
-        let preview = compact_chars_middle(&self.body_preview, DISPATCH_MESSAGE_BODY_LIMIT)
-            .replace('\n', " ");
+        let preview =
+            compact_inbox_preview(&self.body_preview, self.source_message_id).replace('\n', " ");
         let mut output = format!(
             "[target={} msg={} time={} type={}] {}: {}",
             self.target(),
@@ -92,6 +92,15 @@ impl InboxWakeItem {
         );
         append_attachment_summary(&mut output, &self.attachment_summary);
         output
+    }
+}
+
+/// Bounds an inbox preview. Previews come from the source message, so a cut
+/// preview points at message-read for the full text.
+fn compact_inbox_preview(preview: &str, source_message_id: Option<Uuid>) -> String {
+    match source_message_id {
+        Some(message_id) => compact_message_body(preview, DISPATCH_MESSAGE_BODY_LIMIT, message_id),
+        None => compact_chars_middle(preview, DISPATCH_MESSAGE_BODY_LIMIT),
     }
 }
 
@@ -142,9 +151,9 @@ pub(crate) async fn create_agent_inbox_item(
             .bind(input.task_id)
             .bind(input.priority)
             .bind(input.title)
-            .bind(compact_chars_middle(
+            .bind(compact_inbox_preview(
                 input.body_preview,
-                DISPATCH_MESSAGE_BODY_LIMIT,
+                input.source_message_id,
             ))
             .bind(input.payload)
             .execute(pool)
@@ -172,9 +181,9 @@ pub(crate) async fn create_agent_inbox_item(
     .bind(input.kind)
     .bind(input.priority)
     .bind(input.title)
-    .bind(compact_chars_middle(
+    .bind(compact_inbox_preview(
         input.body_preview,
-        DISPATCH_MESSAGE_BODY_LIMIT,
+        input.source_message_id,
     ))
     .bind(input.payload)
     .fetch_one(pool)
@@ -562,38 +571,30 @@ pub(crate) fn inbox_wake_context_with_thread_context(
     lines.join("\n")
 }
 
+/// Rebuilds an inbox wake's context without the same-thread snapshot taken
+/// when the wake was queued. Claude renders the thread again at turn start,
+/// so keeping the snapshot would show the same messages twice.
+pub(crate) async fn inbox_wake_context_without_thread_snapshot(
+    pool: &SqlitePool,
+    work_item_id: Uuid,
+) -> CommandResult<Option<String>> {
+    let items = load_inbox_wake_items_for_work_item(pool, work_item_id).await?;
+    if items.is_empty() {
+        return Ok(None);
+    }
+    let channel_wiki_block = load_channel_wiki_context(pool, &items).await?;
+    Ok(Some(inbox_wake_context_with_thread_context(
+        &items,
+        None,
+        channel_wiki_block.as_deref(),
+    )))
+}
+
 fn inbox_item_is_existing_thread_message(item: &InboxWakeItem) -> bool {
     matches!(
         (item.thread_root_id, item.source_message_id),
         (Some(thread_root_id), Some(source_message_id)) if thread_root_id != source_message_id
     )
-}
-
-fn format_recent_thread_context_row(row: &SqliteRow, target: &str) -> String {
-    let message_id: Uuid = row.get("id");
-    let created_at: DateTime<Utc> = row.get("created_at");
-    let sender_role: String = row.get("sender_role");
-    let sender_name: String = row.get("sender_name");
-    let delivery_state: String = row.get("delivery_state");
-    let state_suffix = if delivery_state == "complete" {
-        String::new()
-    } else {
-        format!(" delivery={delivery_state}")
-    };
-    let body: String = row.get("body");
-    let body = compact_chars_middle(&body, INBOX_WAKE_THREAD_CONTEXT_BODY_LIMIT).replace('\n', " ");
-    let mut output = format!(
-        "[target={target} msg={} time={} type={}{}] {}: {}",
-        short_id(message_id),
-        created_at.to_rfc3339(),
-        sender_role,
-        state_suffix,
-        sender_name,
-        body
-    );
-    let attachment_summary: String = row.get("attachment_summary");
-    append_attachment_summary(&mut output, &attachment_summary);
-    output
 }
 
 async fn load_recent_same_thread_context(
@@ -650,7 +651,9 @@ async fn load_recent_same_thread_context(
     let lines = rows
         .into_iter()
         .rev()
-        .map(|row| format_recent_thread_context_row(&row, &target))
+        .map(|row| {
+            format_context_message_row(&row, Some(&target), INBOX_WAKE_THREAD_CONTEXT_BODY_LIMIT)
+        })
         .collect::<Vec<_>>();
     Ok(Some(RecentSameThreadContext {
         body: lines.join("\n"),
