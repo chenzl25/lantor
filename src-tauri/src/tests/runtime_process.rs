@@ -397,6 +397,11 @@ async fn process_launch_marks_the_rendered_surface_context_as_seen() {
     use crate::test_support::{
         drop_test_schema, insert_test_agent, insert_test_channel, test_pool,
     };
+    // Process runtimes launch through /bin/zsh, which Linux CI runners lack.
+    if !std::path::Path::new("/bin/zsh").exists() {
+        eprintln!("skipping process launch test: /bin/zsh is missing");
+        return;
+    }
     let Some((pool, schema)) = test_pool().await else {
         return;
     };
