@@ -67,16 +67,18 @@ test("proxy expiry pauses requests, preserves mutations, and recovers only on a 
   assert.equal(requests.at(-1)?.url, "/api/health");
   assert.equal(requests.at(-1)?.init?.cache, "no-store");
 
-  // Offline/CORS/server/permission failures never trigger a login loop.
+  // Offline/CORS/server/permission failures never trigger a login loop. A
+  // proxy's own 5xx page means the Mac is out of reach.
   for (const status of [403, 502, 503]) {
     respond = async () => new Response("error", { status });
-    assert.equal((await sessionFetch("/api/probe")).status, status);
+    if (status === 403) assert.equal((await sessionFetch("/api/probe")).status, status);
+    else await assert.rejects(sessionFetch("/api/probe"), /Can’t reach your Mac/);
     now += 6_000;
     await checkWebSession();
     assert.equal(isWebSessionExpired(), false);
   }
   respond = async () => { throw new TypeError("Failed to fetch"); };
-  await assert.rejects(sessionFetch("/api/probe"), /Failed to fetch/);
+  await assert.rejects(sessionFetch("/api/probe"), /Can’t reach your Mac/);
   now += 6_000;
   await checkWebSession();
   assert.equal(isWebSessionExpired(), false);

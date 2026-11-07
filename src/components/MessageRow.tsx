@@ -94,10 +94,11 @@ export const MessageRow = memo(function MessageRow({
         <strong>{message.sender_name}</strong><span>{message.sender_role}</span><time>{formatTime(message.created_at)}</time>
         {wasEdited(message) && <span className="edited-indicator">edited</span>}
         {taskNumber !== undefined && <mark><CheckCircle2 size={14} /> #{taskNumber} · {taskStatus?.replace("_", " ")}</mark>}
-        <button type="button" className={`message-save-button mobile-message-save-tag ${saved ? "saved" : ""}`}
+        {/* Phones save from the long-press menu; the tag only marks saved messages. */}
+        {saved && <button type="button" className="message-save-button mobile-message-save-tag saved"
           title={saveLabel} aria-label={saveLabel} aria-pressed={saved}
           onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => { event.stopPropagation(); act("save"); }}><Bookmark size={14} /></button>
+          onClick={(event) => { event.stopPropagation(); act("save"); }}><Bookmark size={14} /></button>}
       </div>}
       <div className="message-hover-actions" aria-label="Message actions">
         <button type="button" data-tooltip="Quote" title="Quote" aria-label="Quote"
