@@ -654,7 +654,7 @@ export function AgentDetailDrawer({
             )}
           </div>
         </section>
-        <AgentTools key={agent.id} agent={agent} onRestart={onRestart} />
+        <AgentTools key={agent.id} agent={agent} onRestart={onRestart} restartDisabledReason={restartDisabledReason} />
         {(isCodex || isClaude) && (
           <AgentSubscriptionUsage agent={agent} />
         )}

@@ -4,9 +4,10 @@ import { apiInvoke } from "../apiClient";
 import type { Agent, AgentTools as Tools, AgentToolSummary, AgentToolInventory } from "../types";
 import { formatRelativeTime } from "../ui-utils";
 
-const failedStatuses = new Set(["failed", "error", "disconnected", "authenticationRequired"]);
+const failedStatuses = new Set(["failed", "error", "disconnected", "authenticationRequired", "needs-auth"]);
 const needsAttention = (server: Tools["mcp"]["items"][number]) =>
   Boolean(server.tools_error) || server.auth_status === "notLoggedIn" || failedStatuses.has(server.status);
+const countLabel = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
 
 function stateLabel(state: string) {
   return ({ ready: "", unavailable: "Could not read status", unconfirmed: "Not confirmed yet",
@@ -16,7 +17,7 @@ function stateLabel(state: string) {
 function statusLabel(status: string) {
   return ({ connected: "Connected", pending: "Pending", starting: "Starting", connecting: "Connecting",
     failed: "Failed", error: "Error", disconnected: "Disconnected", authenticationRequired: "Login required",
-    notStarted: "Not started", disabled: "Disabled", cancelled: "Cancelled" })[status] ?? "Unknown";
+    "needs-auth": "Login required", notStarted: "Not started", disabled: "Disabled", cancelled: "Cancelled" })[status] ?? "Unknown";
 }
 
 function authLabel(status: string) {
@@ -48,7 +49,7 @@ function Server({ server, runtime }: { server: Tools["mcp"]["items"][number]; ru
       {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
       <strong>{server.name}</strong>
       <span className={`agent-tools-status${runtime === "claude" && server.status === "connected" ? " connected" : ""}`}>
-        {statusLabel(server.status)} · {server.tools.length} tools
+        {statusLabel(server.status)} · {countLabel(server.tools.length, "tool")}
       </span>
     </button>
     {server.auth_status && <p className="agent-tools-note">Authentication: {authLabel(server.auth_status)}</p>}
@@ -66,7 +67,11 @@ function SnapshotNote({ inventory }: { inventory: AgentToolInventory<unknown> })
   </>;
 }
 
-export function AgentTools({ agent, onRestart }: { agent: Agent; onRestart: (agent: Agent) => void }) {
+export function AgentTools({ agent, onRestart, restartDisabledReason }: {
+  agent: Agent;
+  onRestart: (agent: Agent) => void;
+  restartDisabledReason: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [data, setData] = useState<Tools | null>(null);
   const [loading, setLoading] = useState(false);
@@ -114,7 +119,7 @@ export function AgentTools({ agent, onRestart }: { agent: Agent; onRestart: (age
       {data && <>
         <p className="agent-tools-note" title={data.checked_at}>Checked {formatRelativeTime(data.checked_at)}</p>
         {data.mcp.state === "ready" && data.plugins.state === "ready" && data.skills.state === "ready" &&
-          <p className="agent-tools-note">{servers.length} MCP servers · {userPlugins.length} plugins{builtinPlugins.length ? ` + ${builtinPlugins.length} built-in` : ""} · {data.skills.items.length} skills</p>}
+          <p className="agent-tools-note">{countLabel(servers.length, "MCP server")} · {countLabel(userPlugins.length, "plugin")}{builtinPlugins.length ? ` + ${builtinPlugins.length} built-in` : ""} · {countLabel(data.skills.items.length, "skill")}</p>}
         {issues.filter(([, section]) => section.state !== "ready").map(([label, section]) =>
           <p className={`agent-tools-${section.state === "unavailable" ? "error" : "note"}`} key={label}>
             {label}: {section.message || stateLabel(section.state)}
@@ -147,7 +152,8 @@ export function AgentTools({ agent, onRestart }: { agent: Agent; onRestart: (age
         </div>
       </>}
       <div className="agent-tools-footer"><p>Changed a login or tools? Restart to apply them to the running agent.</p>
-        <button type="button" className="agent-tools-refresh" onClick={() => onRestart(agent)}>Restart</button>
+        <button type="button" className="agent-tools-refresh" disabled={Boolean(restartDisabledReason)}
+          title={restartDisabledReason || undefined} onClick={() => onRestart(agent)}>Restart</button>
       </div>
     </div>}
   </section>;

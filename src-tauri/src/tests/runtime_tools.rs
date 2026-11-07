@@ -29,11 +29,14 @@ for line in sys.stdin:
   if mode=='error':
    print(json.dumps({'type':'control_response','response':{'request_id':m['request_id'],'subtype':'error','error':'fixture error'}}),flush=True);continue
   result={'mcpServers':[] if polls==1 else [{'name':'docs','status':'pending' if mode=='pending' or polls==2 else 'connected','tools':[{'name':'read','description':'Read a document','inputSchema':{'secret':'never forwarded'}}]}]}
+  if mode=='failed': result={'mcpServers':[{'name':'docs','status':'failed','error':'fixture failure'}]}
  if method=='mcpServerStatus/list':
   if mode=='mcp_error':
    print(json.dumps({'id':m['id'],'error':{'message':'fixture error'}}),flush=True);continue
   result={'data':[{'name':'apps','runtimeStatus':None,'authStatus':'oAuth','toolsError':None,'tools':{'find':{'name':'find','description':'Find records','inputSchema':{'type':'object'}}}}], 'nextCursor':None}
  if method=='plugin/list':
+  if mode=='plugin_error':
+   print(json.dumps({'id':m['id'],'error':{'message':'fixture error'}}),flush=True);continue
   plugins_loaded=True
   result={'marketplaces':[{'name':'fixture','plugins':[{'name':'installed','installed':True,'enabled':True},{'name':'not installed','installed':False}]}]}
  if method=='skills/list': result={'data':[{'cwd':m['params']['cwds'][0],'skills':[{'name':'plugin-skill' if plugins_loaded else 'incomplete','description':'A skill','enabled':True}],'errors':[]}]}
@@ -148,6 +151,43 @@ async fn one_codex_section_error_does_not_hide_other_sections() {
     assert_eq!(result.mcp.state, "unavailable");
     assert_eq!(result.plugins.items[0].name, "installed");
     assert_eq!(result.skills.items[0].name, "plugin-skill");
+}
+
+#[tokio::test]
+async fn claude_server_error_reaches_the_inventory() {
+    let config = config("claude");
+    let mut result = AgentTools::unavailable(&config);
+    probe_command(
+        &config,
+        &mut result,
+        fake("failed"),
+        Duration::from_secs(1),
+        Duration::from_secs(3),
+    )
+    .await;
+    assert_eq!(result.mcp.state, "ready");
+    assert_eq!(result.mcp.items[0].status, "failed");
+    assert_eq!(
+        result.mcp.items[0].tools_error.as_deref(),
+        Some("fixture failure")
+    );
+}
+
+#[tokio::test]
+async fn skills_are_unconfirmed_when_plugin_listing_fails() {
+    let config = config("codex");
+    let mut result = AgentTools::unavailable(&config);
+    probe_command(
+        &config,
+        &mut result,
+        fake("plugin_error"),
+        Duration::from_secs(1),
+        Duration::from_secs(3),
+    )
+    .await;
+    assert_eq!(result.plugins.state, "unavailable");
+    assert_eq!(result.skills.state, "unconfirmed");
+    assert_eq!(result.skills.items[0].name, "incomplete");
 }
 
 #[tokio::test]

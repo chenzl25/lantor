@@ -33,7 +33,9 @@ const codexResult = {agent_id:agent.id,runtime:"codex",checked_at:now.toISOStrin
   plugins:section(Array.from({length:22},(_,n)=>({name:`Installed plugin ${n}`,description:"Synthetic plugin",builtin:false,enabled:true}))),
   skills:section(Array.from({length:64},(_,n)=>({name:`Skill ${n}`,description:"Synthetic skill"})))};
 const claudeResult={...codexResult,runtime:"claude",
-  mcp:section([{name:"Workspace docs",status:"connected",auth_status:null,tools_error:null,tools:tools.slice(0,8)}]),
+  mcp:section([{name:"Workspace docs",status:"connected",auth_status:null,tools_error:null,tools:tools.slice(0,8)},
+    {name:"Single tool",status:"connected",auth_status:null,tools_error:null,tools:tools.slice(0,1)},
+    {name:"Zeta login",status:"needs-auth",auth_status:null,tools_error:null,tools:[]}]),
   plugins:{...section([...Array.from({length:3},(_,n)=>({name:`User plugin ${n}`,description:"",builtin:false,enabled:true})),
     ...Array.from({length:3},(_,n)=>({name:`internal-${n}@builtin`,description:"",builtin:true,enabled:true}))]),observed_at:iso(-30)},
   skills:{...section(Array.from({length:33},(_,n)=>({name:`Workspace skill ${n}`,description:""}))),observed_at:iso(-30)}};
@@ -112,7 +114,11 @@ try {
         assert.equal(await panel.locator(".agent-tool-server").filter({ hasText: "review" }).getByText("Unknown · 0 tools").count(), 1);
       } else {
         assert.equal(await panel.getByText("Connected · 8 tools").count(), 1);
+        assert.equal(await panel.getByText("Connected · 1 tool", { exact: true }).count(), 1);
         assert.equal(await panel.getByText("3 installed · 3 built-in").count(), 1);
+        const first = panel.locator(".agent-tool-server").first();
+        assert.match(await first.textContent(), /Zeta login.*Login required · 0 tools/);
+        assert.ok(await first.evaluate(e => e.classList.contains("needs-attention")), "a login failure stands out");
       }
       for (const width of [1440, 390]) {
         await page.setViewportSize({ width, height: width === 390 ? 844 : 960 });
@@ -152,6 +158,9 @@ try {
       await panel.getByRole("button", { name: "Restart", exact: true }).click();
       await restarted;
       assert.deepEqual(requests.filter(r => r.path === "/api/start_agent").map(r => r.args), [{ agentId: agent.id }]);
+      toolsResult = { ...toolsResult, mcp: section(toolsResult.mcp.items.slice(0, 1)) };
+      await panel.getByRole("button", { name: "Refresh", exact: true }).click();
+      await panel.getByText(/^1 MCP server · /).waitFor();
       failNext = true;
       await panel.getByRole("button", { name: "Refresh", exact: true }).click();
       await panel.getByRole("alert").waitFor();
@@ -166,6 +175,18 @@ try {
       await panel.getByText(/Checked /).waitFor();
       assert.equal(toolRequests().at(-1).args.refresh, false, "reopening uses the backend cache");
       assert.deepEqual(errors, [], `${engineName} ${runtime} page errors`);
+      agent.status = "running";
+      const busyPage = await context.newPage(); busyPage.setDefaultTimeout(10000);
+      await busyPage.goto(`http://127.0.0.1:${api.address().port}`, { waitUntil: "domcontentloaded" });
+      await busyPage.getByRole("button", { name: "@Aster’s profile", exact: true }).click();
+      await busyPage.getByRole("tab", { name: /^Profile/ }).click();
+      const busyPanel = busyPage.getByRole("region", { name: "Agent tools" });
+      await busyPanel.getByRole("button", { name: "Tools", exact: true }).click();
+      await busyPanel.getByText(/Checked /).waitFor();
+      const busyRestart = busyPanel.getByRole("button", { name: "Restart", exact: true });
+      assert.ok(await busyRestart.isDisabled(), "Restart follows the same rule as the header button");
+      assert.equal(await busyRestart.getAttribute("title"), "Agent is already running");
+      agent.status = "idle";
       await browser.close(); browser = null;
       console.log(`agent tools e2e passed: ${engineName} ${runtime}`);
     }

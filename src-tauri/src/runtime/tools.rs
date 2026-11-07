@@ -309,7 +309,7 @@ async fn probe_claude(process: &mut ProbeProcess, result: &mut AgentTools, wait:
                 name: string(s, "name"),
                 status: string(s, "status"),
                 auth_status: None,
-                tools_error: None,
+                tools_error: s["error"].as_str().map(str::to_owned),
                 tools: s["tools"]
                     .as_array()
                     .map(|tools| tools.iter().map(tool_summary).collect())
@@ -379,6 +379,7 @@ async fn probe_codex(process: &mut ProbeProcess, config: &ProbeConfig, result: &
         cursor = next;
     }
     // Listing plugins materializes installed plugin skills in this CLI version.
+    let mut plugins_listed = false;
     if let Ok(response) = process
         .request(
             "plugin/list",
@@ -388,6 +389,7 @@ async fn probe_codex(process: &mut ProbeProcess, config: &ProbeConfig, result: &
         .await
     {
         if let Some(markets) = response["marketplaces"].as_array() {
+            plugins_listed = true;
             let mut plugins = Vec::new();
             for marketplace in markets {
                 if let Some(items) = marketplace["plugins"].as_array() {
@@ -436,6 +438,10 @@ async fn probe_codex(process: &mut ProbeProcess, config: &ProbeConfig, result: &
                             .map(tool_summary)
                             .collect(),
                     );
+                    if !plugins_listed {
+                        result.skills.state = "unconfirmed";
+                        result.skills.message = "Plugin skills may be missing".into();
+                    }
                     if entry["errors"].as_array().is_some_and(|e| !e.is_empty()) {
                         result.skills.state = "unavailable";
                         result.skills.message = "Some skills could not be read".into();

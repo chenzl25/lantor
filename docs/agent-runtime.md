@@ -69,7 +69,9 @@ Only tool names and descriptions reach the UI, without JSON schemas.
 - **Claude MCP:** stream-json control requests (`initialize`, then `mcp_status`)
   read `mcpServers`. Empty and pending results are retried for about 30 seconds;
   they become **Not confirmed yet**, not a connection failure. A failed CLI or
-  control request displays **Could not read status**.
+  control request displays **Could not read status**. A `needs-auth` server
+  shows **Login required** and sorts first, like `failed`; a server's `error`
+  text appears under it.
 - **Claude plugins and skills:** no prompt means no `init` event. These lists
   instead come from the latest archived run containing a `system/init` whose
   `cwd` matches the workspace. Repository-specific runs are skipped. The UI
@@ -79,7 +81,8 @@ Only tool names and descriptions reach the UI, without JSON schemas.
 - **Codex:** an initialized app-server lists `mcpServerStatus/list`, then
   `plugin/list` (installed entries only), then `skills/list` with the workspace
   and `forceReload`. The order matters because plugin discovery materializes
-  plugin skills in CLI 0.165.0. MCP pagination is followed. Without a thread,
+  plugin skills in CLI 0.165.0, so skills are **Not confirmed yet** when
+  `plugin/list` fails. MCP pagination is followed. Without a thread,
   `runtimeStatus` can be null: the UI shows **Unknown**, tool counts,
   `authStatus` and `toolsError`, and does not infer an online state from a
   non-empty catalog. Plugin APIs are experimental; incompatible replies display
