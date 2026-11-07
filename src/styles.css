@@ -9037,6 +9037,23 @@ body.resizing-column * {
 .agent-tools-list { max-height: 300px; overflow: auto; margin: 5px 0; }
 .agent-tools-list input { box-sizing: border-box; width: 100%; margin-bottom: 7px; }
 .agent-tools-list code { white-space: normal; overflow-wrap: anywhere; font-size: var(--type-size-meta); }
+.agent-tools-apps-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.agent-tools-section .agent-tools-link { border: 0; padding: 0; background: none; color: var(--accent); font-size: var(--type-size-meta); }
+.agent-tool-app { border-bottom: 1px solid var(--border-subtle); }
+.agent-tools-other-apps { padding: 8px 0; border-bottom: 1px solid var(--border-subtle); }
+.agent-tool-app.needs-attention { padding: 8px; margin: 6px 0; border: 1px solid var(--status-warning-border); border-radius: 8px; background: var(--status-warning-soft); }
+.agent-tool-app-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.agent-tool-app-row strong { overflow-wrap: anywhere; }
+.agent-tool-app-row .agent-tools-status { margin-left: auto; flex-shrink: 0; color: var(--ink-muted); font-size: var(--type-size-meta); }
+.agent-tool-app-row .agent-tools-status.connected { color: var(--status-success); }
+.agent-tool-app.missing strong { color: var(--ink-muted); }
+.agent-tools-watch-editor { margin: 6px 0 10px; padding: 10px; border: 1px solid var(--border-subtle); border-radius: 8px; }
+.agent-tools-section .agent-tools-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.agent-tools-section .agent-tools-chips li { display: inline-flex; align-items: center; gap: 4px; padding: 3px 4px 3px 9px; border: 1px solid var(--border-subtle); border-radius: 999px; font-size: var(--type-size-meta); }
+.agent-tools-chips button { display: inline-flex; border: 0; padding: 2px; background: none; color: var(--ink-muted); }
+.agent-tools-watch-editor form { display: flex; gap: 6px; }
+.agent-tools-watch-editor input { flex: 1; min-width: 0; }
+.agent-tools-editor-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
 .agent-tools-footer { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
 .agent-tools-footer p { flex: 1; }
 

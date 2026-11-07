@@ -60,6 +60,8 @@ pub(crate) struct OwnerProfile {
     pub(crate) display_name: String,
     pub(crate) avatar: String,
     pub(crate) description: String,
+    /// Apps the agent Tools section always lists, connected or not.
+    pub(crate) watched_apps: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]

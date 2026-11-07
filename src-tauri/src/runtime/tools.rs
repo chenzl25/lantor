@@ -1,5 +1,5 @@
 //! Short-lived CLI discovery. Never starts a thread, sends a prompt or creates a run.
-use std::{path::PathBuf, process::Stdio, time::Duration};
+use std::{collections::HashMap, path::PathBuf, process::Stdio, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -35,6 +35,22 @@ pub(crate) struct PluginSummary {
     pub(crate) description: String,
     pub(crate) builtin: bool,
     pub(crate) enabled: bool,
+    /// Apps this plugin provides, by name.
+    pub(crate) apps: Vec<String>,
+}
+
+/// An app an agent can reach: a Codex ChatGPT app, a claude.ai connector or
+/// another MCP server.
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct AppSummary {
+    pub(crate) name: String,
+    /// connected, login_required, failed, pending, disabled, needs_setup or unknown.
+    pub(crate) status: &'static str,
+    /// chatgpt_app, claude_connector or mcp_server.
+    pub(crate) source: &'static str,
+    pub(crate) tool_count: usize,
+    pub(crate) plugin: Option<String>,
+    pub(crate) detail: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -79,6 +95,7 @@ pub(crate) struct AgentTools {
     pub(crate) agent_id: Uuid,
     pub(crate) runtime: String,
     pub(crate) checked_at: String,
+    pub(crate) apps: Inventory<AppSummary>,
     pub(crate) mcp: Inventory<McpServer>,
     pub(crate) plugins: Inventory<PluginSummary>,
     pub(crate) skills: Inventory<ToolSummary>,
@@ -90,6 +107,7 @@ impl AgentTools {
             agent_id: config.agent_id,
             runtime: config.runtime.clone(),
             checked_at: chrono::Utc::now().to_rfc3339(),
+            apps: Inventory::empty("unavailable", "Could not read status"),
             mcp: Inventory::empty("unavailable", "Could not read status"),
             plugins: Inventory::empty("unavailable", "Could not read status"),
             skills: Inventory::empty("unavailable", "Could not read status"),
@@ -232,6 +250,52 @@ impl ProbeProcess {
         .map_err(|_| "CLI request timed out".to_owned())?
     }
 
+    /// Sends Codex requests together and waits for every reply within one
+    /// request timeout. A failed or missing reply is `None`.
+    async fn request_many(&mut self, method: &str, params: Vec<Value>) -> Vec<Option<Value>> {
+        let first = self.next_id + 1;
+        self.next_id += params.len() as u64;
+        let mut results: Vec<Option<Value>> = vec![None; params.len()];
+        let mut answered = vec![false; params.len()];
+        let deadline = self.request_timeout;
+        let _ = timeout(deadline, async {
+            for (offset, params) in params.into_iter().enumerate() {
+                let id = (first + offset as u64).to_string();
+                self.write(json!({"id":id,"method":method,"params":params}))
+                    .await?;
+            }
+            while answered.iter().any(|done| !done) {
+                let Some(line) = self
+                    .lines
+                    .next_line()
+                    .await
+                    .map_err(|_| "CLI read failed".to_owned())?
+                else {
+                    break;
+                };
+                let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
+                let Some(index) = value["id"]
+                    .as_str()
+                    .and_then(|id| id.parse::<u64>().ok())
+                    .and_then(|id| id.checked_sub(first))
+                    .and_then(|index| usize::try_from(index).ok())
+                    .filter(|index| *index < answered.len())
+                else {
+                    continue;
+                };
+                answered[index] = true;
+                if value.get("error").is_none() {
+                    results[index] = Some(value["result"].clone());
+                }
+            }
+            Ok::<(), String>(())
+        })
+        .await;
+        results
+    }
+
     fn kill_group(&mut self) {
         #[cfg(unix)]
         if let Some(pid) = self.pid {
@@ -281,6 +345,46 @@ async fn probe_command(
     })
     .await;
     process.close().await;
+    if config.runtime == "claude" {
+        result.apps = apps_from_mcp(&result.mcp);
+    }
+}
+
+/// Claude reaches apps only through MCP: `claude.ai <App>` servers are
+/// claude.ai connectors, the rest are configured MCP servers.
+fn apps_from_mcp(mcp: &Inventory<McpServer>) -> Inventory<AppSummary> {
+    if !matches!(mcp.state, "ready" | "unconfirmed") {
+        return Inventory::empty(mcp.state, &mcp.message);
+    }
+    let mut apps = Inventory::ready(
+        mcp.items
+            .iter()
+            .map(|server| {
+                let (name, source) = match server.name.strip_prefix("claude.ai ") {
+                    Some(name) => (name.to_owned(), "claude_connector"),
+                    None => (server.name.clone(), "mcp_server"),
+                };
+                AppSummary {
+                    name,
+                    status: match server.status.as_str() {
+                        "connected" => "connected",
+                        "needs-auth" => "login_required",
+                        "failed" => "failed",
+                        "pending" | "connecting" => "pending",
+                        "disabled" => "disabled",
+                        _ => "unknown",
+                    },
+                    source,
+                    tool_count: server.tools.len(),
+                    plugin: None,
+                    detail: server.tools_error.clone(),
+                }
+            })
+            .collect(),
+    );
+    apps.state = mcp.state;
+    apps.message = mcp.message.clone();
+    apps
 }
 
 async fn probe_claude(process: &mut ProbeProcess, result: &mut AgentTools, wait: Duration) {
@@ -344,6 +448,8 @@ async fn probe_codex(process: &mut ProbeProcess, config: &ProbeConfig, result: &
     }
     let mut cursor = Value::Null;
     let mut servers = Vec::new();
+    // ChatGPT apps share the `codex_apps` server; each tool names its connector.
+    let mut connectors: HashMap<String, (String, usize)> = HashMap::new();
     loop {
         let response = process
             .request(
@@ -356,6 +462,21 @@ async fn probe_codex(process: &mut ProbeProcess, config: &ProbeConfig, result: &
         let Some(data) = response["data"].as_array() else {
             break;
         };
+        for tools in data
+            .iter()
+            .filter(|s| s["name"] == "codex_apps")
+            .filter_map(|s| s["tools"].as_object())
+        {
+            for meta in tools.values().map(|tool| &tool["_meta"]) {
+                if let Some(id) = meta["connector_id"].as_str() {
+                    let name = meta["connector_name"].as_str().unwrap_or(id);
+                    connectors
+                        .entry(id.to_owned())
+                        .or_insert_with(|| (name.to_owned(), 0))
+                        .1 += 1;
+                }
+            }
+        }
         servers.extend(data.iter().map(|s| {
             McpServer {
                 name: string(s, "name"),
@@ -378,6 +499,13 @@ async fn probe_codex(process: &mut ProbeProcess, config: &ProbeConfig, result: &
         }
         cursor = next;
     }
+    let installed_apps = process
+        .request("app/installed", json!({"forceRefresh":false}), false)
+        .await
+        .ok()
+        .and_then(|response| response["apps"].as_array().cloned());
+    // App id -> (app name, plugin name), from each installed plugin's details.
+    let mut plugin_apps: HashMap<String, (String, String)> = HashMap::new();
     // Listing plugins materializes installed plugin skills in this CLI version.
     let mut plugins_listed = false;
     if let Ok(response) = process
@@ -391,11 +519,17 @@ async fn probe_codex(process: &mut ProbeProcess, config: &ProbeConfig, result: &
         if let Some(markets) = response["marketplaces"].as_array() {
             plugins_listed = true;
             let mut plugins = Vec::new();
+            let mut reads = Vec::new();
             for marketplace in markets {
                 if let Some(items) = marketplace["plugins"].as_array() {
-                    plugins.extend(items.iter().filter(|p| p["installed"] == true).map(|p| {
-                        PluginSummary {
-                            name: string(p, "name"),
+                    for p in items.iter().filter(|p| p["installed"] == true) {
+                        let name = string(p, "name");
+                        reads.push(match marketplace["path"].as_str() {
+                            Some(path) => json!({"pluginName":name,"marketplacePath":path}),
+                            None => json!({"pluginName":name,"remoteMarketplaceName":marketplace["name"]}),
+                        });
+                        plugins.push(PluginSummary {
+                            name,
                             description: p
                                 .pointer("/interface/shortDescription")
                                 .and_then(Value::as_str)
@@ -403,8 +537,24 @@ async fn probe_codex(process: &mut ProbeProcess, config: &ProbeConfig, result: &
                                 .into(),
                             builtin: false,
                             enabled: p["enabled"].as_bool().unwrap_or(true),
-                        }
-                    }));
+                            apps: Vec::new(),
+                        });
+                    }
+                }
+            }
+            // Remote plugin details take over a second each; read them together.
+            let details = process.request_many("plugin/read", reads).await;
+            for (plugin, detail) in plugins.iter_mut().zip(details) {
+                let Some(apps) = detail.as_ref().and_then(|d| d["plugin"]["apps"].as_array())
+                else {
+                    continue;
+                };
+                for app in apps {
+                    let name = string(app, "name");
+                    if let Some(id) = app["id"].as_str() {
+                        plugin_apps.insert(id.to_owned(), (name.clone(), plugin.name.clone()));
+                    }
+                    plugin.apps.push(name);
                 }
             }
             result.plugins = Inventory::ready(plugins);
@@ -449,6 +599,36 @@ async fn probe_codex(process: &mut ProbeProcess, config: &ProbeConfig, result: &
                 }
             }
         }
+    }
+    if let Some(installed) = installed_apps {
+        let mut apps: Vec<AppSummary> = installed
+            .iter()
+            .map(|app| {
+                let id = app["id"].as_str().unwrap_or("");
+                let from_plugin = plugin_apps.get(id);
+                AppSummary {
+                    name: app["runtimeName"]
+                        .as_str()
+                        .map(str::to_owned)
+                        .or_else(|| from_plugin.map(|(name, _)| name.clone()))
+                        .or_else(|| connectors.get(id).map(|(name, _)| name.clone()))
+                        .unwrap_or_else(|| id.to_owned()),
+                    status: if app["enabled"] == false {
+                        "disabled"
+                    } else if app["callable"] == true {
+                        "connected"
+                    } else {
+                        "needs_setup"
+                    },
+                    source: "chatgpt_app",
+                    tool_count: connectors.get(id).map_or(0, |(_, count)| *count),
+                    plugin: from_plugin.map(|(_, plugin)| plugin.clone()),
+                    detail: None,
+                }
+            })
+            .collect();
+        apps.sort_by_key(|app| app.name.to_lowercase());
+        result.apps = Inventory::ready(apps);
     }
 }
 

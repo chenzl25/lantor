@@ -88,10 +88,30 @@ Only tool names and descriptions reach the UI, without JSON schemas.
   non-empty catalog. Plugin APIs are experimental; incompatible replies display
   unavailable rather than changing provider settings.
 
+- **Apps:** what an agent can reach, by app rather than by plugin. Claude apps
+  are its MCP servers: `claude.ai <App>` is a claude.ai connector, anything
+  else a configured MCP server, with the MCP status mapped to the app. Codex
+  apps come from `app/installed`: `callable` is **Connected**, enabled but not
+  callable is **Needs setup**, and disabled is **Disabled**. Tool counts group
+  the `codex_apps` tools by `_meta.connector_id`. Each installed plugin's
+  `plugin/read` names the apps it provides; those reads are sent together
+  because a remote plugin takes over a second. The `app/list` catalog is not
+  read: it holds thousands of apps and its first page took about 30 seconds.
+
+**Watched apps** head the section. They are the owner's list
+(`owner_profile.watched_apps`, default Notion, Slack and Gmail, edited in
+place through `update_watched_apps`), shared by every agent and device. A
+watched app that is neither an app nor an MCP server of the same name shows
+**Not connected**, with where to connect it for that runtime. Names match
+ignoring case, spaces, punctuation and a `claude.ai` prefix. Other apps are
+folded below, problems first. Under Plugins, the ones that provide apps are
+listed with them.
+
 MCP errors appear first. Each server's tool list opens separately and is
 searchable; plugins and skills are nested disclosures. **Restart** uses the
 existing agent restart action when changed logins or tools need to reach a warm
-process. There is no configuration editor, overview or alerting here.
+process. Lantor does not connect apps or change provider configuration, and
+there is no overview or alerting here.
 
 The synthetic browser suite is `npm run test:agent-tools`. The ignored
 `application::agent_tools::tests::real_cli_inventory` test can check real CLI

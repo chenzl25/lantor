@@ -30,10 +30,19 @@ for line in sys.stdin:
    print(json.dumps({'type':'control_response','response':{'request_id':m['request_id'],'subtype':'error','error':'fixture error'}}),flush=True);continue
   result={'mcpServers':[] if polls==1 else [{'name':'docs','status':'pending' if mode=='pending' or polls==2 else 'connected','tools':[{'name':'read','description':'Read a document','inputSchema':{'secret':'never forwarded'}}]}]}
   if mode=='failed': result={'mcpServers':[{'name':'docs','status':'failed','error':'fixture failure'}]}
+  if mode=='apps': result={'mcpServers':[{'name':'claude.ai Notion','status':'needs-auth'},{'name':'slack','status':'connected','tools':[{'name':'post','description':'Post a message'}]}]}
  if method=='mcpServerStatus/list':
   if mode=='mcp_error':
    print(json.dumps({'id':m['id'],'error':{'message':'fixture error'}}),flush=True);continue
-  result={'data':[{'name':'apps','runtimeStatus':None,'authStatus':'oAuth','toolsError':None,'tools':{'find':{'name':'find','description':'Find records','inputSchema':{'type':'object'}}}}], 'nextCursor':None}
+  notion={'name':'Notion','connector_id':'app_notion','connector_name':'Notion'}
+  result={'data':[{'name':'apps','runtimeStatus':None,'authStatus':'oAuth','toolsError':None,'tools':{'find':{'name':'find','description':'Find records','inputSchema':{'type':'object'}}}},
+   {'name':'codex_apps','runtimeStatus':None,'authStatus':'bearerToken','toolsError':None,'tools':{t:{'name':t,'description':t,'_meta':{'connector_id':'app_notion','connector_name':'Notion'}} for t in ['search','fetch']}}], 'nextCursor':None}
+ if method=='app/installed':
+  result={'apps':[{'id':'app_notion','runtimeName':None,'enabled':True,'callable':True},{'id':'app_drafts','runtimeName':'Drafts','enabled':True,'callable':False},{'id':'app_off','runtimeName':'Off','enabled':False,'callable':False}]}
+ if method=='plugin/read':
+  if mode=='read_error':
+   print(json.dumps({'id':m['id'],'error':{'message':'fixture error'}}),flush=True);continue
+  result={'plugin':{'apps':[{'id':'app_notion','name':'Notion'}] if m['params']['pluginName']=='installed' else []}}
  if method=='plugin/list':
   if mode=='plugin_error':
    print(json.dumps({'id':m['id'],'error':{'message':'fixture error'}}),flush=True);continue
@@ -89,6 +98,7 @@ async fn claude_waits_through_empty_and_pending_and_preserves_history_on_error()
         description: String::new(),
         builtin: false,
         enabled: true,
+        apps: Vec::new(),
     }]);
     probe_command(
         &config,
@@ -151,6 +161,84 @@ async fn one_codex_section_error_does_not_hide_other_sections() {
     assert_eq!(result.mcp.state, "unavailable");
     assert_eq!(result.plugins.items[0].name, "installed");
     assert_eq!(result.skills.items[0].name, "plugin-skill");
+}
+
+fn app<'a>(result: &'a AgentTools, name: &str) -> &'a AppSummary {
+    result
+        .apps
+        .items
+        .iter()
+        .find(|app| app.name == name)
+        .unwrap_or_else(|| panic!("{name} is listed"))
+}
+
+#[tokio::test]
+async fn codex_apps_carry_status_tool_counts_and_their_plugin() {
+    let config = config("codex");
+    let mut result = AgentTools::unavailable(&config);
+    probe_command(
+        &config,
+        &mut result,
+        fake("ready"),
+        Duration::from_secs(2),
+        Duration::from_secs(5),
+    )
+    .await;
+    assert_eq!(result.apps.state, "ready");
+    let notion = app(&result, "Notion");
+    assert_eq!(
+        (notion.status, notion.source, notion.tool_count),
+        ("connected", "chatgpt_app", 2)
+    );
+    assert_eq!(notion.plugin.as_deref(), Some("installed"));
+    assert_eq!(result.plugins.items[0].apps, vec!["Notion".to_owned()]);
+    assert_eq!(app(&result, "Drafts").status, "needs_setup");
+    assert_eq!(app(&result, "Off").status, "disabled");
+}
+
+#[tokio::test]
+async fn codex_apps_survive_failed_plugin_details() {
+    let config = config("codex");
+    let mut result = AgentTools::unavailable(&config);
+    probe_command(
+        &config,
+        &mut result,
+        fake("read_error"),
+        Duration::from_secs(2),
+        Duration::from_secs(5),
+    )
+    .await;
+    assert_eq!(result.plugins.state, "ready");
+    assert!(result.plugins.items[0].apps.is_empty());
+    let notion = app(&result, "Notion");
+    assert_eq!((notion.status, notion.tool_count), ("connected", 2));
+    assert_eq!(notion.plugin, None);
+    assert_eq!(result.skills.items[0].name, "plugin-skill");
+}
+
+#[tokio::test]
+async fn claude_apps_come_from_connectors_and_mcp_servers() {
+    let config = config("claude");
+    let mut result = AgentTools::unavailable(&config);
+    probe_command(
+        &config,
+        &mut result,
+        fake("apps"),
+        Duration::from_secs(1),
+        Duration::from_secs(3),
+    )
+    .await;
+    assert_eq!(result.apps.state, "ready");
+    let notion = app(&result, "Notion");
+    assert_eq!(
+        (notion.status, notion.source),
+        ("login_required", "claude_connector")
+    );
+    let slack = app(&result, "slack");
+    assert_eq!(
+        (slack.status, slack.source, slack.tool_count),
+        ("connected", "mcp_server", 1)
+    );
 }
 
 #[tokio::test]

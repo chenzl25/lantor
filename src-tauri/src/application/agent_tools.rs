@@ -19,6 +19,19 @@ use crate::{
 };
 
 #[derive(Deserialize)]
+pub(crate) struct WatchedAppsRequest {
+    pub(crate) apps: Vec<String>,
+}
+
+/// Saves the owner's watched apps; returns the stored, normalized list.
+pub(crate) async fn update_watched_apps(
+    pool: &SqlitePool,
+    request: WatchedAppsRequest,
+) -> CommandResult<Vec<String>> {
+    crate::agent_profile::update_watched_apps_in_pool(pool, request.apps).await
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AgentToolsRequest {
     pub(crate) agent_id: Uuid,
@@ -83,6 +96,10 @@ async fn load_cached(
             if matches!(config.runtime.as_str(), "claude" | "codex") {
                 tools::probe(&config, &mut result).await;
             } else {
+                result.apps = Inventory::empty(
+                    "unsupported",
+                    "Tool discovery is not available for this runtime",
+                );
                 result.mcp = Inventory::empty(
                     "unsupported",
                     "Tool discovery is not available for this runtime",
@@ -170,6 +187,7 @@ async fn load_claude_snapshot(pool: &SqlitePool, config: &ProbeConfig, result: &
                             Some(PluginSummary {
                                 name: name.into(),
                                 description: String::new(),
+                                apps: Vec::new(),
                                 builtin: p["source"]
                                     .as_str()
                                     .is_some_and(|source| source.ends_with("@builtin"))
