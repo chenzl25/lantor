@@ -12,6 +12,7 @@ use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use uuid::Uuid;
 
 use crate::app::{to_string, CommandResult};
+use crate::runtime::network_retry::NetworkRetry;
 use crate::runtime::turn_outcome::retry_transient_sqlite;
 use crate::ui_notifications::{
     enqueue_ui_agent_run_changed_in_tx, enqueue_ui_event_in_tx, enqueue_ui_work_item_changed_in_tx,
@@ -45,6 +46,8 @@ pub(crate) struct TurnEnd<'a> {
     pub(crate) log_line: &'a str,
     pub(crate) run_reason: &'static str,
     pub(crate) work: Option<(Uuid, &'a str)>,
+    /// Set when the work item goes back to the queue for a lost connection.
+    pub(crate) network_retry: Option<&'a NetworkRetry>,
 }
 
 /// Closes the run and settles its work item in one transaction, retrying
@@ -71,6 +74,9 @@ async fn end_turn_once(pool: &SqlitePool, end: &TurnEnd<'_>) -> CommandResult<()
     enqueue_ui_agent_run_changed_in_tx(&mut transaction, end.run_id, end.run_reason).await?;
     if let Some((work_item_id, work_status)) = end.work {
         if work_status == "queued" {
+            if let Some(retry) = end.network_retry {
+                note_network_retry_in_tx(&mut transaction, work_item_id, retry).await?;
+            }
             requeue_work_item_in_tx(&mut transaction, work_item_id, "work_item_requeued").await?;
         } else {
             finish_work_item_in_tx(
@@ -83,6 +89,29 @@ async fn end_turn_once(pool: &SqlitePool, end: &TurnEnd<'_>) -> CommandResult<()
         }
     }
     transaction.commit().await.map_err(to_string)
+}
+
+async fn note_network_retry_in_tx(
+    transaction: &mut Transaction<'_, Sqlite>,
+    work_item_id: Uuid,
+    retry: &NetworkRetry,
+) -> CommandResult<()> {
+    sqlx::query(
+        r#"
+        update agent_work_items
+        set network_failures = $2,
+            network_requeued_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
+            retry_not_before = strftime('%Y-%m-%dT%H:%M:%f+00:00','now', $3)
+        where id = $1
+        "#,
+    )
+    .bind(work_item_id)
+    .bind(retry.failures)
+    .bind(format!("+{} seconds", retry.delay_secs))
+    .execute(&mut **transaction)
+    .await
+    .map_err(to_string)?;
+    Ok(())
 }
 
 /// The end of a cold (one process per run) run once its process has exited.
@@ -163,10 +192,18 @@ pub(crate) async fn fail_warm_start(
     close_run_in_tx(&mut transaction, run_id, "failed", None, error_log).await?;
 
     // Every failed start of a request leaves a failed run behind, so the run
-    // history doubles as the attempt counter (the current run included).
+    // history doubles as the attempt counter (the current run included). Runs
+    // that lost their connection failed too, but have a limit of their own.
     let attempts = match (failure, work_item_id) {
         (WarmStartFailure::Transient, Some(work_item_id)) => sqlx::query_scalar::<_, i64>(
-            "select count(*) from agent_runs where work_item_id = $1 and status = 'failed'",
+            r#"
+            select count(*)
+            from agent_runs r
+            join agent_work_items w on w.id = r.work_item_id
+            where r.work_item_id = $1
+              and r.status = 'failed'
+              and r.started_at > coalesce(w.network_requeued_at, '')
+            "#,
         )
         .bind(work_item_id)
         .fetch_one(&mut *transaction)
@@ -1002,6 +1039,8 @@ async fn finish_work_item_in_tx(
         r#"
         update agent_work_items
         set status = $2,
+            network_failures = case when $2 = 'failed' then network_failures else 0 end,
+            retry_not_before = null,
             completed_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
             updated_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
         where id = $1

@@ -226,7 +226,7 @@ fn login_card(
 
 /// The card goes to `#all` when it exists, else where the failure happened,
 /// else the oldest channel.
-async fn card_channel_in_tx(
+pub(crate) async fn card_channel_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     failed_channel_id: Option<Uuid>,
 ) -> CommandResult<Option<Uuid>> {

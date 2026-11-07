@@ -1,4 +1,5 @@
 use std::{
+    future::Future,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -16,6 +17,7 @@ use super::{
         close_orphaned_runs_at_startup, fail_work_item_before_run,
         idle_agent_after_start_command_in_tx, idle_agent_waiting_for_login, mark_run_stopping,
     },
+    network_retry::{system_in_dark_wake, with_network_retry_note},
     process::{
         effective_launch_command, start_process_agent, terminate_process_group, ProcessAgentLaunch,
     },
@@ -515,11 +517,28 @@ async fn schedule_queued_work_items(
     registry: &WarmCodexRegistry,
     claude_registry: &WarmClaudeRegistry,
 ) -> CommandResult<()> {
+    schedule_queued_work_items_when(pool, registry, claude_registry, system_in_dark_wake).await
+}
+
+async fn schedule_queued_work_items_when<F, Fut>(
+    pool: &SqlitePool,
+    registry: &WarmCodexRegistry,
+    claude_registry: &WarmClaudeRegistry,
+    in_dark_wake: F,
+) -> CommandResult<()>
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = bool>,
+{
     let rows = sqlx::query(
         r#"
-        select w.id, w.agent_id, w.channel_id, w.thread_root_id
+        select w.id, w.agent_id, w.channel_id, w.thread_root_id, w.network_requeued_at
         from agent_work_items w
         where w.status = 'queued'
+          and (
+              w.retry_not_before is null
+              or w.retry_not_before <= strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+          )
           and not exists (
               select 1
               from supervisor_commands c
@@ -542,6 +561,7 @@ async fn schedule_queued_work_items(
     .await
     .map_err(to_string)?;
 
+    let mut dark_wake = None;
     for row in rows {
         let work_item_id: Uuid = row.get("id");
         let agent_id: Uuid = row.get("agent_id");
@@ -558,6 +578,19 @@ async fn schedule_queued_work_items(
         .await?
         {
             continue;
+        }
+        // A retry in a dark wake would only be cut off again by the next sleep.
+        if row
+            .get::<Option<String>, _>("network_requeued_at")
+            .is_some()
+        {
+            let dark = match dark_wake {
+                Some(dark) => dark,
+                None => *dark_wake.insert(in_dark_wake().await),
+            };
+            if dark {
+                continue;
+            }
         }
         if enqueue_agent_work_if_available(pool, agent_id, work_item_id).await? {
             record_agent_activity(
@@ -724,6 +757,7 @@ async fn supervisor_start_agent(
                     w.channel_id,
                     w.title,
                     w.context,
+                    w.network_requeued_at,
                     c.name as channel_name,
                     t.number as task_number,
                     w.thread_root_id
@@ -767,7 +801,7 @@ async fn supervisor_start_agent(
                         "Your agent profile currently has no avatar. If your handle or MEMORY.md gives you a stable identity, you may emit one standalone LANTOR_EVENT profile_update with an avatar like `dicebear:dylan:{handle}`. Keep handling the user's request normally and do not send visible chat only for avatar setup."
                     )
                 });
-            if is_warm_streaming_runtime {
+            let prompt = if is_warm_streaming_runtime {
                 build_streaming_work_item_prompt(
                     work_item_id,
                     &title,
@@ -791,6 +825,14 @@ async fn supervisor_start_agent(
                     &available_agents,
                     agent_profile_hint.as_deref(),
                 )
+            };
+            if row
+                .get::<Option<String>, _>("network_requeued_at")
+                .is_some()
+            {
+                with_network_retry_note(prompt)
+            } else {
+                prompt
             }
         }
         None => String::new(),
@@ -1811,6 +1853,254 @@ mod tests {
             Ok(())
         }
         .await;
+        drop_test_schema(pool, database_path).await;
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn network_retries_wait_out_their_delay_and_dark_wakes() {
+        let Some((pool, database_path)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let channel_id = insert_test_channel(&pool, "network-retry-schedule").await?;
+            let mut items = Vec::new();
+            for (handle, requeued_at, retry_not_before) in [
+                ("fresh", None, None),
+                ("due", Some("-5 minutes"), Some("-1 seconds")),
+                ("backing-off", Some("-5 minutes"), Some("+1 hours")),
+            ] {
+                let agent_id = insert_test_agent(&pool, handle).await?;
+                sqlx::query("update agents set runtime = 'claude' where id = $1")
+                    .bind(agent_id)
+                    .execute(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+                let work_item_id: Uuid = sqlx::query_scalar(
+                    r#"
+                    insert into agent_work_items (
+                        agent_id, channel_id, title, status, network_requeued_at, retry_not_before
+                    )
+                    values (
+                        $1, $2, 'request', 'queued',
+                        strftime('%Y-%m-%dT%H:%M:%f+00:00','now', $3),
+                        strftime('%Y-%m-%dT%H:%M:%f+00:00','now', $4)
+                    )
+                    returning id
+                    "#,
+                )
+                .bind(agent_id)
+                .bind(channel_id)
+                .bind(requeued_at)
+                .bind(retry_not_before)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+                items.push(work_item_id);
+            }
+            let (fresh, due, backing_off) = (items[0], items[1], items[2]);
+            let started = |work_item_id: Uuid| {
+                let pool = pool.clone();
+                async move {
+                    sqlx::query_scalar::<_, i64>(
+                        "select count(*) from supervisor_commands where work_item_id = $1",
+                    )
+                    .bind(work_item_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())
+                }
+            };
+            let codex_registry = WarmCodexRegistry::default();
+            let claude_registry = WarmClaudeRegistry::default();
+
+            // A dark wake: new requests may still try, retries wait.
+            super::schedule_queued_work_items_when(
+                &pool,
+                &codex_registry,
+                &claude_registry,
+                || async { true },
+            )
+            .await?;
+            assert_eq!(started(fresh).await?, 1);
+            assert_eq!(started(due).await?, 0);
+            assert_eq!(started(backing_off).await?, 0);
+
+            // The Mac is really awake: the retry that is due starts.
+            super::schedule_queued_work_items_when(
+                &pool,
+                &codex_registry,
+                &claude_registry,
+                || async { false },
+            )
+            .await?;
+            assert_eq!(started(due).await?, 1);
+            assert_eq!(started(backing_off).await?, 0);
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, database_path).await;
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    /// The whole path with a stand-in `claude`: the first process loses its
+    /// connection, the second resumes its session and finishes the request.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_lost_connection_continues_in_the_same_session_after_its_delay() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let Some((pool, database_path)) = test_pool().await else {
+            return;
+        };
+        let directory =
+            std::env::temp_dir().join(format!("lantor-network-retry-{}", Uuid::new_v4()));
+        let result: Result<(), String> = async {
+            let bin = directory.join("bin");
+            std_fs::create_dir_all(&bin).map_err(|err| err.to_string())?;
+            let script = r#"#!/bin/sh
+dir="$(dirname "$0")/.."
+count=$(cat "$dir/count" 2>/dev/null || echo 0)
+count=$((count + 1))
+echo "$count" > "$dir/count"
+printf '%s\n' "$*" > "$dir/args-$count"
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"11111111-1111-4111-8111-111111111111"}'
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$dir/input-$count"
+  if [ "$count" = 1 ]; then
+    printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Half an answer\n"}},"session_id":"11111111-1111-4111-8111-111111111111"}'
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":true,"api_error_status":null,"terminal_reason":"api_error","result":"API Error: Connection dropped (ECONNRESET)","session_id":"11111111-1111-4111-8111-111111111111"}'
+  else
+    printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"The whole answer"}},"session_id":"11111111-1111-4111-8111-111111111111"}'
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"The whole answer","session_id":"11111111-1111-4111-8111-111111111111"}'
+  fi
+done
+"#;
+            let claude = bin.join("claude");
+            std_fs::write(&claude, script).map_err(|err| err.to_string())?;
+            std_fs::set_permissions(&claude, std_fs::Permissions::from_mode(0o755))
+                .map_err(|err| err.to_string())?;
+
+            let agent_id = insert_test_agent(&pool, "network-retry-end-to-end").await?;
+            sqlx::query(
+                r#"
+                update agents
+                set runtime = 'claude', model = 'sonnet', working_directory = $2,
+                    environment_variables = $3
+                where id = $1
+                "#,
+            )
+            .bind(agent_id)
+            .bind(directory.to_string_lossy().into_owned())
+            .bind(format!("PATH={}:/usr/bin:/bin", bin.display()))
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            let channel_id = insert_test_channel(&pool, "network-retry-end-to-end").await?;
+            let work_item_id: Uuid = sqlx::query_scalar(
+                r#"
+                insert into agent_work_items (agent_id, channel_id, title, context, status)
+                values ($1, $2, 'look at the logs', 'context', 'queued')
+                returning id
+                "#,
+            )
+            .bind(agent_id)
+            .bind(channel_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            let codex_registry = WarmCodexRegistry::default();
+            let claude_registry = WarmClaudeRegistry::default();
+            let wait_for_status = |wanted: &'static str| {
+                let pool = pool.clone();
+                async move {
+                    for _ in 0..200 {
+                        let status: String =
+                            sqlx::query_scalar("select status from agent_work_items where id = $1")
+                                .bind(work_item_id)
+                                .fetch_one(&pool)
+                                .await
+                                .map_err(|err| err.to_string())?;
+                        if status == wanted {
+                            return Ok(());
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+                    Err(format!("the request never became {wanted}"))
+                }
+            };
+
+            super::supervisor_start_agent(
+                &pool,
+                &codex_registry,
+                &claude_registry,
+                agent_id,
+                Some(work_item_id),
+            )
+            .await?;
+            wait_for_status("queued").await?;
+            let replies = |pool: SqlitePool| async move {
+                sqlx::query_as::<_, (String, String)>(
+                    "select body, delivery_state from messages where sender_agent_id = $1",
+                )
+                .bind(agent_id)
+                .fetch_all(&pool)
+                .await
+                .map_err(|err| err.to_string())
+            };
+            assert_eq!(replies(pool.clone()).await?, []);
+            for _ in 0..200 {
+                if claude_registry.get(agent_id).await.is_none() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+
+            // Still inside its delay: nothing starts.
+            super::schedule_queued_work_items_when(&pool, &codex_registry, &claude_registry, || async {
+                false
+            })
+            .await?;
+            let delayed = claim_next_supervisor_command(&pool).await?;
+            assert!(delayed.is_none(), "the retry must wait for its delay");
+
+            sqlx::query(
+                r#"
+                update agent_work_items
+                set retry_not_before = strftime('%Y-%m-%dT%H:%M:%f+00:00','now','-1 seconds')
+                where id = $1
+                "#,
+            )
+            .bind(work_item_id)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            super::schedule_queued_work_items_when(&pool, &codex_registry, &claude_registry, || async {
+                false
+            })
+            .await?;
+            let command = claim_next_supervisor_command(&pool)
+                .await?
+                .ok_or("the retry must start once its delay passed")?;
+            run_supervisor_command(&pool, &codex_registry, &claude_registry, command).await;
+            wait_for_status("done").await?;
+
+            assert_eq!(
+                replies(pool.clone()).await?,
+                [("The whole answer".to_owned(), "complete".to_owned())]
+            );
+            let read = |name: &str| {
+                std_fs::read_to_string(directory.join(name)).map_err(|err| format!("{name}: {err}"))
+            };
+            assert!(!read("args-1")?.contains("--resume"));
+            assert!(read("args-2")?.contains("--resume 11111111-1111-4111-8111-111111111111"));
+            const NOTE: &str = "the connection to the model dropped";
+            assert!(!read("input-1")?.contains(NOTE));
+            assert!(read("input-2")?.contains(NOTE));
+            Ok(())
+        }
+        .await;
+        let _ = std_fs::remove_dir_all(&directory);
         drop_test_schema(pool, database_path).await;
         assert!(result.is_ok(), "{:?}", result.err());
     }

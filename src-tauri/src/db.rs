@@ -1026,6 +1026,22 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .await?;
     ensure_text_column(pool, "message_attachments", "source_path", "text").await?;
+    ensure_integer_column(
+        pool,
+        "agent_work_items",
+        "network_failures",
+        "integer not null default 0",
+    )
+    .await?;
+    ensure_text_column(pool, "agent_work_items", "network_requeued_at", "text").await?;
+    ensure_text_column(pool, "agent_work_items", "retry_not_before", "text").await?;
+    ensure_column(
+        pool,
+        "decisions",
+        "retry_work_item_id",
+        "blob references agent_work_items(id) on delete set null",
+    )
+    .await?;
     backfill_reminder_recurrence_anchors(pool).await?;
 
     sqlx::query(

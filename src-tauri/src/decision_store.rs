@@ -492,7 +492,7 @@ pub(crate) async fn load_decision(pool: &SqlitePool, decision_id: Uuid) -> Comma
         .ok_or_else(|| "decision not found".to_owned())
 }
 
-async fn notify_decision_changed(pool: &SqlitePool) -> CommandResult<()> {
+pub(crate) async fn notify_decision_changed(pool: &SqlitePool) -> CommandResult<()> {
     enqueue_ui_event(
         pool,
         &UiEvent::Refresh {
@@ -625,6 +625,7 @@ pub(crate) async fn answer_decision_in_pool(
     notify_decision_changed(pool).await?;
     if decision.requester_agent_id.is_none() {
         crate::provider_auth::resume_after_login_answer(pool, decision_id).await?;
+        crate::runtime::network_retry::retry_after_owner_answer(pool, decision_id).await?;
     }
     load_decision(pool, decision_id).await
 }

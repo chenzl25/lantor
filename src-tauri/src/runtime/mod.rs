@@ -1,6 +1,7 @@
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod lifecycle;
+pub(crate) mod network_retry;
 pub(crate) mod process;
 pub(crate) mod streaming;
 pub(crate) mod supervisor;

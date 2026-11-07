@@ -83,6 +83,7 @@ impl Fixture {
                     text: ClaudeTextState::default(),
                     interrupt_requested: false,
                     auth_required: false,
+                    network_failure: false,
                 }),
                 session_id: Some("test-claude-session".to_owned()),
                 context_tokens: 0,
