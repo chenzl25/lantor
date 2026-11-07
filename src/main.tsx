@@ -81,6 +81,7 @@ import { isServerUnreachable, serverUnreachableMessage, subscribeServerReachabil
 import { useWebOnline } from "./hooks/useWebOnline";
 import { useVisibleChannelRead } from "./hooks/useVisibleChannelRead";
 import { useVisibleThreadRead } from "./hooks/useVisibleThreadRead";
+import { loadComposerDrafts, useRememberedComposerDrafts, type ComposerDraftScope } from "./composer-drafts";
 import type { ChannelReadLocation } from "./hooks/useChannelMessageScroll";
 import { UnreadBadge } from "./components/UnreadBadge";
 import { isProgressOnlyMessage, messageHasVisibleContent } from "./message-grouping";
@@ -583,6 +584,11 @@ function isEmptyComposerDraft(draft: ComposerDraftState) {
   return draft.text.length === 0 && draft.attachments.length === 0;
 }
 
+function restoredComposerDrafts(scope: ComposerDraftScope): Record<string, ComposerDraftState> {
+  return Object.fromEntries(Object.entries(loadComposerDrafts(scope))
+    .map(([id, text]) => [id, { text, attachments: [] }]));
+}
+
 function updateComposerDraftRecord(
   current: Record<string, ComposerDraftState>,
   key: string | null | undefined,
@@ -806,8 +812,9 @@ function App() {
   // Backend event subscriptions are long-lived; refresh callbacks must read the
   // latest channel instead of the value captured when the listener was created.
   const activeChannelIdRef = useRef(activeChannelId);
-  const [rootComposerDrafts, setRootComposerDrafts] = useState<Record<string, ComposerDraftState>>({});
-  const [replyComposerDrafts, setReplyComposerDrafts] = useState<Record<string, ComposerDraftState>>({});
+  const [rootComposerDrafts, setRootComposerDrafts] = useState<Record<string, ComposerDraftState>>(() => restoredComposerDrafts("channel"));
+  const [replyComposerDrafts, setReplyComposerDrafts] = useState<Record<string, ComposerDraftState>>(() => restoredComposerDrafts("thread"));
+  useRememberedComposerDrafts(rootComposerDrafts, replyComposerDrafts);
   const [taskTitleDrafts, setTaskTitleDrafts] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const [searchScope, setSearchScope] = useState<SearchScope>("all");

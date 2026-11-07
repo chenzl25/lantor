@@ -118,6 +118,9 @@ installed. Each suite has an npm script, for example:
   command) in the agent drawer's Reminders tab and the Stop confirmation.
 - `npm run test:agent-tools` checks lazy tool discovery, partial failures,
   plugin and skill disclosures, tool search and Restart on desktop and phones.
+- `npm run test:composer-drafts` checks that unsent channel and thread text
+  comes back after a reload, that sending clears it, and that two tabs keep
+  each other's drafts (see [`web-access.md`](web-access.md#unsent-drafts)).
 - `npm run test:ui-panels`, `test:dialogs`, `test:image-lightbox`,
   `test:attachment-sheet`, `test:activity`, `test:app-shell`, `test:streaming`,
   `test:web-sync`, `test:message-rows`, `test:message-state-races`,

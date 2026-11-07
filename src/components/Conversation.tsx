@@ -15,6 +15,7 @@ import {
   UserPlus,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FocusEvent, type MouseEvent as ReactMouseEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type TextareaHTMLAttributes } from "react";
+import { composerDraftKey, rememberComposerDraft } from "../composer-drafts";
 import { useEventCallback } from "../hooks/useEventCallback";
 import { useMessageRows } from "../hooks/useMessageRows";
 import { useRetainedValue } from "../hooks/useRetainedValue";
@@ -672,7 +673,9 @@ function hasDraggedFiles(event: DragEvent<HTMLElement>) {
   return Array.from(event.dataTransfer.types).includes("Files");
 }
 
-function useBufferedComposerText(draft: string, resetKey: string | null | undefined, setDraft: (value: string) => void) {
+// Typed text stays local until blur, send or switching away, so App does not
+// rerender on every keystroke. Each edit is still queued for local storage.
+function useBufferedComposerText(draft: string, resetKey: string | null | undefined, setDraft: (value: string) => void, draftKey: string | null) {
   const [text, setText] = useState(draft);
   const textRef = useRef(draft);
   const committedRef = useRef(draft);
@@ -699,6 +702,7 @@ function useBufferedComposerText(draft: string, resetKey: string | null | undefi
   function updateText(value: string) {
     textRef.current = value;
     setText((current) => current === value ? current : value);
+    rememberComposerDraft(draftKey, value);
   }
 
   function commitText(value = textRef.current) {
@@ -711,6 +715,7 @@ function useBufferedComposerText(draft: string, resetKey: string | null | undefi
     textRef.current = value;
     committedRef.current = value;
     setText((current) => current === value ? current : value);
+    rememberComposerDraft(draftKey, value);
   }
 
   return { text, updateText, commitText, markCommitted };
@@ -740,7 +745,7 @@ function ConversationComposer({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const shouldUseShortPlaceholder = useMobileViewport();
   const usesSoftKeyboard = useCoarsePointer();
-  const { text, updateText, commitText, markCommitted } = useBufferedComposerText(draft, channel?.id, setDraft);
+  const { text, updateText, commitText, markCommitted } = useBufferedComposerText(draft, channel?.id, setDraft, composerDraftKey("channel", channel?.id));
   const {
     mentionState,
     mentionIndex,
