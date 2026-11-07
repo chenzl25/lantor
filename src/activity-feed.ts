@@ -1,7 +1,6 @@
 import { isProgressOnlyMessage } from "./message-grouping";
 import type { ActivityFeedItem, Agent, Channel, Message, ThreadActivity } from "./types";
 import { markdownPreviewText } from "./markdown-preview";
-import { firstLines } from "./ui-utils";
 
 type ActivityFeedSource = {
   channels: Channel[];
@@ -11,6 +10,15 @@ type ActivityFeedSource = {
   unfollowedThreadIds: ReadonlySet<string>;
   ownerMentionHandles: readonly string[];
 };
+
+/** The first line titles the row; the preview continues after it instead of
+ * repeating it. */
+export function splitTitle(text: string): { title: string; excerpt: string } {
+  const trimmed = text.trim();
+  const newline = trimmed.indexOf("\n");
+  if (newline < 0) return { title: trimmed, excerpt: "" };
+  return { title: trimmed.slice(0, newline).trim(), excerpt: trimmed.slice(newline + 1).trim() };
+}
 
 // Activity is a view of agent messages. System/owner roots still supply thread
 // context, but neither they nor task/reminder state can produce a feed entry.
@@ -42,8 +50,7 @@ export function buildActivityFeedItems(source: ActivityFeedSource): ActivityFeed
     id,
     dismissId: id,
     kind,
-    title: firstLines(text(message), 1),
-    excerpt: text(message),
+    ...splitTitle(text(message)),
     surface: channels.has(message.channel_id) ? surface(channels.get(message.channel_id)!) : "Unknown",
     actor: message.sender_name,
     timestamp: message.created_at,
@@ -67,6 +74,7 @@ export function buildActivityFeedItems(source: ActivityFeedSource): ActivityFeed
     item.title = channel.kind === "dm"
       ? `DM with @${agents.get(channel.dm_agent_id ?? "")?.handle ?? "agent"}`
       : `New in #${channel.name}`;
+    item.excerpt = text(latest);
     items.push(item);
   }
 

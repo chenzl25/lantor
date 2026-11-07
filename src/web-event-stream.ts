@@ -1,3 +1,4 @@
+import { markServerReachable } from "./web-reachability";
 import { checkWebSession, isWebSessionExpired, subscribeWebSession } from "./web-session";
 
 export type EventReplay = {
@@ -60,6 +61,7 @@ export function subscribeWebEvents(
     connection.onopen = () => {
       if (source !== connection || disposed) return;
       lastStreamActivityAt = Date.now();
+      markServerReachable();
       // A server that opens then immediately fails must still back off.
       stableTimer = setTimeout(() => { attempt = 0; stableTimer = null; }, 10_000);
     };

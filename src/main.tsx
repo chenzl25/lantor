@@ -34,7 +34,7 @@ import type { ApiArgsTuple, ApiCommand, ApiResult } from "./api-contract";
 import { applyUiStatePatch, scopesForRefresh, type UiStateScope } from "./ui-state-sync";
 import { streamingMessages, type StreamingMessageSnapshot } from "./streaming-message-store";
 import { mergeHydratedRows, mergeThreadActivities } from "./bootstrap-hydration";
-import type { EventSubscription } from "./web-event-stream";
+import { eventRetryDelay, type EventSubscription } from "./web-event-stream";
 import { APP_DISPLAY_NAME } from "./branding";
 import startupLogo from "../public/lantor-icon-v2.png";
 import "../public/startup.css";
@@ -77,6 +77,7 @@ import { Sidebar } from "./components/Sidebar";
 import { ThreadPanel } from "./components/ThreadPanel";
 import { WebAppStatus } from "./components/WebAppStatus";
 import { clearWebSignInMarker, isWebSessionExpired, subscribeWebSession } from "./web-session";
+import { isServerUnreachable, serverUnreachableMessage, subscribeServerReachability } from "./web-reachability";
 import { useWebOnline } from "./hooks/useWebOnline";
 import { useVisibleChannelRead } from "./hooks/useVisibleChannelRead";
 import { useVisibleThreadRead } from "./hooks/useVisibleThreadRead";
@@ -2111,14 +2112,51 @@ function App() {
     });
   }, []);
 
+  const loaded = Boolean(data);
+  const bootFailed = !loaded && Boolean(appError);
   useEffect(() => {
-    if (data || isTauriRuntime()) return;
-    // A cold offline launch has no event cursor yet. Retry the initial load
-    // once connectivity returns; established SSE sessions keep their backoff.
-    const retry = () => { void refreshWithError(`Failed to load ${APP_DISPLAY_NAME} state`); };
-    window.addEventListener("online", retry);
-    return () => window.removeEventListener("online", retry);
-  }, [Boolean(data)]);
+    if (!bootFailed || isTauriRuntime()) return;
+    // The first load failed (offline, or the Mac is asleep) and there is no
+    // event stream yet. Keep retrying with backoff, and right away when the
+    // app returns to the foreground or the network or the Mac comes back.
+    const fallback = `Failed to load ${APP_DISPLAY_NAME} state`;
+    let attempt = 0;
+    let timer: number | undefined;
+    let disposed = false;
+    const retry = () => {
+      window.clearTimeout(timer);
+      if (disposed || isWebSessionExpired()) return;
+      refreshExclusive(fallback).then(() => {
+        if (!disposed) setAppError(null);
+      }, (err) => {
+        if (disposed) return;
+        setAppError(errorMessage(err, fallback));
+        window.clearTimeout(timer);
+        timer = window.setTimeout(retry, eventRetryDelay(attempt++));
+      });
+    };
+    const retryNow = () => {
+      if (document.visibilityState !== "visible") return;
+      attempt = 0;
+      retry();
+    };
+    const onReachability = () => { if (!isServerUnreachable()) retryNow(); };
+    timer = window.setTimeout(retry, eventRetryDelay(attempt++));
+    const unsubscribeReachability = subscribeServerReachability(onReachability);
+    window.addEventListener("online", retryNow);
+    window.addEventListener("pageshow", retryNow);
+    window.addEventListener("focus", retryNow);
+    document.addEventListener("visibilitychange", retryNow);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+      unsubscribeReachability();
+      window.removeEventListener("online", retryNow);
+      window.removeEventListener("pageshow", retryNow);
+      window.removeEventListener("focus", retryNow);
+      document.removeEventListener("visibilitychange", retryNow);
+    };
+  }, [bootFailed]);
 
   useEffect(() => {
     if (isTauriRuntime()) return;
@@ -2455,10 +2493,11 @@ function App() {
   }, [activeChannelId, activeThreadId, data, loadingOlderChannelIds]);
 
   useEffect(() => {
-    if (!appError) return;
+    // Before the first load, the boot screen keeps its error until a retry succeeds.
+    if (!appError || !loaded) return;
     const timer = window.setTimeout(() => setAppError(null), 6500);
     return () => window.clearTimeout(timer);
-  }, [appError]);
+  }, [appError, loaded]);
 
   useEffect(() => {
     if (!activeChannelId) return;
@@ -5055,7 +5094,9 @@ function App() {
   if (!data || !bootReady) {
     return (
       <BootSplash
-        appError={appError}
+        // The status bar says the Mac is out of reach; the splash keeps
+        // showing that Lantor is still trying to open.
+        appError={appError === serverUnreachableMessage ? null : appError}
         onRetry={() => refreshWithError(`Failed to load ${APP_DISPLAY_NAME} state`)}
       />
     );

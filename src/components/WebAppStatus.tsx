@@ -1,9 +1,10 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { RefreshCw, WifiOff } from "lucide-react";
+import { CloudOff, RefreshCw, WifiOff } from "lucide-react";
 import { isTauriRuntime } from "../apiClient";
 import { isStandaloneDisplay } from "../display-mode";
 import { useWebOnline } from "../hooks/useWebOnline";
 import { startAppShell } from "../web-app-shell";
+import { isServerUnreachable, serverUnreachableMessage, subscribeServerReachability } from "../web-reachability";
 import { isWebSessionExpired, subscribeWebSession, watchWebSessionRecovery, webSignInUrl } from "../web-session";
 
 // A sibling of App: connection/update notices never invalidate message rows.
@@ -11,11 +12,14 @@ export function WebAppStatus() {
   const online = useWebOnline();
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const sessionExpired = useSyncExternalStore(subscribeWebSession, isWebSessionExpired);
+  const unreachable = useSyncExternalStore(subscribeServerReachability, isServerUnreachable);
+  const macOutOfReach = online && unreachable && !sessionExpired;
   useEffect(() => startAppShell(() => setUpdateAvailable(true)), []);
   useEffect(() => isTauriRuntime() ? undefined : watchWebSessionRecovery(), []);
-  if (isTauriRuntime() || (online && !updateAvailable && !sessionExpired)) return null;
+  if (isTauriRuntime() || (online && !updateAvailable && !sessionExpired && !macOutOfReach)) return null;
   return <aside className="web-app-status" role="status" aria-live="polite">
     {!online && <span><WifiOff size={16} aria-hidden="true" /> Offline. Reconnect to catch up.</span>}
+    {macOutOfReach && <span><CloudOff size={16} aria-hidden="true" /> {serverUnreachableMessage}</span>}
     {sessionExpired && (isStandaloneDisplay() ? <div>
       {/* The Home Screen app has no tabs: sign-in replaces this page. */}
       <p>Your session has expired.</p>

@@ -123,13 +123,18 @@ async function readApiResponse<T>(response: Response, fallbackMessage: string): 
   const payload = contentType.includes("application/json")
     ? await response.json()
     : await response.text();
-  if (!response.ok) {
-    const message = typeof payload === "object" && payload && "message" in payload
-      ? String((payload as { message: unknown }).message)
-      : String(payload || fallbackMessage);
-    throw new Error(message);
-  }
+  if (!response.ok) throw new Error(apiErrorMessage(payload, response.status, fallbackMessage));
   return payload as T;
+}
+
+/** A proxy or server error page is markup, not a message: never show it. */
+export function apiErrorMessage(payload: unknown, status: number, fallbackMessage: string) {
+  if (typeof payload === "object" && payload && "message" in payload) {
+    return String((payload as { message: unknown }).message);
+  }
+  const text = typeof payload === "string" ? payload.trim() : "";
+  if (!text || text.startsWith("<") || text.length > 300) return `${fallbackMessage} (HTTP ${status})`;
+  return text;
 }
 
 export async function apiInvoke<C extends ApiCommand>(
@@ -189,12 +194,7 @@ export async function apiInvokeMeasured<C extends ApiCommand>(
     ? JSON.parse(rawPayload)
     : rawPayload;
   const parseMs = performance.now() - parseStartedAt;
-  if (!response.ok) {
-    const message = typeof payload === "object" && payload && "message" in payload
-      ? String((payload as { message: unknown }).message)
-      : String(payload || `${command} failed`);
-    throw new Error(message);
-  }
+  if (!response.ok) throw new Error(apiErrorMessage(payload, response.status, `${command} failed`));
   return {
     payload: payload as ApiResult<C>,
     measurement: {

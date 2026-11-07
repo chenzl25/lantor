@@ -278,7 +278,6 @@ export function ActivityFeedModal({
             const Icon = iconFor(item.kind);
             const avatarAgent = actorAvatarAgent(item, agents, ownerProfile);
             const swipeOffset = swipeState?.itemId === item.id ? swipeState.offsetX : 0;
-            const excerpt = item.excerpt.trim() === item.title.trim() ? "" : item.excerpt;
             const rowClassName = [
               "activity-feed-row",
               item.unread ? "unread" : "",
@@ -325,7 +324,7 @@ export function ActivityFeedModal({
                       <Icon size={18} />
                       <span>{item.title}</span>
                     </h3>
-                    {excerpt && <p>{firstLines(excerpt, 3)}</p>}
+                    {item.excerpt && <p>{firstLines(item.excerpt, 3)}</p>}
                     {item.newCount > 0 ? <small><b>{item.newCount} new</b></small> : null}
                   </div>
                   <div className="activity-feed-row-actions">
