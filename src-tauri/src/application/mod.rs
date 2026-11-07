@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use uuid::Uuid;
 
+pub(crate) mod agent_tools;
 pub(crate) mod agents;
 pub(crate) mod artifacts;
 pub(crate) mod bootstrap;

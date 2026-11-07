@@ -332,6 +332,48 @@ async fn get_or_spawn_warm_claude_runtime(
     Ok(runtime)
 }
 
+/// Common CLI flags/environment for warm turns and read-only tool discovery.
+pub(super) fn configure_claude_command(
+    command: &mut Command,
+    agent_id: Uuid,
+    handle: &str,
+    working_directory: &str,
+    environment_variables: &str,
+) -> CommandResult<()> {
+    apply_agent_environment_variables(command, environment_variables)?;
+    command
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--input-format")
+        .arg("stream-json")
+        .arg("--include-partial-messages")
+        // Echoes each input with its uuid when consumed; follow-ups need it.
+        .arg("--replay-user-messages")
+        .arg("--verbose")
+        // Monitor has its own enablement gate in Claude Code, independent of
+        // CLAUDE_CODE_DISABLE_BACKGROUND_TASKS. It can also emit unsolicited turns.
+        // ScheduleWakeup stays visible with cron disabled and reports success
+        // although the wakeup never fires; Lantor loops replace it.
+        .arg("--disallowedTools")
+        .arg(CLAUDE_DISALLOWED_TOOLS)
+        .arg("--permission-mode")
+        .arg("bypassPermissions");
+    configure_claude_process_environment(command);
+    configure_agent_identity_env(command, agent_id, handle);
+    configure_agent_context_tool_env(command);
+    #[cfg(unix)]
+    command.process_group(0);
+    if !working_directory.is_empty() {
+        command.current_dir(working_directory);
+    }
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    Ok(())
+}
+
 async fn spawn_warm_claude_runtime(
     pool: &SqlitePool,
     registry: WarmClaudeRegistry,
@@ -359,36 +401,13 @@ async fn spawn_warm_claude_runtime(
     if let Some(session_id) = session_start.resume_session_id() {
         command.arg("--resume").arg(session_id);
     }
-    apply_agent_environment_variables(&mut command, config.environment_variables)?;
-    command
-        .arg("--output-format")
-        .arg("stream-json")
-        .arg("--input-format")
-        .arg("stream-json")
-        .arg("--include-partial-messages")
-        // Echoes each input with its uuid when consumed; follow-ups need it.
-        .arg("--replay-user-messages")
-        .arg("--verbose")
-        // Monitor has its own enablement gate in Claude Code, independent of
-        // CLAUDE_CODE_DISABLE_BACKGROUND_TASKS. It can also emit unsolicited turns.
-        // ScheduleWakeup stays visible with cron disabled and reports success
-        // although the wakeup never fires; Lantor loops replace it.
-        .arg("--disallowedTools")
-        .arg(CLAUDE_DISALLOWED_TOOLS)
-        .arg("--permission-mode")
-        .arg("bypassPermissions");
-    configure_claude_process_environment(&mut command);
-    configure_agent_identity_env(&mut command, agent_id, config.handle);
-    configure_agent_context_tool_env(&mut command);
-    #[cfg(unix)]
-    command.process_group(0);
-    if !config.working_directory.is_empty() {
-        command.current_dir(config.working_directory);
-    }
-    command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    configure_claude_command(
+        &mut command,
+        agent_id,
+        config.handle,
+        config.working_directory,
+        config.environment_variables,
+    )?;
 
     let mut child = match command.spawn() {
         Ok(child) => child,

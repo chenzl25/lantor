@@ -362,6 +362,28 @@ async fn get_or_spawn_warm_codex_runtime(
     Ok(runtime)
 }
 
+pub(super) fn app_server_command(
+    agent_id: Uuid,
+    handle: &str,
+    cwd: &str,
+    environment_variables: &str,
+) -> CommandResult<Command> {
+    let mut command = Command::new("/bin/zsh");
+    command.arg("-lc").arg(CODEX_APP_SERVER_SHELL_COMMAND);
+    apply_agent_environment_variables(&mut command, environment_variables)?;
+    configure_agent_identity_env(&mut command, agent_id, handle);
+    configure_agent_context_tool_env(&mut command);
+    #[cfg(unix)]
+    command.process_group(0);
+    command.current_dir(cwd);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    Ok(command)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn spawn_warm_codex_runtime(
     pool: &SqlitePool,
@@ -375,18 +397,7 @@ async fn spawn_warm_codex_runtime(
     context_rotate_threshold: i64,
 ) -> CommandResult<Arc<WarmCodexRuntime>> {
     let cwd = effective_codex_cwd(working_directory)?;
-    let mut command = Command::new("/bin/zsh");
-    command.arg("-lc").arg(CODEX_APP_SERVER_SHELL_COMMAND);
-    apply_agent_environment_variables(&mut command, environment_variables)?;
-    configure_agent_identity_env(&mut command, agent_id, handle);
-    configure_agent_context_tool_env(&mut command);
-    #[cfg(unix)]
-    command.process_group(0);
-    command.current_dir(&cwd);
-    command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    let mut command = app_server_command(agent_id, handle, &cwd, environment_variables)?;
 
     let mut child = match command.spawn() {
         Ok(child) => child,

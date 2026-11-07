@@ -116,6 +116,8 @@ installed. Each suite has an npm script, for example:
   buttons land on desktop and phones (see [`navigation.md`](navigation.md)).
 - `npm run test:agent-loops` checks loop rows (cadence, action, last check,
   command) in the agent drawer's Reminders tab and the Stop confirmation.
+- `npm run test:agent-tools` checks lazy tool discovery, partial failures,
+  plugin and skill disclosures, tool search and Restart on desktop and phones.
 - `npm run test:ui-panels`, `test:dialogs`, `test:image-lightbox`,
   `test:attachment-sheet`, `test:activity`, `test:app-shell`, `test:streaming`,
   `test:web-sync`, `test:message-rows`, `test:message-state-races`,
