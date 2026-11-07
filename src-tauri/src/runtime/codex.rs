@@ -2151,6 +2151,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_unauthorized_retry_followed_by_another_error_is_not_a_login_failure() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let agent_id = insert_test_agent(&pool, "codex-retry-401-agent").await?;
+            let channel_id = insert_test_channel(&pool, "codex-retry-401-channel").await?;
+            let work_item_id: uuid::Uuid = sqlx::query_scalar(
+                r#"
+                insert into agent_work_items (agent_id, channel_id, title, status)
+                values ($1, $2, 'review', 'running')
+                returning id
+                "#,
+            )
+            .bind(agent_id)
+            .bind(channel_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            let run_id: uuid::Uuid = sqlx::query_scalar(
+                r#"
+                insert into agent_runs (agent_id, work_item_id, command, status)
+                values ($1, $2, 'codex app-server', 'running')
+                returning id
+                "#,
+            )
+            .bind(agent_id)
+            .bind(work_item_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            let stream_key = format!("{run_id}:warm-codex");
+            let runtime =
+                test_runtime_with_active_turn(run_id, work_item_id, channel_id, stream_key).await?;
+            for line in [
+                r#"{"method":"error","params":{"error":{"message":"Reconnecting... 1/5","codexErrorInfo":"unauthorized"},"willRetry":true}}"#,
+                r#"{"method":"error","params":{"error":{"message":"Selected model is at capacity.","codexErrorInfo":"serverOverloaded"},"willRetry":false}}"#,
+            ] {
+                super::handle_codex_warm_stdout_line(&pool, agent_id, &runtime, line).await?;
+            }
+
+            let work_status: String =
+                sqlx::query_scalar("select status from agent_work_items where id = $1")
+                    .bind(work_item_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            assert_eq!(work_status, "failed");
+            let auth: Option<String> =
+                sqlx::query_scalar("select status from provider_auth_state where runtime = 'codex'")
+                    .fetch_optional(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            assert_eq!(auth, None);
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        result.unwrap();
+    }
+
+    #[tokio::test]
     async fn a_codex_runtime_that_cannot_start_fails_its_request() {
         let Some((pool, schema)) = test_pool().await else {
             return;
