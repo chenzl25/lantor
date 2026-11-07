@@ -29,6 +29,7 @@
     "test:avatar-cache": "node tests/avatar-cache.e2e.mjs",
     "test:navigation": "node tests/navigation-history.e2e.mjs",
     "test:mac-unreachable": "node tests/mac-unreachable.e2e.mjs",
+    "test:composer-drafts": "node tests/composer-drafts.e2e.mjs",
     "dev": "vite --host 127.0.0.1",
     "web:backend": "cargo run --manifest-path src-tauri/Cargo.toml -- --web-only",
     "web:dev": "npm run build && npm run web:backend",

@@ -107,11 +107,12 @@ When Cloudflare Access expires a browser session, Lantor shows **Sign in again**
 and pauses API calls and event-stream retries. Sign in in the new tab, then
 return to the original tab: Lantor checks the session and resumes synchronization
 without discarding unsent text or attachments. Failed mutations are not
-automatically resubmitted. Keep the original tab open until you have sent or
-saved its drafts.
+automatically resubmitted. Text drafts are also [saved locally](#unsent-drafts);
+attachments are not, so keep the original tab open until you have sent them.
 
 The Home Screen web app has no tabs, so there **Sign in again** signs in on the
-same page and Lantor reloads afterwards. Copy any unsent text before signing in.
+same page and Lantor reloads afterwards. Unsent text comes back after the
+reload; attachments do not, so add them again.
 
 The sign-in navigation uses `/?lantor-auth=1`, which bypasses the app-shell
 service worker cache so the request reaches Access. API requests send
@@ -122,3 +123,14 @@ Access policy as the rest of the application. Network failures, `403` policy
 denials, and server errors are not treated as session expiry.
 
 See [Cloudflare Access session management](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/#ajax).
+
+## Unsent drafts
+
+Composer text is saved in the browser's local storage, per channel and per
+thread, shortly after you stop typing and at once when the page is hidden. It
+comes back after a reload, after iOS discards the Home Screen app in the
+background, and after the sign-in reload above. Sending clears it; a send that
+fails puts it back. Attachments are kept in memory only. Saved drafts are
+removed after 30 days, and at most 50 are kept, newest first. Each tab writes
+only the drafts it changed, so two tabs do not erase each other's drafts for
+different channels or threads.

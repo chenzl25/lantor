@@ -181,7 +181,7 @@ try {
   const home=await context.newPage();
   await home.addInitScript(()=>Object.defineProperty(Navigator.prototype,"standalone",{configurable:true,get:()=>true}));
   await home.goto(origin+"/?standalone=1");
-  await home.getByText("Signing in reloads Lantor. Copy any unsent text first.",{exact:true}).waitFor();
+  await home.getByText("Signing in reloads Lantor. Unsent text is kept; attachments need to be added again.",{exact:true}).waitFor();
   const openPages=context.pages().length;
   await home.getByRole("button",{name:"Sign in again",exact:true}).click();
   await home.getByRole("link",{name:"Complete sign-in"}).click();

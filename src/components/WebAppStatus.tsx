@@ -24,7 +24,7 @@ export function WebAppStatus() {
       {/* The Home Screen app has no tabs: sign-in replaces this page. */}
       <p>Your session has expired.</p>
       <button type="button" onClick={() => window.location.assign(webSignInUrl())}>Sign in again</button>
-      <p>Signing in reloads Lantor. Copy any unsent text first.</p>
+      <p>Signing in reloads Lantor. Unsent text is kept; attachments need to be added again.</p>
     </div> : <div>
       <p>Your session has expired. Your drafts are kept in this tab.</p>
       <button type="button" onClick={() => window.open(webSignInUrl(), "_blank", "noopener,noreferrer")}>Sign in again</button>
