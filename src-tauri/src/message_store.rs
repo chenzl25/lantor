@@ -24,7 +24,7 @@ use crate::{
     app::{to_string, CommandResult},
     models::{
         Artifact, AttachmentUpload, ChannelMessageHistory, ChannelMessagePage, Message,
-        MessageAttachment, SavedMessage,
+        MessageAttachment, SavedMessage, ThreadMessagePage,
     },
 };
 
@@ -34,6 +34,8 @@ const CHANNEL_PREVIEW_REPLIES_PER_THREAD: i64 = 12;
 const ACTIVITY_FEED_THREAD_LIMIT: i64 = 120;
 const ACTIVITY_FEED_MENTION_LIMIT: i64 = 120;
 const MAX_OLDER_CHANNEL_ROOT_MESSAGES_PER_PAGE: i64 = 100;
+pub(crate) const THREAD_PAGE_REPLIES: i64 = 50;
+const MAX_THREAD_PAGE_REPLIES: i64 = 200;
 
 pub(crate) const COMPACT_BOOTSTRAP_ROOTS: i64 = 20;
 const COMPACT_BOOTSTRAP_REPLIES: i64 = 2;
@@ -78,6 +80,70 @@ pub(crate) async fn load_thread_messages_in_pool(
     .await
     .map_err(to_string)?;
     messages_from_rows(pool, rows, false).await
+}
+
+/// Loads a thread root with its newest `limit` replies below `before_seq`.
+/// `since_seq` extends the page back to that sequence, so reloading a thread
+/// the reader already expanded, or reaching a reply they jumped to, returns
+/// one contiguous run with no gap.
+pub(crate) async fn load_thread_page(
+    pool: &SqlitePool,
+    thread_root_id: Uuid,
+    before_seq: Option<i64>,
+    since_seq: Option<i64>,
+    limit: i64,
+) -> CommandResult<ThreadMessagePage> {
+    let limit = limit.clamp(1, MAX_THREAD_PAGE_REPLIES);
+    let before_seq = before_seq.unwrap_or(i64::MAX);
+    let limit_start: Option<i64> = sqlx::query_scalar(
+        r#"select min(seq) from (
+            select seq from messages
+            where thread_root_id = $1 and seq < $2
+            order by seq desc limit $3
+        )"#,
+    )
+    .bind(thread_root_id)
+    .bind(before_seq)
+    .bind(limit)
+    .fetch_one(pool)
+    .await
+    .map_err(to_string)?;
+    // No reply below `before_seq` means there is nothing for `since_seq` to add.
+    let start = limit_start.map(|start| since_seq.map_or(start, |since| start.min(since)));
+    let rows = sqlx::query(
+        r#"select m.*, t.number as task_number, t.status as task_status
+        from messages m left join tasks t on t.message_id = m.id
+        where m.id = $1 or (m.thread_root_id = $1 and m.seq >= $2 and m.seq < $3)
+        order by m.seq"#,
+    )
+    .bind(thread_root_id)
+    .bind(start.unwrap_or(i64::MAX))
+    .bind(before_seq)
+    .fetch_all(pool)
+    .await
+    .map_err(to_string)?;
+    let messages = messages_from_rows(pool, rows, false).await?;
+    let oldest_reply_seq = messages
+        .iter()
+        .filter(|message| message.thread_root_id == Some(thread_root_id))
+        .map(|message| message.seq)
+        .min();
+    let has_more = match oldest_reply_seq {
+        Some(oldest) => sqlx::query_scalar(
+            "select exists(select 1 from messages where thread_root_id = $1 and seq < $2)",
+        )
+        .bind(thread_root_id)
+        .bind(oldest)
+        .fetch_one(pool)
+        .await
+        .map_err(to_string)?,
+        None => false,
+    };
+    Ok(ThreadMessagePage {
+        messages,
+        next_before_seq: oldest_reply_seq.filter(|_| has_more),
+        has_more,
+    })
 }
 
 pub(crate) async fn load_messages(pool: &SqlitePool) -> CommandResult<Vec<Message>> {
@@ -1651,6 +1717,91 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(clamped.messages.len(), 1);
+        drop_test_schema(pool, schema).await;
+    }
+
+    #[tokio::test]
+    async fn thread_pages_return_contiguous_runs_of_the_newest_replies() {
+        let (pool, schema) = test_pool().await.expect("isolated database");
+        let channel = insert_test_channel(&pool, "thread-pages").await.unwrap();
+        let insert = |thread_root_id: Option<uuid::Uuid>, body: String| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, uuid::Uuid>("insert into messages(channel_id,thread_root_id,sender_name,sender_role,body) values($1,$2,'owner','owner',$3) returning id")
+                    .bind(channel).bind(thread_root_id).bind(body).fetch_one(&pool).await.unwrap()
+            }
+        };
+        let root = insert(None, "root".into()).await;
+        let other_root = insert(None, "other root".into()).await;
+        let empty_root = insert(None, "empty root".into()).await;
+        for index in 0..120 {
+            insert(Some(root), format!("reply {index}")).await;
+            if index % 10 == 0 {
+                insert(Some(other_root), format!("other {index}")).await;
+            }
+        }
+        let bodies = |page: &crate::models::ThreadMessagePage| {
+            assert_eq!(page.messages[0].id, root, "every page starts with the root");
+            assert!(page.messages[1..]
+                .iter()
+                .all(|m| m.thread_root_id == Some(root)));
+            page.messages[1..]
+                .iter()
+                .map(|m| m.body.clone())
+                .collect::<Vec<_>>()
+        };
+        let range =
+            |from: usize, to: usize| (from..to).map(|i| format!("reply {i}")).collect::<Vec<_>>();
+
+        let latest = super::load_thread_page(&pool, root, None, None, 50)
+            .await
+            .unwrap();
+        assert_eq!(bodies(&latest), range(70, 120));
+        assert!(latest.has_more);
+        assert_eq!(latest.next_before_seq, Some(latest.messages[1].seq));
+
+        let older = super::load_thread_page(&pool, root, latest.next_before_seq, None, 50)
+            .await
+            .unwrap();
+        assert_eq!(bodies(&older), range(20, 70));
+        assert!(older.has_more);
+        let oldest = super::load_thread_page(&pool, root, older.next_before_seq, None, 50)
+            .await
+            .unwrap();
+        assert_eq!(bodies(&oldest), range(0, 20));
+        assert!(!oldest.has_more);
+        assert_eq!(oldest.next_before_seq, None);
+
+        // Reloading an expanded thread keeps everything from its oldest reply.
+        let window = super::load_thread_page(&pool, root, None, older.next_before_seq, 50)
+            .await
+            .unwrap();
+        assert_eq!(bodies(&window), range(20, 120));
+        assert!(window.has_more);
+        assert_eq!(window.next_before_seq, older.next_before_seq);
+        // A later sequence never shortens the newest page.
+        let since_recent =
+            super::load_thread_page(&pool, root, None, Some(latest.messages[40].seq), 50)
+                .await
+                .unwrap();
+        assert_eq!(bodies(&since_recent), range(70, 120));
+
+        let clamped = super::load_thread_page(&pool, root, None, None, 0)
+            .await
+            .unwrap();
+        assert_eq!(bodies(&clamped), range(119, 120));
+        let capped = super::load_thread_page(&pool, root, None, None, 1_000)
+            .await
+            .unwrap();
+        assert_eq!(bodies(&capped), range(0, 120));
+        assert!(!capped.has_more);
+
+        let empty = super::load_thread_page(&pool, empty_root, None, Some(0), 50)
+            .await
+            .unwrap();
+        assert_eq!(empty.messages.len(), 1);
+        assert_eq!(empty.messages[0].id, empty_root);
+        assert!(!empty.has_more);
         drop_test_schema(pool, schema).await;
     }
 

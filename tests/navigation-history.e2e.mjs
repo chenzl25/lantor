@@ -65,7 +65,7 @@ const api = createServer(async (req, res) => {
     case "/api/bootstrap": result = state; break;
     case "/api/load_channel_previews": case "/api/load_activity_messages": case "/api/search_messages": result = []; break;
     case "/api/load_channel_messages": result = { messages: messages.filter(m => m.channel_id === args.channelId), next_before_seq: null, has_more: false }; break;
-    case "/api/load_thread_messages": result = messages.filter(m => m.id === args.threadRootId || m.thread_root_id === args.threadRootId); break;
+    case "/api/load_thread_page": result = { messages: messages.filter(m => m.id === args.threadRootId || m.thread_root_id === args.threadRootId), next_before_seq: null, has_more: false }; break;
     case "/api/load_message": result = messages.find(m => m.id === args.messageId); break;
     case "/api/load_ui_state": result = Object.fromEntries(args.scopes.map(scope => [scope, state[scope]])); break;
     case "/api/replay_ui_events": result = { cursor: eventCursor, replayGap: false, events: [] }; break;

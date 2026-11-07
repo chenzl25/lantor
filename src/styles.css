@@ -7482,6 +7482,28 @@ body.resizing-column * {
   padding: 6px 0 12px;
 }
 
+.thread-earlier-replies {
+  justify-self: center;
+  min-height: 36px;
+  margin: 4px 22px 8px;
+  padding: 0 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--surface-control);
+  color: var(--ink-muted);
+  font: inherit;
+  font-size: var(--type-size-meta);
+  cursor: pointer;
+}
+
+.thread-earlier-replies:hover:not(:disabled) {
+  background: var(--surface-control-hover);
+}
+
+.thread-earlier-replies:disabled {
+  cursor: default;
+}
+
 .reply-list article {
   position: relative;
   display: grid;

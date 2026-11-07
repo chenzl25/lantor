@@ -99,7 +99,7 @@ const api = createServer(async (request, response) => {
       environment_variables: "LAZY_FIXTURE=restored", workspace_exists: true,
       workspace_entries: [{ name: "hydrated-workspace.txt", relative_path: "hydrated-workspace.txt", path: "/synthetic/workspace/hydrated-workspace.txt", kind: "file", size_bytes: 1 }] },
       agent_activities: [activity], agent_work_items: [workItem] }; break;
-    case "/api/load_thread_messages": result = args.threadRootId === archivedRoot.id ? [archivedRoot] : [root, ...threadHistory, ...state.messages.filter((row) => row.thread_root_id === root.id)]; break;
+    case "/api/load_thread_page": result = { messages: args.threadRootId === archivedRoot.id ? [archivedRoot] : [root, ...threadHistory, ...state.messages.filter((row) => row.thread_root_id === root.id)], next_before_seq: null, has_more: false }; break;
     case "/api/load_message": result = [...state.messages, archivedRoot].find((row) => row.id === args.messageId); break;
     case "/api/load_ui_state": result = Object.fromEntries(args.scopes.map((scope) => [scope, state[scope]])); break;
     case "/api/replay_ui_events": result = { cursor: events.length, replayGap: false, events: events.filter((event) => event.cursor > args.cursor) }; break;
@@ -137,7 +137,7 @@ try {
   await page.waitForTimeout(700);
   assert.equal(count("bootstrap"), 1);
   assert.equal(count("load_agent_detail"), 0, "agent detail stays lazy");
-  assert.equal(count("load_thread_messages"), 0, "history stays lazy");
+  assert.equal(count("load_thread_page"), 0, "history stays lazy");
   await page.locator(".message-agent-avatar-trigger").click();
   await page.getByRole("tab", { name: /^Files/ }).click();
   await page.getByText("hydrated-workspace.txt", { exact: true }).waitFor();
@@ -154,7 +154,7 @@ try {
   await page.locator(`[data-message-id="${root.id}"]`).hover();
   await page.locator(`.conversation [data-message-id="${root.id}"]`).getByRole("button", { name: "View replies", exact: true }).click();
   await page.getByText("Historical reply loaded on expansion", { exact: true }).waitFor();
-  assert.equal(count("load_thread_messages"), 2);
+  assert.equal(count("load_thread_page"), 2);
   await page.getByRole("button", { name: "Close thread", exact: true }).click();
   assert.equal(count("bootstrap"), 1, "lazy hydration must not bootstrap");
   await page.locator("textarea").first().fill("Sent without bootstrap");
@@ -234,7 +234,7 @@ try {
   await page.locator(`[data-message-id="${root.id}"]`).hover();
   await page.locator(`.conversation [data-message-id="${root.id}"]`).getByRole("button", { name: "View replies", exact: true }).click();
   await page.getByText("Historical reply loaded on expansion", { exact: true }).waitFor();
-  const threadRequestsBeforeGap = count("load_thread_messages");
+  const threadRequestsBeforeGap = count("load_thread_page");
   threadHistory.push(message("Reply recovered beyond compact snapshot", { thread_root_id: root.id }));
   const normalBootstrapRequests = count("bootstrap");
   const recovered = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/bootstrap");
@@ -244,7 +244,7 @@ try {
   await page.waitForTimeout(500);
   assert.equal(count("bootstrap"), normalBootstrapRequests + 1, "a replay gap recovers once, including duplicate delivery");
   await page.getByText("Reply recovered beyond compact snapshot", { exact: true }).waitFor();
-  assert.equal(count("load_thread_messages"), threadRequestsBeforeGap + 1, "snapshot gap rehydrates the open thread");
+  assert.equal(count("load_thread_page"), threadRequestsBeforeGap + 1, "snapshot gap rehydrates the open thread");
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ normalBootstrapRequests, gapRecoveryRequests: count("bootstrap") - normalBootstrapRequests, replayRequests: count("replay_ui_events"), readBurstRequests: 1,
     retryIntervalsMs: intervals, checks: "lazy agent workspace/edit, archived work source, lazy thread history, send, read, task status, stale collection response, unchanged foreground, hidden 65s, foreground under 5s, real SSE offline 10s, no missing/duplicate messages, one snapshot for replay gap" }));

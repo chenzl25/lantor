@@ -47,7 +47,7 @@ const api = createServer(async (request, response) => {
     const page = eligible.slice(-args.limit);
     result = { messages: page, has_more: eligible.length > page.length, next_before_seq: page[0]?.seq ?? null, thread_activities: page.includes(latest) ? [activity] : [] };
   }
-  if (url.pathname === "/api/load_thread_messages") result = [latest, reply];
+  if (url.pathname === "/api/load_thread_page") result = { messages: [latest, reply], next_before_seq: null, has_more: false };
   if (url.pathname === "/api/replay_ui_events") result = { cursor, replayGap: false, events: [] };
   response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify(result));
 });
@@ -84,7 +84,7 @@ try {
       const loads = requests.filter(r => r.path === "/api/load_channel_messages");
       assert.equal(loads.length, 1); assert.equal(loads[0].args.limit, 30); assert.equal(loads[0].args.rootsOnly, true);
       assert.equal(requests.filter(r => r.path === "/api/load_channel_previews").length, 0);
-      assert.equal(requests.filter(r => r.path === "/api/load_thread_messages").length, 0);
+      assert.equal(requests.filter(r => r.path === "/api/load_thread_page").length, 0);
       assert.equal(await page.locator(".message-list [data-message-id]").count(), 30);
       assert.equal(await page.locator('.message-attachments img').first().getAttribute("src"), `/api/attachments/${id(500)}?w=480`);
       assert.equal(await page.evaluate(() => window.__activeStarts.size), 0);

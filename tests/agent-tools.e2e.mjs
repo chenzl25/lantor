@@ -77,7 +77,7 @@ const api = createServer(async (req, res) => {
     case "/api/bootstrap": result = { ...state, ui_event_cursor: cursor }; break;
     case "/api/load_channel_previews": case "/api/load_activity_messages": case "/api/search_messages": result = []; break;
     case "/api/load_channel_messages": result = { messages: state.messages.filter(m => m.channel_id === args.channelId), next_before_seq: null, has_more: false }; break;
-    case "/api/load_thread_messages": result = state.messages.filter(m => m.id === args.threadRootId || m.thread_root_id === args.threadRootId); break;
+    case "/api/load_thread_page": result = { messages: state.messages.filter(m => m.id === args.threadRootId || m.thread_root_id === args.threadRootId), next_before_seq: null, has_more: false }; break;
     case "/api/load_ui_state": result = Object.fromEntries(args.scopes.map(scope => [scope, state[scope]])); break;
     case "/api/replay_ui_events": result = { cursor, replayGap: false, events: [] }; break;
     case "/api/open_dm_with_agent": result = dmId; break;
