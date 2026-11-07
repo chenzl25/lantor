@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use crate::agent_workspace::{agent_workspace_list_in_pool, agent_workspace_read_file_in_pool};
 use crate::application::{
-    agent_tools::{self, AgentToolsRequest},
+    agent_tools::{self, AgentToolsRequest, WatchedAppsRequest},
     agents::{self as agent_commands, CreateAgentRequest, OwnerProfileRequest, UpdateAgentRequest},
     artifacts::{self as artifact_commands, ArtifactReadRequest},
     bootstrap::{
@@ -390,6 +390,7 @@ fn api_router(state: Arc<WebState>) -> Router {
         .route("/api/open_dm_with_agent", post(api_open_dm_with_agent))
         .route("/api/agent_workspace_list", post(api_agent_workspace_list))
         .route("/api/load_agent_tools", post(api_load_agent_tools))
+        .route("/api/update_watched_apps", post(api_update_watched_apps))
         .route(
             "/api/agent_workspace_read_file",
             post(api_agent_workspace_read_file),
@@ -1154,6 +1155,16 @@ async fn api_load_agent_tools(
     agent_tools::load(&state.pool, request)
         .await
         .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_update_watched_apps(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<WatchedAppsRequest>,
+) -> Result<impl IntoResponse, Response> {
+    agent_tools::update_watched_apps(&state.pool, request)
+        .await
+        .map(|apps| Json(json!({ "apps": apps })))
         .map_err(api_error)
 }
 

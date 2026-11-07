@@ -1042,6 +1042,13 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "blob references agent_work_items(id) on delete set null",
     )
     .await?;
+    ensure_text_column(
+        pool,
+        "owner_profile",
+        "watched_apps",
+        r#"text not null default '["Notion","Slack","Gmail"]'"#,
+    )
+    .await?;
     backfill_reminder_recurrence_anchors(pool).await?;
 
     sqlx::query(

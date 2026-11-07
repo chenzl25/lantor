@@ -61,6 +61,8 @@ type AgentDetailDrawerProps = {
   onDelete: (agent: Agent) => void;
   onEdit: (agent: Agent) => void;
   onRestart: (agent: Agent) => void;
+  watchedApps: string[];
+  onSaveWatchedApps: (apps: string[]) => Promise<void>;
   onStopReminder: (reminder: Reminder) => void;
   onOpenWorkItem: (item: AgentWorkItem, focusedMessageIdOverride?: string | null) => void;
   onResizeStart: (event: ReactPointerEvent<HTMLButtonElement>) => void;
@@ -444,6 +446,8 @@ export function AgentDetailDrawer({
   onDelete,
   onEdit,
   onRestart,
+  watchedApps,
+  onSaveWatchedApps,
   onStopReminder,
   onOpenWorkItem,
   onResizeStart,
@@ -654,7 +658,14 @@ export function AgentDetailDrawer({
             )}
           </div>
         </section>
-        <AgentTools key={agent.id} agent={agent} onRestart={onRestart} restartDisabledReason={restartDisabledReason} />
+        <AgentTools
+          key={agent.id}
+          agent={agent}
+          onRestart={onRestart}
+          restartDisabledReason={restartDisabledReason}
+          watchedApps={watchedApps}
+          onSaveWatchedApps={onSaveWatchedApps}
+        />
         {(isCodex || isClaude) && (
           <AgentSubscriptionUsage agent={agent} />
         )}

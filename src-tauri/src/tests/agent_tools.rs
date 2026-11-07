@@ -42,6 +42,47 @@ async fn archived_snapshot_uses_uuid_file_names_and_run_start_time() {
 }
 
 #[tokio::test]
+async fn watched_apps_default_normalize_and_survive_an_upgrade() {
+    use crate::agent_profile::load_owner_profile;
+    use crate::test_support::{drop_test_schema, test_pool};
+    let (pool, path) = test_pool().await.unwrap();
+    sqlx::query("alter table owner_profile drop column watched_apps")
+        .execute(&pool)
+        .await
+        .unwrap();
+    crate::db::migrate(&pool).await.unwrap();
+    assert_eq!(
+        load_owner_profile(&pool).await.unwrap().watched_apps,
+        ["Notion", "Slack", "Gmail"]
+    );
+    let saved = update_watched_apps(
+        &pool,
+        WatchedAppsRequest {
+            apps: vec![
+                "  Google   Drive ".into(),
+                "Notion".into(),
+                "notion".into(),
+                " ".into(),
+            ],
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(saved, ["Google Drive", "Notion"]);
+    assert_eq!(load_owner_profile(&pool).await.unwrap().watched_apps, saved);
+    for apps in [
+        vec!["x".repeat(61)],
+        (0..31).map(|n| format!("App {n}")).collect(),
+    ] {
+        assert!(update_watched_apps(&pool, WatchedAppsRequest { apps })
+            .await
+            .is_err());
+    }
+    assert_eq!(load_owner_profile(&pool).await.unwrap().watched_apps, saved);
+    drop_test_schema(pool, path).await;
+}
+
+#[tokio::test]
 async fn cache_coalesces_refreshes_and_invalidates_changed_configuration() {
     let cache = ToolsCache::default();
     let config = ProbeConfig {
@@ -169,11 +210,14 @@ async fn real_cli_inventory() {
     .unwrap();
     println!(
         "{}",
-        serde_json::json!({"runtime":result.runtime,"mcp_state":result.mcp.state,
+        serde_json::json!({"runtime":result.runtime,"apps_state":result.apps.state,
+        "apps":result.apps.items.iter().map(|a|serde_json::json!({"name":a.name,"status":a.status,"source":a.source,"tools":a.tool_count,"plugin":a.plugin})).collect::<Vec<_>>(),
+        "mcp_state":result.mcp.state,
         "servers":result.mcp.items.iter().map(|s|serde_json::json!({"name":s.name,"status":s.status,"tools":s.tools.len(),"auth":s.auth_status,"error":s.tools_error})).collect::<Vec<_>>(),
         "plugins_state":result.plugins.state,"installed_plugins":result.plugins.items.iter().filter(|p|!p.builtin).count(),
         "builtin_plugins":result.plugins.items.iter().filter(|p|p.builtin).count(),"skills_state":result.skills.state,"skills":result.skills.items.len()})
     );
+    assert_eq!(result.apps.state, "ready");
     assert_eq!(result.mcp.state, "ready");
     assert_eq!(result.plugins.state, "ready");
     assert_eq!(result.skills.state, "ready");

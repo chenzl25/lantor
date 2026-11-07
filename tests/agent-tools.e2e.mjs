@@ -22,7 +22,11 @@ const channels = [{ id: channelId, name: "tool-fixture", kind: "channel", dm_age
   { id: dmId, name: `dm:${agent.id}`, kind: "dm", dm_agent_id: agent.id }].map(c => ({ ...c, description: "", unread_count: 0, github_unread_count: 0, github_review_synced_at: null }));
 const section = items => ({state:"ready",message:"",observed_at:null,items});
 const tools = Array.from({length:272}, (_,n)=>({name:`fixture_tool_${n}`,description:`Synthetic tool ${n}`}));
+const app = (name,status,source,tool_count,plugin=null) => ({name,status,source,tool_count,plugin,detail:null});
+const defaultWatched = ["Notion","Slack","Gmail"];
 const codexResult = {agent_id:agent.id,runtime:"codex",checked_at:now.toISOString(),
+  apps:section([app("Notion","connected","chatgpt_app",81,"notion-fixture"),app("Gmail","connected","chatgpt_app",21,"mail-fixture"),
+    app("Google Drive","connected","chatgpt_app",45),app("Drafts","needs_setup","chatgpt_app",0)]),
   mcp:section([
     {name:"apps",status:"unknown",auth_status:"oAuth",tools_error:null,tools},
     {name:"docs",status:"unknown",auth_status:"unsupported",tools_error:null,tools:tools.slice(0,5)},
@@ -30,17 +34,21 @@ const codexResult = {agent_id:agent.id,runtime:"codex",checked_at:now.toISOStrin
     {name:"repl",status:"unknown",auth_status:"unsupported",tools_error:null,tools:tools.slice(0,4)},
     {name:"needs-login",status:"unknown",auth_status:"notLoggedIn",tools_error:"Sign in to read tools",tools:[]},
   ]),
-  plugins:section(Array.from({length:22},(_,n)=>({name:`Installed plugin ${n}`,description:"Synthetic plugin",builtin:false,enabled:true}))),
+  plugins:section([{name:"notion-fixture",description:"",builtin:false,enabled:true,apps:["Notion"]},
+    {name:"mail-fixture",description:"",builtin:false,enabled:true,apps:["Gmail"]},
+    ...Array.from({length:20},(_,n)=>({name:`Installed plugin ${n}`,description:"Synthetic plugin",builtin:false,enabled:true,apps:[]}))]),
   skills:section(Array.from({length:64},(_,n)=>({name:`Skill ${n}`,description:"Synthetic skill"})))};
 const claudeResult={...codexResult,runtime:"claude",
+  apps:section([app("Notion","login_required","claude_connector",0),app("Workspace docs","connected","mcp_server",8),
+    app("Single tool","connected","mcp_server",1)]),
   mcp:section([{name:"Workspace docs",status:"connected",auth_status:null,tools_error:null,tools:tools.slice(0,8)},
     {name:"Single tool",status:"connected",auth_status:null,tools_error:null,tools:tools.slice(0,1)},
     {name:"Zeta login",status:"needs-auth",auth_status:null,tools_error:null,tools:[]}]),
-  plugins:{...section([...Array.from({length:3},(_,n)=>({name:`User plugin ${n}`,description:"",builtin:false,enabled:true})),
-    ...Array.from({length:3},(_,n)=>({name:`internal-${n}@builtin`,description:"",builtin:true,enabled:true}))]),observed_at:iso(-30)},
+  plugins:{...section([...Array.from({length:3},(_,n)=>({name:`User plugin ${n}`,description:"",builtin:false,enabled:true,apps:[]})),
+    ...Array.from({length:3},(_,n)=>({name:`internal-${n}@builtin`,description:"",builtin:true,enabled:true,apps:[]}))]),observed_at:iso(-30)},
   skills:{...section(Array.from({length:33},(_,n)=>({name:`Workspace skill ${n}`,description:""}))),observed_at:iso(-30)}};
-let toolsResult=codexResult,failNext=false;
-const state = { db_url: "synthetic://agent-tools", web_base_url: null, owner_profile: { display_name: "Owner", avatar: "D", description: "" },
+let toolsResult=codexResult,failNext=false,failWatchNext=false;
+const state = { db_url: "synthetic://agent-tools", web_base_url: null, owner_profile: { display_name: "Owner", avatar: "D", description: "", watched_apps: [...defaultWatched] },
   channels, messages: [root], channel_message_history: channels.map(c => ({ channel_id: c.id, before_seq: null, has_more: false })),
   agents: [agent], tasks: [], channel_members: [{ channel_id: channelId, agent_id: agent.id }], thread_activities: [],
   saved_messages: [], dismissed_inbox_items: {}, read_inbox_items: {}, artifacts: [], reminders: [], agent_runs: [],
@@ -77,6 +85,12 @@ const api = createServer(async (req, res) => {
       if (failNext) { failNext = false; res.writeHead(503).end(JSON.stringify({message:"fixture failure"})); return; }
       result = toolsResult;
       break;
+    case "/api/update_watched_apps":
+      if (failWatchNext) { failWatchNext = false; res.writeHead(503).end(JSON.stringify({message:"fixture failure"})); return; }
+      state.owner_profile = { ...state.owner_profile, watched_apps: args.apps };
+      result = { apps: args.apps };
+      setTimeout(() => publish({ type: "refresh", reason: "owner_profile_updated" }), 0);
+      break;
 
   }
   res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(result));
@@ -89,6 +103,7 @@ try {
     for (const runtime of ["codex", "claude"]) {
       agent.runtime = runtime;
       toolsResult = structuredClone(runtime === "codex" ? codexResult : claudeResult);
+      state.owner_profile = { ...state.owner_profile, watched_apps: [...defaultWatched] };
       requests.length = 0;
       browser = await engine.launch();
       const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 1440, height: 960 } });
@@ -108,9 +123,28 @@ try {
       assert.deepEqual(toolRequests().map(r => r.args), [{ agentId: agent.id, refresh: false }]);
       assert.equal(await panel.locator(".agent-tools-list").count(), 0, "tool names render on demand");
       assert.equal(await panel.locator(".agent-tools-group ul").count(), 0, "plugins and skills start collapsed");
+      const appRows = panel.locator(".agent-tools-apps > ul > .agent-tool-app");
+      assert.deepEqual(await appRows.locator("strong").allTextContents(), defaultWatched, "watched apps keep their order");
+      const otherApps = panel.getByRole("button", { name: /^Other apps/ });
+      if (runtime === "codex") {
+        assert.match(await appRows.nth(0).textContent(), /Connected · 81 tools.*ChatGPT app · notion-fixture plugin/);
+        assert.match(await appRows.nth(1).textContent(), /Not connected.*Connect it as a ChatGPT app or add an MCP server/);
+        assert.match(await appRows.nth(2).textContent(), /Connected · 21 tools/);
+        assert.match(await otherApps.textContent(), /1 connected/);
+        await otherApps.click();
+        const others = panel.locator(".agent-tools-other-apps .agent-tool-app");
+        assert.deepEqual(await others.locator("strong").allTextContents(), ["Drafts", "Google Drive"], "problems first");
+        assert.match(await others.first().textContent(), /Needs setup/);
+        await otherApps.click();
+      } else {
+        assert.ok(await appRows.nth(0).evaluate(e => e.classList.contains("needs-attention")), "a login problem stands out");
+        assert.match(await appRows.nth(0).textContent(), /Login required.*claude\.ai connector/);
+        assert.match(await appRows.nth(1).textContent(), /Not connected.*Add it as a claude\.ai connector or an MCP server/);
+        assert.match(await otherApps.textContent(), /2 connected/);
+      }
       if (runtime === "codex") {
         assert.match(await panel.locator(".agent-tool-server").first().textContent(), /needs-login/);
-        assert.equal(await panel.locator(".connected").count(), 0, "Codex inventory never implies an online connection");
+        assert.equal(await panel.locator(".agent-tool-server .connected").count(), 0, "a Codex MCP catalog never implies an online connection");
         assert.equal(await panel.locator(".agent-tool-server").filter({ hasText: "review" }).getByText("Unknown · 0 tools").count(), 1);
       } else {
         assert.equal(await panel.getByText("Connected · 8 tools").count(), 1);
@@ -147,6 +181,11 @@ try {
       }
       await panel.getByRole("button", { name: /^Plugins/ }).click();
       assert.equal(await panel.locator(".agent-tools-group").first().locator("li").count(), runtime === "codex" ? 22 : 6);
+      if (runtime === "codex") {
+        const content = await panel.locator(".agent-tools-group").first().textContent();
+        assert.match(content, /Provide apps.*notion-fixture → Notion/);
+        assert.match(content, /Other plugins/);
+      }
       if (runtime === "claude") {
         const content = await panel.locator(".agent-tools-group").first().textContent();
         assert.ok(content.indexOf("User plugin 0") < content.indexOf("internal-0@builtin"));
@@ -158,6 +197,23 @@ try {
       await panel.getByRole("button", { name: "Restart", exact: true }).click();
       await restarted;
       assert.deepEqual(requests.filter(r => r.path === "/api/start_agent").map(r => r.args), [{ agentId: agent.id }]);
+      await panel.getByRole("button", { name: "Edit", exact: true }).click();
+      await panel.getByRole("button", { name: "Stop watching Slack" }).click();
+      const watchInput = panel.getByRole("textbox", { name: "App to watch" });
+      await watchInput.fill("  linear ");
+      await watchInput.press("Enter");
+      await watchInput.fill("notion");
+      await watchInput.press("Enter");
+      failWatchNext = true;
+      await panel.getByRole("button", { name: "Save", exact: true }).click();
+      await panel.getByText("Could not save. Try again.").waitFor();
+      await panel.getByRole("button", { name: "Save", exact: true }).click();
+      await page.waitForFunction(() => [...document.querySelectorAll(".agent-tools-apps > ul > .agent-tool-app strong")]
+        .map(e => e.textContent).join() === "Notion,Gmail,linear");
+      assert.deepEqual(requests.filter(r => r.path === "/api/update_watched_apps").at(-1).args, { apps: ["Notion", "Gmail", "linear"] },
+        "trimmed, and a differently cased duplicate is not added");
+      assert.equal(await panel.getByRole("textbox", { name: "App to watch" }).count(), 0, "saving closes the editor");
+      assert.match(await appRows.nth(2).textContent(), /Not connected/);
       toolsResult = { ...toolsResult, mcp: section(toolsResult.mcp.items.slice(0, 1)) };
       await panel.getByRole("button", { name: "Refresh", exact: true }).click();
       await panel.getByText(/^1 MCP server · /).waitFor();

@@ -16,6 +16,68 @@ use crate::{
 pub(crate) const DEFAULT_OWNER_DISPLAY_NAME: &str = "Me";
 const DEFAULT_OWNER_AVATAR: &str = "dicebear:dylan:owner";
 const DEFAULT_OWNER_DESCRIPTION: &str = "local owner";
+const DEFAULT_WATCHED_APPS: [&str; 3] = ["Notion", "Slack", "Gmail"];
+const MAX_WATCHED_APPS: usize = 30;
+const MAX_WATCHED_APP_NAME_CHARS: usize = 60;
+
+fn default_watched_apps() -> Vec<String> {
+    DEFAULT_WATCHED_APPS.map(str::to_owned).to_vec()
+}
+
+/// Trims names and drops blanks and case-insensitive duplicates, keeping order.
+fn normalize_watched_apps(apps: Vec<String>) -> CommandResult<Vec<String>> {
+    let mut seen = std::collections::HashSet::new();
+    let mut names = Vec::new();
+    for app in apps {
+        let name = app.split_whitespace().collect::<Vec<_>>().join(" ");
+        if name.is_empty() {
+            continue;
+        }
+        if name.chars().count() > MAX_WATCHED_APP_NAME_CHARS {
+            return Err(format!(
+                "app names are limited to {MAX_WATCHED_APP_NAME_CHARS} characters"
+            ));
+        }
+        if seen.insert(name.to_lowercase()) {
+            names.push(name);
+        }
+    }
+    if names.len() > MAX_WATCHED_APPS {
+        return Err(format!("watch at most {MAX_WATCHED_APPS} apps"));
+    }
+    Ok(names)
+}
+
+pub(crate) async fn update_watched_apps_in_pool(
+    pool: &SqlitePool,
+    apps: Vec<String>,
+) -> CommandResult<Vec<String>> {
+    let apps = normalize_watched_apps(apps)?;
+    let encoded = serde_json::to_string(&apps).map_err(to_string)?;
+    let mut transaction = pool.begin().await.map_err(to_string)?;
+    sqlx::query(
+        r#"
+        insert into owner_profile (id, watched_apps, updated_at)
+        values (1, $1, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
+        on conflict (id) do update set
+            watched_apps = excluded.watched_apps,
+            updated_at = excluded.updated_at
+        "#,
+    )
+    .bind(encoded)
+    .execute(&mut *transaction)
+    .await
+    .map_err(to_string)?;
+    enqueue_ui_event_in_tx(
+        &mut transaction,
+        &UiEvent::Refresh {
+            reason: "owner_profile_updated",
+        },
+    )
+    .await?;
+    transaction.commit().await.map_err(to_string)?;
+    Ok(apps)
+}
 
 pub(crate) async fn update_owner_profile_in_pool(
     pool: &SqlitePool,
@@ -479,7 +541,7 @@ pub(crate) async fn delete_agent_in_pool(pool: &SqlitePool, agent_id: Uuid) -> C
 pub(crate) async fn load_owner_profile(pool: &SqlitePool) -> CommandResult<OwnerProfile> {
     let row = sqlx::query(
         r#"
-        select display_name, avatar, description
+        select display_name, avatar, description, watched_apps
         from owner_profile
         where id = 1
         "#,
@@ -493,11 +555,14 @@ pub(crate) async fn load_owner_profile(pool: &SqlitePool) -> CommandResult<Owner
             display_name: row.get("display_name"),
             avatar: row.get("avatar"),
             description: row.get("description"),
+            watched_apps: serde_json::from_str(row.get::<&str, _>("watched_apps"))
+                .unwrap_or_else(|_| default_watched_apps()),
         })
         .unwrap_or_else(|| OwnerProfile {
             display_name: DEFAULT_OWNER_DISPLAY_NAME.to_owned(),
             avatar: DEFAULT_OWNER_AVATAR.to_owned(),
             description: DEFAULT_OWNER_DESCRIPTION.to_owned(),
+            watched_apps: default_watched_apps(),
         }))
 }
 

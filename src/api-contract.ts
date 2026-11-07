@@ -61,6 +61,10 @@ export type ApiContract = {
     args: { agentId: string; refresh?: boolean };
     result: AgentTools;
   };
+  update_watched_apps: {
+    args: { apps: string[] };
+    result: { apps: string[] };
+  };
   load_agent_detail: {
     args: { agentId: string };
     result: { agent: Agent; agent_activities: AgentActivity[]; agent_work_items: AgentWorkItem[] };
@@ -459,6 +463,7 @@ const API_COMMAND_NAMES = {
   open_dm_with_agent: true,
   agent_workspace_list: true,
   load_agent_tools: true,
+  update_watched_apps: true,
   agent_workspace_read_file: true,
 } as const satisfies Record<keyof ApiContract, true>;
 

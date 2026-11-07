@@ -66,6 +66,7 @@ import { buildActivityFeedItems } from "./activity-feed";
 import { ActivityFeedModal } from "./components/ActivityFeedModal";
 import { ArtifactViewerModal } from "./components/ArtifactViewerModal";
 import { OwnerProfileModal, ownerProfileToForm, type OwnerProfileForm } from "./components/OwnerProfileModal";
+import { DEFAULT_WATCHED_APPS } from "./components/AgentTools";
 import { SavedMessagesModal } from "./components/SavedMessagesModal";
 import { NeedsYouModal } from "./components/NeedsYouModal";
 import { DecisionStore, DecisionStoreContext, deriveNeedsYou } from "./decisions";
@@ -5326,6 +5327,10 @@ function App() {
             startEditAgent(agent);
           }}
           onRestart={restartAgent}
+          watchedApps={data.owner_profile.watched_apps ?? DEFAULT_WATCHED_APPS}
+          onSaveWatchedApps={async (apps) => {
+            await mutate("update_watched_apps", { apps });
+          }}
           onStopReminder={stopReminder}
           channels={data.channels}
           messages={data.messages}

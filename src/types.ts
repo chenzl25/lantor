@@ -43,10 +43,19 @@ export type AgentToolInventory<T> = {
   observed_at: string | null;
   items: T[];
 };
+export type AgentApp = {
+  name: string;
+  status: "connected" | "login_required" | "failed" | "pending" | "disabled" | "needs_setup" | "unknown";
+  source: "chatgpt_app" | "claude_connector" | "mcp_server";
+  tool_count: number;
+  plugin: string | null;
+  detail: string | null;
+};
 export type AgentTools = {
   agent_id: string;
   runtime: string;
   checked_at: string;
+  apps: AgentToolInventory<AgentApp>;
   mcp: AgentToolInventory<{
     name: string;
     status: string;
@@ -54,7 +63,7 @@ export type AgentTools = {
     tools_error: string | null;
     tools: AgentToolSummary[];
   }>;
-  plugins: AgentToolInventory<AgentToolSummary & { builtin: boolean; enabled: boolean }>;
+  plugins: AgentToolInventory<AgentToolSummary & { builtin: boolean; enabled: boolean; apps: string[] }>;
   skills: AgentToolInventory<AgentToolSummary>;
 };
 
@@ -86,6 +95,8 @@ export type OwnerProfile = {
   display_name: string;
   avatar: string;
   description: string;
+  /** Apps the agent Tools section always lists; missing from older payloads. */
+  watched_apps?: string[];
 };
 
 export type Channel = {
