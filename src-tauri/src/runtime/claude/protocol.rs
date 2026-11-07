@@ -158,9 +158,18 @@ pub(super) fn claude_result_text(value: &Value) -> Option<String> {
 }
 
 /// The CLI marks a provider reply that failed because its login is no longer
-/// valid (expired OAuth session, revoked token) with this error code.
-pub(super) fn claude_auth_failure(value: &Value) -> bool {
-    value.get("error").and_then(Value::as_str) == Some("authentication_failed")
+/// valid (expired OAuth session, revoked token) with this error code. Returns
+/// whether the latest reply of the turn says so, or `None` for lines that say
+/// nothing about it. Its `api_retry` events carry the same code, but the CLI is
+/// still retrying then: a 401 from a network that is going down can pass, and
+/// the turn may end for another reason, or not fail at all.
+pub(super) fn claude_auth_failure(value: &Value) -> Option<bool> {
+    let auth_failed = value.get("error").and_then(Value::as_str) == Some("authentication_failed");
+    match value.get("type").and_then(Value::as_str) {
+        Some("assistant") => Some(auth_failed),
+        Some("result") if auth_failed => Some(true),
+        _ => None,
+    }
 }
 
 pub(super) fn claude_result_error(value: &Value) -> Option<String> {

@@ -184,7 +184,7 @@ struct ClaudeActiveTurn {
     text: ClaudeTextState,
     /// Lantor asked the CLI to interrupt this turn, so its error result is a stop.
     interrupt_requested: bool,
-    /// The CLI reported that its login is no longer valid during this turn.
+    /// The turn's latest provider reply said the login is no longer valid.
     auth_required: bool,
 }
 
@@ -828,9 +828,9 @@ async fn handle_claude_warm_stdout_line(
     line: &str,
 ) -> CommandResult<()> {
     let parsed = serde_json::from_str::<Value>(line).ok();
-    if parsed.as_ref().is_some_and(claude_auth_failure) {
+    if let Some(auth_failed) = parsed.as_ref().and_then(claude_auth_failure) {
         if let Some(active) = runtime.state.lock().await.active.as_mut() {
-            active.auth_required = true;
+            active.auth_required = auth_failed;
         }
     }
     let applied = apply_claude_warm_stdout_line(pool, agent_id, runtime, line).await;
@@ -1342,6 +1342,115 @@ mod tests {
         .await
         .map_err(|err| err.to_string())?;
         Ok((agent_id, channel_id, work_item_id, run_id, stream_key))
+    }
+
+    /// Feeds `lines` through the stdout handler and reports whether the turn
+    /// ended as a login failure: request requeued and Claude paused with a card.
+    async fn replay_lines_and_read_login_state(
+        pool: &sqlx::SqlitePool,
+        handle: &str,
+        lines: &[&str],
+    ) -> Result<(String, Option<String>, i64), String> {
+        let (agent_id, channel_id, work_item_id, run_id, stream_key) =
+            insert_running_turn_fixture(pool, handle, "claude").await?;
+        let runtime =
+            test_runtime_with_active_turn(run_id, work_item_id, channel_id, stream_key).await?;
+        for line in lines {
+            super::handle_claude_warm_stdout_line(pool, agent_id, &runtime, line).await?;
+        }
+        assert!(runtime.state.lock().await.active.is_none());
+        let work_status: String =
+            sqlx::query_scalar("select status from agent_work_items where id = $1")
+                .bind(work_item_id)
+                .fetch_one(pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        let auth: Option<String> =
+            sqlx::query_scalar("select status from provider_auth_state where runtime = 'claude'")
+                .fetch_optional(pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        let cards: i64 = sqlx::query_scalar(
+            "select count(*) from decisions where status = 'open' and requester_agent_id is null",
+        )
+        .fetch_one(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        Ok((work_status, auth, cards))
+    }
+
+    const RETRY_401: &str = r#"{"type":"system","subtype":"api_retry","attempt":1,"max_retries":5,"retry_delay_ms":538,"error_status":401,"error":"authentication_failed","session_id":"s1","uuid":"u1"}"#;
+    const RETRY_UNKNOWN: &str = r#"{"type":"system","subtype":"api_retry","attempt":2,"max_retries":5,"retry_delay_ms":1243,"error_status":null,"error":"unknown","session_id":"s1","uuid":"u2"}"#;
+    const ASLEEP_REPLY: &str = r#"{"type":"assistant","message":{"id":"m1","model":"<synthetic>","role":"assistant","type":"message","content":[{"type":"text","text":"API Error: Connection lost while your computer was asleep"}]},"session_id":"s1","uuid":"u3","error":"server_error","is_api_error_message":true}"#;
+    const ASLEEP_RESULT: &str = r#"{"type":"result","subtype":"success","is_error":true,"api_error_status":null,"terminal_reason":"api_error","result":"API Error: Connection lost while your computer was asleep","session_id":"s1","uuid":"u4"}"#;
+    const LOGIN_REPLY: &str = r#"{"type":"assistant","message":{"id":"m2","model":"<synthetic>","role":"assistant","type":"message","content":[{"type":"text","text":"Failed to authenticate: OAuth session expired and could not be refreshed"}]},"session_id":"s1","uuid":"u5","error":"authentication_failed","is_api_error_message":true}"#;
+    const LOGIN_RESULT: &str = r#"{"type":"result","subtype":"success","is_error":true,"api_error_status":null,"terminal_reason":"api_error","result":"Failed to authenticate: OAuth session expired and could not be refreshed","session_id":"s1","uuid":"u6"}"#;
+
+    #[tokio::test]
+    async fn a_401_retry_followed_by_a_lost_connection_is_not_a_login_failure() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            // The lines of run ef50ed4e: the laptop slept through the turn.
+            let (work_status, auth, cards) = replay_lines_and_read_login_state(
+                &pool,
+                "claude-asleep-agent",
+                &[RETRY_401, RETRY_UNKNOWN, ASLEEP_REPLY, ASLEEP_RESULT],
+            )
+            .await?;
+            assert_eq!(auth, None, "a retry event must not pause Claude");
+            assert_eq!(cards, 0, "a retry event must not raise the login card");
+            assert_eq!(work_status, "failed");
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_401_retry_that_ends_in_a_real_login_failure_still_pauses_claude() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let (work_status, auth, cards) = replay_lines_and_read_login_state(
+                &pool,
+                "claude-real-login-agent",
+                &[RETRY_401, LOGIN_REPLY, LOGIN_RESULT],
+            )
+            .await?;
+            assert_eq!(auth.as_deref(), Some("needs_login"));
+            assert_eq!(cards, 1);
+            assert_eq!(work_status, "queued");
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn only_the_last_provider_error_of_a_turn_decides_a_login_failure() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let (work_status, auth, cards) = replay_lines_and_read_login_state(
+                &pool,
+                "claude-recovered-login-agent",
+                &[LOGIN_REPLY, ASLEEP_REPLY, ASLEEP_RESULT],
+            )
+            .await?;
+            assert_eq!(auth, None);
+            assert_eq!(cards, 0);
+            assert_eq!(work_status, "failed");
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        result.unwrap();
     }
 
     #[tokio::test]
