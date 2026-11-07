@@ -97,6 +97,29 @@ pub(super) fn codex_auth_failure(value: &Value) -> bool {
     .any(|pointer| value.pointer(pointer).and_then(Value::as_str) == Some("unauthorized"))
 }
 
+/// Whether an `error` notification says the connection to the provider failed.
+/// The app-server tags most of these; a stream that goes idle arrives as
+/// `other`, so its message is checked too.
+pub(super) fn codex_network_failure(value: &Value) -> bool {
+    const NETWORK_ERROR_INFO: [&str; 3] = [
+        "httpConnectionFailed",
+        "responseStreamConnectionFailed",
+        "responseStreamDisconnected",
+    ];
+    let tagged = value
+        .pointer("/params/error/codexErrorInfo")
+        .and_then(Value::as_object)
+        .is_some_and(|info| NETWORK_ERROR_INFO.iter().any(|key| info.contains_key(*key)));
+    tagged
+        || value
+            .pointer("/params/error/message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| {
+                message.starts_with("stream disconnected")
+                    || message.contains("error sending request")
+            })
+}
+
 pub(super) fn codex_thread_id_from_response(value: &Value) -> Option<String> {
     value
         .pointer("/result/thread/id")

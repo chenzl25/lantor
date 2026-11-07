@@ -86,6 +86,24 @@ has one function per transition:
   writes only while the work item still has the status it read; a request
   whose turn started or finished in between is read again.
 
+A turn that lost its connection to the provider ends like a failed turn, except
+that its request goes back to the queue (`end_turn` with a `network_retry`) and
+its partial reply is deleted (`runtime/network_retry.rs`):
+
+- The next turn resumes the session, and its prompt says what happened: work
+  already done stands, and the reply must be written again.
+- Delays after each failure grow from 1 to 15 minutes. A new message on the same
+  surface merges into the request and starts it at once.
+- Only failures on a Mac that is really awake count, up to 5 retries. A retry
+  waits for a full wake (`pmset -g systemstate`), and a failure costs nothing if
+  the run slept through it (its wall clock outran its monotonic clock) or it
+  ended in a dark wake. With the lid closed the Mac only has dark wakes, a few
+  seconds about every 17 minutes.
+- The failure after the last retry fails the request as usual and raises a card;
+  answering it runs the request again.
+
+Usage limits, other API errors, cancels and a process that died are not retried.
+
 Each function updates the rows and enqueues their UI events in one
 transaction, or in the caller's transaction for the `_in_tx` variants. The
 caller picks the outcome and does what follows the commit: task status,

@@ -97,18 +97,18 @@ pub(crate) fn keep_first_error<T>(
     }
 }
 
-/// Work-item status after a turn ends. A turn that failed because the
-/// provider login expired never reached the model, so its request goes back to
-/// the queue instead of failing.
+/// Work-item status after a turn ends. A request whose turn failed for a
+/// reason that passes (an expired login, a lost connection) goes back to the
+/// queue instead of failing.
 pub(crate) fn finished_work_status(
     success: bool,
     was_cancelled: bool,
-    auth_required: bool,
+    requeue: bool,
     current_status: Option<&str>,
 ) -> &'static str {
     if was_cancelled {
         "cancelled"
-    } else if auth_required {
+    } else if requeue {
         "queued"
     } else if success && current_status == Some("silent") {
         "silent"

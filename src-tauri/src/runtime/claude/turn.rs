@@ -12,6 +12,7 @@ use crate::provider_auth::{record_provider_auth_failure, record_provider_turn_su
 use crate::runtime::warm::load_work_item_status;
 use crate::runtime::{
     lifecycle::{end_turn, TurnEnd},
+    network_retry::{plan_network_retry, raise_network_failure_card, NetworkRetryPlan},
     process::{terminate_process_group, upsert_runtime_thread_id},
     streaming::{
         consume_streaming_agent_control_lines, delete_streaming_agent_message_by_key,
@@ -74,16 +75,38 @@ pub(super) async fn finish_warm_claude_active_turn(
     let was_cancelled =
         active.interrupt_requested || current_work_status.as_deref() == Some("cancelling");
     let auth_required = !success && !was_cancelled && active.auth_required;
+    let network_plan = if !success && !was_cancelled && !auth_required && active.network_failure {
+        keep_first_error(
+            &mut first_error,
+            plan_network_retry(
+                pool,
+                active.work_item_id,
+                current_work_status.as_deref(),
+                active.run_id,
+                active.started_at.elapsed(),
+            )
+            .await,
+        )
+        .flatten()
+    } else {
+        None
+    };
+    let network_retry = network_plan.as_ref().and_then(NetworkRetryPlan::retry);
+    let requeued = auth_required || network_retry.is_some();
 
-    if auth_required {
-        // The CLI's "Failed to authenticate" text is not an answer; the
-        // request runs again once the login works.
+    if requeued {
+        // The CLI's error text is not an answer, and neither is the part of a
+        // reply written before it; the request runs again and answers then.
         keep_first_error(
             &mut first_error,
             delete_streaming_agent_message_by_key(
                 pool,
                 &active.stream_key,
-                "provider_auth_required",
+                if auth_required {
+                    "provider_auth_required"
+                } else {
+                    "network_retry"
+                },
             )
             .await,
         );
@@ -128,6 +151,12 @@ pub(super) async fn finish_warm_claude_active_turn(
             "claude warm turn needs login; request requeued: {}\n",
             error.as_deref().unwrap_or("authentication failed")
         )
+    } else if let Some(retry) = network_retry {
+        format!(
+            "claude warm turn lost its connection; request requeued, retry in {} s: {}\n",
+            retry.delay_secs,
+            error.as_deref().unwrap_or("connection failed")
+        )
     } else {
         error
             .as_ref()
@@ -152,7 +181,7 @@ pub(super) async fn finish_warm_claude_active_turn(
             .flatten();
             Some((
                 work_item_id,
-                finished_work_status(success, was_cancelled, auth_required, current.as_deref()),
+                finished_work_status(success, was_cancelled, requeued, current.as_deref()),
             ))
         }
         None => None,
@@ -171,6 +200,7 @@ pub(super) async fn finish_warm_claude_active_turn(
                 log_line: &log_line,
                 run_reason: "claude_turn_finished",
                 work: final_work_status,
+                network_retry,
             },
         )
         .await,
@@ -207,6 +237,8 @@ pub(super) async fn finish_warm_claude_active_turn(
                 "dispatch",
                 if auth_required {
                     "Request requeued until login works"
+                } else if network_retry.is_some() {
+                    "Request requeued after a lost connection"
                 } else {
                     work_status_title(work_status)
                 },
@@ -246,6 +278,8 @@ pub(super) async fn finish_warm_claude_active_turn(
             outcome.activity_kind,
             if auth_required {
                 "Login required"
+            } else if network_retry.is_some() {
+                "Connection lost"
             } else {
                 outcome.activity_title
             },
@@ -272,6 +306,20 @@ pub(super) async fn finish_warm_claude_active_turn(
         keep_first_error(
             &mut first_error,
             record_provider_turn_success(pool, "claude", active.run_id).await,
+        );
+    }
+    if let (Some(NetworkRetryPlan::GiveUp { failures }), Some(work_item_id)) =
+        (network_plan, active.work_item_id)
+    {
+        keep_first_error(
+            &mut first_error,
+            raise_network_failure_card(
+                pool,
+                work_item_id,
+                failures,
+                error.as_deref().unwrap_or_default(),
+            )
+            .await,
         );
     }
     keep_first_error(

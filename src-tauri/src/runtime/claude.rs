@@ -61,14 +61,16 @@ use text::ClaudeTextState;
 #[cfg(test)]
 mod interrupt_tests;
 #[cfg(test)]
+mod network_retry_tests;
+#[cfg(test)]
 mod recovery_tests;
 #[cfg(test)]
 mod steer_tests;
 
 use protocol::{
     claude_auth_failure, claude_context_tokens, claude_main_tool_use_started,
-    claude_message_text_blocks, claude_replayed_input_uuid, claude_result_error,
-    claude_result_text, claude_resume_session_missing, claude_session_id,
+    claude_message_text_blocks, claude_network_failure, claude_replayed_input_uuid,
+    claude_result_error, claude_result_text, claude_resume_session_missing, claude_session_id,
     claude_stream_event_activity, claude_stream_key, claude_streaming_command_text,
     claude_surface_boundary_marker, claude_text_delta, claude_user_input, claude_write_input,
     CLAUDE_DISABLE_BACKGROUND_TASKS_ENV, CLAUDE_DISABLE_CRON_ENV, CLAUDE_DISALLOWED_TOOLS,
@@ -186,6 +188,8 @@ struct ClaudeActiveTurn {
     interrupt_requested: bool,
     /// The turn's latest provider reply said the login is no longer valid.
     auth_required: bool,
+    /// The turn's result says the connection to the API failed.
+    network_failure: bool,
 }
 
 /// Reconcile complete provider text before finalization flushes the control gate.
@@ -711,6 +715,7 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
                 text: ClaudeTextState::default(),
                 interrupt_requested: false,
                 auth_required: false,
+                network_failure: false,
             });
             Ok(())
         }
@@ -831,6 +836,11 @@ async fn handle_claude_warm_stdout_line(
     if let Some(auth_failed) = parsed.as_ref().and_then(claude_auth_failure) {
         if let Some(active) = runtime.state.lock().await.active.as_mut() {
             active.auth_required = auth_failed;
+        }
+    }
+    if parsed.as_ref().is_some_and(claude_network_failure) {
+        if let Some(active) = runtime.state.lock().await.active.as_mut() {
+            active.network_failure = true;
         }
     }
     let applied = apply_claude_warm_stdout_line(pool, agent_id, runtime, line).await;
@@ -1139,6 +1149,7 @@ mod tests {
                     text: ClaudeTextState::default(),
                     interrupt_requested: false,
                     auth_required: false,
+                    network_failure: false,
                 }),
                 session_id: Some("test-claude-session".to_owned()),
                 context_tokens: 0,
@@ -1401,7 +1412,10 @@ mod tests {
             .await?;
             assert_eq!(auth, None, "a retry event must not pause Claude");
             assert_eq!(cards, 0, "a retry event must not raise the login card");
-            assert_eq!(work_status, "failed");
+            assert_eq!(
+                work_status, "queued",
+                "it waits as a lost connection instead"
+            );
             Ok(())
         }
         .await;
@@ -1445,7 +1459,7 @@ mod tests {
             .await?;
             assert_eq!(auth, None);
             assert_eq!(cards, 0);
-            assert_eq!(work_status, "failed");
+            assert_eq!(work_status, "queued");
             Ok(())
         }
         .await;

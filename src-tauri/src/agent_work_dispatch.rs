@@ -702,7 +702,8 @@ pub(crate) async fn retry_agent_work_in_pool(
     let row = sqlx::query(
         r#"
         select agent_id, channel_id, thread_root_id, source_message_id, inbox_item_id, task_id,
-               source_kind, title, context, context_max_seq, freshness_generation, status
+               source_kind, title, context, context_max_seq, freshness_generation,
+               network_requeued_at, status
         from agent_work_items
         where id = $1
         "#,
@@ -726,9 +727,10 @@ pub(crate) async fn retry_agent_work_in_pool(
         r#"
         insert into agent_work_items (
             agent_id, channel_id, thread_root_id, source_message_id, inbox_item_id, task_id,
-            source_kind, title, context, context_max_seq, freshness_generation, status
+            source_kind, title, context, context_max_seq, freshness_generation,
+            network_requeued_at, status
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'queued')
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'queued')
         returning id
         "#,
     )
@@ -743,6 +745,8 @@ pub(crate) async fn retry_agent_work_in_pool(
     .bind(&context)
     .bind(row.get::<i64, _>("context_max_seq"))
     .bind(row.get::<i64, _>("freshness_generation"))
+    // A request that lost its connection continues instead of starting over.
+    .bind(row.get::<Option<String>, _>("network_requeued_at"))
     .fetch_one(&mut *transaction)
     .await
     .map_err(to_string)?;

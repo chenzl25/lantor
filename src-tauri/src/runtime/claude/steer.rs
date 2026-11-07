@@ -359,6 +359,7 @@ async fn adopt_follow_up_turn(
                 text: ClaudeTextState::default(),
                 interrupt_requested: false,
                 auth_required: false,
+                network_failure: false,
             });
         } else {
             failure = Some("Claude warm runtime changed before the follow-up turn".to_owned());

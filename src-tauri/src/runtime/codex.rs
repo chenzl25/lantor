@@ -63,8 +63,8 @@ use protocol::{
     apply_codex_thread_options, apply_codex_turn_options, codex_auth_failure,
     codex_context_rotate_env, codex_context_rotate_input_tokens, codex_error_notification_detail,
     codex_item_id, codex_item_started_activity, codex_item_type, codex_model_value,
-    codex_pending_stream_key, codex_request_error, codex_stream_key, codex_thread_id_from_response,
-    codex_tool_completion_activity, codex_turn_id_from_value,
+    codex_network_failure, codex_pending_stream_key, codex_request_error, codex_stream_key,
+    codex_thread_id_from_response, codex_tool_completion_activity, codex_turn_id_from_value,
     codex_unattended_server_request_response, codex_write_json, effective_codex_cwd,
 };
 use reaper::codex_warm_idle_reaper;
@@ -203,6 +203,8 @@ struct CodexActiveTurn {
     interrupt_request_id: Option<i64>,
     /// The app-server reported that its login is no longer valid.
     auth_required: bool,
+    /// The app-server gave up because the connection to the provider failed.
+    network_failure: bool,
 }
 
 struct CodexSteerRequest {
@@ -1113,6 +1115,7 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
                 steer_disabled: false,
                 interrupt_request_id: None,
                 auth_required: false,
+                network_failure: false,
             });
             Ok(request_id)
         }
@@ -1582,6 +1585,10 @@ async fn handle_codex_warm_stdout_line(
             if let Some(detail) = codex_error_notification_detail(&value) {
                 if codex_auth_failure(&value) {
                     mark_codex_turn_auth_required(runtime).await;
+                } else if codex_network_failure(&value) {
+                    if let Some(active) = runtime.state.lock().await.active.as_mut() {
+                        active.network_failure = true;
+                    }
                 }
                 finish_warm_codex_active_turn(pool, agent_id, runtime, false, Some(detail)).await?;
             } else {
@@ -1671,6 +1678,7 @@ mod tests {
                     steer_disabled: false,
                     interrupt_request_id: None,
                     auth_required: false,
+                    network_failure: false,
                 }),
                 next_request_id: 2,
                 pending_rate_limit_request_id: None,
@@ -2072,6 +2080,7 @@ mod tests {
             steer_disabled: false,
             interrupt_request_id: None,
             auth_required: false,
+            network_failure: false,
         };
 
         let first = track_codex_agent_message_stream(&mut active, "item-1");
@@ -2205,6 +2214,98 @@ mod tests {
                     .await
                     .map_err(|err| err.to_string())?;
             assert_eq!(auth, None);
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_lost_codex_connection_requeues_the_request_and_other_errors_do_not() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            for (handle, lines, expected) in [
+                (
+                    "codex-stream-idle",
+                    vec![
+                        r#"{"method":"error","params":{"error":{"message":"Reconnecting... 5/5","codexErrorInfo":{"responseStreamDisconnected":{"httpStatusCode":null}}},"willRetry":true}}"#,
+                        r#"{"method":"error","params":{"error":{"message":"stream disconnected before completion: idle timeout waiting for SSE","codexErrorInfo":"other"},"willRetry":false}}"#,
+                    ],
+                    "queued",
+                ),
+                (
+                    "codex-stream-tagged",
+                    vec![
+                        r#"{"method":"error","params":{"error":{"message":"gave up","codexErrorInfo":{"responseStreamConnectionFailed":{"httpStatusCode":null}}},"willRetry":false}}"#,
+                    ],
+                    "queued",
+                ),
+                (
+                    "codex-at-capacity",
+                    vec![
+                        r#"{"method":"error","params":{"error":{"message":"Selected model is at capacity. Please try a different model.","codexErrorInfo":"serverOverloaded"},"willRetry":false}}"#,
+                    ],
+                    "failed",
+                ),
+                (
+                    "codex-routing",
+                    vec![
+                        r#"{"method":"error","params":{"error":{"message":"workspace routing discovery failed","codexErrorInfo":"other"},"willRetry":false}}"#,
+                    ],
+                    "failed",
+                ),
+            ] {
+                let agent_id = insert_test_agent(&pool, handle).await?;
+                let channel_id = insert_test_channel(&pool, handle).await?;
+                let work_item_id: uuid::Uuid = sqlx::query_scalar(
+                    r#"
+                    insert into agent_work_items (agent_id, channel_id, title, status)
+                    values ($1, $2, 'review', 'running')
+                    returning id
+                    "#,
+                )
+                .bind(agent_id)
+                .bind(channel_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+                let run_id: uuid::Uuid = sqlx::query_scalar(
+                    r#"
+                    insert into agent_runs (agent_id, work_item_id, command, status)
+                    values ($1, $2, 'codex app-server', 'running')
+                    returning id
+                    "#,
+                )
+                .bind(agent_id)
+                .bind(work_item_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+                let stream_key = format!("{run_id}:warm-codex");
+                let runtime =
+                    test_runtime_with_active_turn(run_id, work_item_id, channel_id, stream_key)
+                        .await?;
+                for line in lines {
+                    super::handle_codex_warm_stdout_line(&pool, agent_id, &runtime, line).await?;
+                }
+
+                let row = sqlx::query(
+                    "select status, network_failures from agent_work_items where id = $1",
+                )
+                .bind(work_item_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+                assert_eq!(row.get::<String, _>("status"), expected, "{handle}");
+                assert_eq!(
+                    row.get::<i64, _>("network_failures"),
+                    i64::from(expected == "queued"),
+                    "{handle}"
+                );
+            }
             Ok(())
         }
         .await;

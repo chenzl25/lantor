@@ -172,6 +172,40 @@ pub(super) fn claude_auth_failure(value: &Value) -> Option<bool> {
     }
 }
 
+/// Whether a turn's result says the CLI gave up because the connection to the
+/// API failed. An API that answered with a status (usage limit, overload, a
+/// rejected request) is not a network failure, nor is any other error text.
+pub(super) fn claude_network_failure(value: &Value) -> bool {
+    const NETWORK_ERRORS: [&str; 13] = [
+        "connection dropped",
+        "connection lost",
+        "connection error",
+        "can't reach the api server",
+        "no response from api",
+        "request timed out",
+        "econnreset",
+        "econnrefused",
+        "enotfound",
+        "etimedout",
+        "eai_again",
+        "epipe",
+        "socket hang up",
+    ];
+    if value.get("type").and_then(Value::as_str) != Some("result")
+        || value.get("is_error").and_then(Value::as_bool) != Some(true)
+        || value
+            .get("api_error_status")
+            .is_some_and(|status| !status.is_null())
+    {
+        return false;
+    }
+    let Some(text) = value.get("result").and_then(Value::as_str) else {
+        return false;
+    };
+    let text = text.to_lowercase();
+    text.starts_with("api error") && NETWORK_ERRORS.iter().any(|error| text.contains(error))
+}
+
 pub(super) fn claude_result_error(value: &Value) -> Option<String> {
     if value.get("type").and_then(Value::as_str) != Some("result") {
         return None;
@@ -405,6 +439,59 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+
+    #[test]
+    fn network_failures_are_api_errors_about_the_connection() {
+        let result = |text: &str, status: Value| {
+            json!({
+                "type": "result",
+                "is_error": true,
+                "api_error_status": status,
+                "result": text,
+            })
+        };
+        // Every text the recorded run logs ended with.
+        for text in [
+            "API Error: Connection dropped (ECONNRESET)",
+            "API Error: Connection dropped (ECONNRESET). Check the proxy set in https_proxy, then try again.",
+            "API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)",
+            "API Error: No response from API (waited 3m, then 10m on the retry). If a proxy or gateway on your network holds responses, set a shorter timeout.",
+            "API Error: Connection lost while your computer was asleep",
+        ] {
+            assert!(claude_network_failure(&result(text, Value::Null)), "{text}");
+        }
+        for (text, status) in [
+            (
+                "You've hit your session limit · resets 11pm (Asia/Singapore)",
+                json!(429),
+            ),
+            (
+                "Failed to authenticate. API Error: 403 Request not allowed",
+                json!(403),
+            ),
+            (
+                "Failed to authenticate: OAuth session expired and could not be refreshed",
+                Value::Null,
+            ),
+            ("API Error: Connection dropped", json!(502)),
+            ("API Error: Prompt is too long", Value::Null),
+            ("ECONNRESET is what the logs say", Value::Null),
+        ] {
+            assert!(!claude_network_failure(&result(text, status)), "{text}");
+        }
+        let finished = json!({
+            "type": "result",
+            "is_error": false,
+            "result": "API Error: Connection dropped (ECONNRESET)",
+        });
+        assert!(!claude_network_failure(&finished));
+        let retrying = json!({
+            "type": "system",
+            "subtype": "api_retry",
+            "error": "unknown",
+        });
+        assert!(!claude_network_failure(&retrying));
+    }
 
     #[test]
     fn claude_streaming_command_does_not_use_print_mode_flag() {
