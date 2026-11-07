@@ -1,5 +1,6 @@
 import type {
   Agent,
+  AgentTools,
   AgentActivity,
   AgentWorkItem,
   AgentWorkspaceFile,
@@ -56,6 +57,10 @@ type AgentDraftRequest = {
 };
 
 export type ApiContract = {
+  load_agent_tools: {
+    args: { agentId: string; refresh?: boolean };
+    result: AgentTools;
+  };
   load_agent_detail: {
     args: { agentId: string };
     result: { agent: Agent; agent_activities: AgentActivity[]; agent_work_items: AgentWorkItem[] };
@@ -453,6 +458,7 @@ const API_COMMAND_NAMES = {
   artifact_read: true,
   open_dm_with_agent: true,
   agent_workspace_list: true,
+  load_agent_tools: true,
   agent_workspace_read_file: true,
 } as const satisfies Record<keyof ApiContract, true>;
 

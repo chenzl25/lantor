@@ -36,6 +36,28 @@ export type AgentSubscriptionStatus = {
   observed_at: string;
 };
 
+export type AgentToolSummary = { name: string; description: string };
+export type AgentToolInventory<T> = {
+  state: "ready" | "unavailable" | "unconfirmed" | "not_run" | "unsupported";
+  message: string;
+  observed_at: string | null;
+  items: T[];
+};
+export type AgentTools = {
+  agent_id: string;
+  runtime: string;
+  checked_at: string;
+  mcp: AgentToolInventory<{
+    name: string;
+    status: string;
+    auth_status: string | null;
+    tools_error: string | null;
+    tools: AgentToolSummary[];
+  }>;
+  plugins: AgentToolInventory<AgentToolSummary & { builtin: boolean; enabled: boolean }>;
+  skills: AgentToolInventory<AgentToolSummary>;
+};
+
 export type Agent = {
   id: string;
   handle: string;

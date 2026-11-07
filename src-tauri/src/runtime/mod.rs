@@ -6,6 +6,7 @@ pub(crate) mod process;
 pub(crate) mod streaming;
 pub(crate) mod supervisor;
 pub(crate) mod surface;
+pub(crate) mod tools;
 pub(crate) mod turn_outcome;
 pub(crate) mod warm;
 

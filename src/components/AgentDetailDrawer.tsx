@@ -21,6 +21,7 @@ import {
 } from "../types";
 import { AgentAvatar } from "./AgentAvatar";
 import { AgentSubscriptionUsage } from "./AgentSubscriptionUsage";
+import { AgentTools } from "./AgentTools";
 import { IconButton } from "./IconButton";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { Modal } from "./Modal";
@@ -653,6 +654,7 @@ export function AgentDetailDrawer({
             )}
           </div>
         </section>
+        <AgentTools key={agent.id} agent={agent} onRestart={onRestart} />
         {(isCodex || isClaude) && (
           <AgentSubscriptionUsage agent={agent} />
         )}

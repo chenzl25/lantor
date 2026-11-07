@@ -49,6 +49,53 @@ Stdout-command runtimes are still supported for custom scripts. They can print
 one line to stdout with the `LANTOR_EVENT ` prefix followed by JSON. Non-matching
 stdout and stderr are preserved only in the run log.
 
+## Tools in the agent profile
+
+Profile has a collapsed **Tools** section. Opening Profile does not start a
+provider process. Expanding Tools calls `load_agent_tools`; **Refresh** bypasses
+the three-minute, per-agent cache. Overlapping requests for the same agent share
+one discovery, including concurrent refreshes. Changes to its provider, model,
+working directory or environment invalidate the cached result.
+
+Discovery runs in the application's API process, outside the supervisor and
+warm runtime registry. It uses the agent's workspace and environment and shares
+the provider's CLI launch helpers. It never sends a user message, calls a model,
+creates a provider thread or writes a Lantor run. Each probe owns a separate
+process group, which is killed and reaped on completion or timeout; dropping a
+request also kills its probe group. Individual requests time out after 30 seconds,
+and a whole probe after 95 seconds. A failing section does not hide the others.
+Only tool names and descriptions reach the UI, without JSON schemas.
+
+- **Claude MCP:** stream-json control requests (`initialize`, then `mcp_status`)
+  read `mcpServers`. Empty and pending results are retried for about 30 seconds;
+  they become **Not confirmed yet**, not a connection failure. A failed CLI or
+  control request displays **Could not read status**.
+- **Claude plugins and skills:** no prompt means no `init` event. These lists
+  instead come from the latest archived run containing a `system/init` whose
+  `cwd` matches the workspace. Repository-specific runs are skipped. The UI
+  labels the snapshot's age and separates installed plugins from `@builtin`
+  plugins. With no workspace snapshot it says so; unreadable archives are shown
+  as unavailable. The `mcp_servers` field in that event is never used.
+- **Codex:** an initialized app-server lists `mcpServerStatus/list`, then
+  `plugin/list` (installed entries only), then `skills/list` with the workspace
+  and `forceReload`. The order matters because plugin discovery materializes
+  plugin skills in CLI 0.165.0. MCP pagination is followed. Without a thread,
+  `runtimeStatus` can be null: the UI shows **Unknown**, tool counts,
+  `authStatus` and `toolsError`, and does not infer an online state from a
+  non-empty catalog. Plugin APIs are experimental; incompatible replies display
+  unavailable rather than changing provider settings.
+
+MCP errors appear first. Each server's tool list opens separately and is
+searchable; plugins and skills are nested disclosures. **Restart** uses the
+existing agent restart action when changed logins or tools need to reach a warm
+process. There is no configuration editor, overview or alerting here.
+
+The synthetic browser suite is `npm run test:agent-tools`. The ignored
+`application::agent_tools::tests::real_cli_inventory` test can check real CLI
+discovery without starting a backend: explicitly set `LANTOR_TOOLS_TEST_DB`
+and `LANTOR_TOOLS_TEST_AGENT`. It opens that database read-only and reports
+counts, not transcripts or environment values.
+
 ## Run Lifecycle
 
 A run, the work item it carries, and its agent each have a status, and they

@@ -29,6 +29,7 @@ use uuid::Uuid;
 
 use crate::agent_workspace::{agent_workspace_list_in_pool, agent_workspace_read_file_in_pool};
 use crate::application::{
+    agent_tools::{self, AgentToolsRequest},
     agents::{self as agent_commands, CreateAgentRequest, OwnerProfileRequest, UpdateAgentRequest},
     artifacts::{self as artifact_commands, ArtifactReadRequest},
     bootstrap::{
@@ -388,6 +389,7 @@ fn api_router(state: Arc<WebState>) -> Router {
         .route("/api/artifact_read", post(api_artifact_read))
         .route("/api/open_dm_with_agent", post(api_open_dm_with_agent))
         .route("/api/agent_workspace_list", post(api_agent_workspace_list))
+        .route("/api/load_agent_tools", post(api_load_agent_tools))
         .route(
             "/api/agent_workspace_read_file",
             post(api_agent_workspace_read_file),
@@ -1140,6 +1142,16 @@ async fn api_agent_workspace_list(
     Json(request): Json<AgentWorkspaceRequest>,
 ) -> Result<impl IntoResponse, Response> {
     agent_workspace_list_in_pool(&state.pool, request.agent_id, &request.path)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_load_agent_tools(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<AgentToolsRequest>,
+) -> Result<impl IntoResponse, Response> {
+    agent_tools::load(&state.pool, request)
         .await
         .map(Json)
         .map_err(api_error)
