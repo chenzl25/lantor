@@ -83,7 +83,7 @@ const api = createServer(async (req, res) => {
     case "/api/load_activity_messages": result = messages.filter(m => !["owner", "system"].includes(m.sender_role) || [root.id, readRoot.id].includes(m.id)); break;
     case "/api/load_message": result = messages.find(m => m.id === args.messageId); break;
     case "/api/load_channel_messages": result = { messages: [], next_before_seq: null, has_more: false }; break;
-    case "/api/load_thread_messages": result = messages.filter(m => m.id === args.threadRootId || m.thread_root_id === args.threadRootId); break;
+    case "/api/load_thread_page": result = { messages: messages.filter(m => m.id === args.threadRootId || m.thread_root_id === args.threadRootId), next_before_seq: null, has_more: false }; break;
     case "/api/load_ui_state": result = Object.fromEntries(args.scopes.map(scope => [scope, state[scope]])); break;
     case "/api/replay_ui_events": result = { cursor, replayGap: false, events: [] }; break;
     case "/api/mark_inbox_items_read":

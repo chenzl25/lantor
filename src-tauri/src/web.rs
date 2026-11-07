@@ -246,6 +246,10 @@ fn api_router(state: Arc<WebState>) -> Router {
             post(api_load_thread_messages).layer(CompressionLayer::new()),
         )
         .route(
+            "/api/load_thread_page",
+            post(api_load_thread_page).layer(CompressionLayer::new()),
+        )
+        .route(
             "/api/replay_ui_events",
             post(api_replay_ui_events).layer(CompressionLayer::new()),
         )
@@ -1236,6 +1240,8 @@ struct ThreadMessagesRequest {
     thread_root_id: Uuid,
 }
 
+// The whole thread, for pages loaded before thread paging. A Home Screen app
+// keeps running its loaded page until the owner taps Refresh.
 async fn api_load_thread_messages(
     State(state): State<Arc<WebState>>,
     Json(request): Json<ThreadMessagesRequest>,
@@ -1244,6 +1250,33 @@ async fn api_load_thread_messages(
         .await
         .map(Json)
         .map_err(api_error)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadPageRequest {
+    thread_root_id: Uuid,
+    before_seq: Option<i64>,
+    since_seq: Option<i64>,
+    limit: Option<i64>,
+}
+
+async fn api_load_thread_page(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<ThreadPageRequest>,
+) -> Result<impl IntoResponse, Response> {
+    crate::message_store::load_thread_page(
+        &state.pool,
+        request.thread_root_id,
+        request.before_seq,
+        request.since_seq,
+        request
+            .limit
+            .unwrap_or(crate::message_store::THREAD_PAGE_REPLIES),
+    )
+    .await
+    .map(Json)
+    .map_err(api_error)
 }
 
 async fn api_load_ui_state(

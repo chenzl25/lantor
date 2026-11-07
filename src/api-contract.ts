@@ -8,6 +8,7 @@ import type {
   Artifact,
   Bootstrap,
   ChannelMessagePage,
+  ThreadMessagePage,
   ChannelWikiOverview,
   ChannelWikiSearchHit,
   Decision,
@@ -72,6 +73,10 @@ export type ApiContract = {
   load_thread_messages: {
     args: { threadRootId: string };
     result: Message[];
+  };
+  load_thread_page: {
+    args: { threadRootId: string; beforeSeq?: number; sinceSeq?: number; limit?: number };
+    result: ThreadMessagePage;
   };
   load_ui_state: {
     args: { scopes: UiStateScope[] };
@@ -408,6 +413,7 @@ const API_COMMAND_NAMES = {
   load_ui_state: true,
   load_agent_detail: true,
   load_thread_messages: true,
+  load_thread_page: true,
   replay_ui_events: true,
   check_runtime: true,
   report_client_crash: true,

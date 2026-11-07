@@ -163,6 +163,14 @@ pub(crate) struct ChannelMessagePage {
     pub(crate) thread_activities: Vec<ThreadActivity>,
 }
 
+/// A thread root and a contiguous run of its newest replies.
+#[derive(Debug, Serialize)]
+pub(crate) struct ThreadMessagePage {
+    pub(crate) messages: Vec<Message>,
+    pub(crate) next_before_seq: Option<i64>,
+    pub(crate) has_more: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct SavedMessage {
     pub(crate) id: Uuid,

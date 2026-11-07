@@ -160,6 +160,12 @@ export type ChannelMessageHistory = {
   has_more: boolean;
 };
 
+export type ThreadMessagePage = {
+  messages: Message[];
+  next_before_seq: number | null;
+  has_more: boolean;
+};
+
 export type ChannelMessagePage = {
   thread_activities?: ThreadActivity[];
   messages: Message[];

@@ -121,6 +121,9 @@ installed. Each suite has an npm script, for example:
 - `npm run test:composer-drafts` checks that unsent channel and thread text
   comes back after a reload, that sending clears it, and that two tabs keep
   each other's drafts (see [`web-access.md`](web-access.md#unsent-drafts)).
+- `npm run test:thread-pages` checks that a long thread opens with its newest
+  replies and loads earlier ones without moving the replies on screen (see
+  [`bootstrap-payload.md`](bootstrap-payload.md#thread-pages)).
 - `npm run test:ui-panels`, `test:dialogs`, `test:image-lightbox`,
   `test:attachment-sheet`, `test:activity`, `test:app-shell`, `test:streaming`,
   `test:web-sync`, `test:message-rows`, `test:message-state-races`,

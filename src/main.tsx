@@ -82,6 +82,7 @@ import { useWebOnline } from "./hooks/useWebOnline";
 import { useVisibleChannelRead } from "./hooks/useVisibleChannelRead";
 import { useVisibleThreadRead } from "./hooks/useVisibleThreadRead";
 import { loadComposerDrafts, useRememberedComposerDrafts, type ComposerDraftScope } from "./composer-drafts";
+import { THREAD_PAGE_REPLIES, mergeThreadReplyStart, repliesInLoadedRun, threadPageRequest, type ThreadReplyStart } from "./thread-pages";
 import type { ChannelReadLocation } from "./hooks/useChannelMessageScroll";
 import { UnreadBadge } from "./components/UnreadBadge";
 import { isProgressOnlyMessage, messageHasVisibleContent } from "./message-grouping";
@@ -117,6 +118,7 @@ import {
   Task,
   Decision,
   ThreadActivity,
+  ThreadMessagePage,
   ThreadReplySummary,
 } from "./types";
 import { agentRequestSourceLabel, buildPresetCommand, firstLines, formatTime, visibleChannelDescription } from "./ui-utils";
@@ -988,6 +990,11 @@ function App() {
   const messageSearchRequestRef = useRef(0);
   const wikiSearchRequestRef = useRef(0);
   const loadingThreadIdsRef = useRef(new Set<string>());
+  const [threadReplyStarts, setThreadReplyStarts] = useState<Record<string, ThreadReplyStart>>({});
+  const threadReplyStartsRef = useRef(threadReplyStarts);
+  const [loadingEarlierRepliesThreadId, setLoadingEarlierRepliesThreadId] = useState<string | null>(null);
+  const loadingEarlierRepliesThreadIdRef = useRef<string | null>(null);
+  const threadJumpRequestRef = useRef<string | null>(null);
   const agentDetailRequestsRef = useRef(new Map<string, Promise<ApiResult<"load_agent_detail">>>());
   const backendSubscriptionRef = useRef<EventSubscription | null>(null);
   const uiStateScopesRef = useRef(new Set<UiStateScope>());
@@ -1466,20 +1473,48 @@ function App() {
     });
   }, [selectedAgentId, data?.agents.find((agent) => agent.id === selectedAgentId)?.details_loaded]);
 
+  function applyThreadPage(threadId: string, page: ThreadMessagePage, baseline: ReadonlyMap<string, Message>) {
+    for (const message of page.messages) {
+      acknowledgeOptimisticMessage(message);
+      knownMessageIdsRef.current?.add(message.id);
+      loadedHistoricalMessageIdsRef.current.add(message.id);
+    }
+    threadReplyStartsRef.current = {
+      ...threadReplyStartsRef.current,
+      [threadId]: mergeThreadReplyStart(threadReplyStartsRef.current[threadId], page),
+    };
+    setThreadReplyStarts(threadReplyStartsRef.current);
+    setData((current) => current ? { ...current, messages: mergeMessages([], mergeHydratedRows(current.messages, page.messages, baseline)) } : current);
+  }
+
+  async function loadEarlierThreadReplies(threadId: string) {
+    const start = threadReplyStartsRef.current[threadId];
+    if (start === undefined || start === null || loadingEarlierRepliesThreadIdRef.current === threadId) return;
+    loadingEarlierRepliesThreadIdRef.current = threadId;
+    setLoadingEarlierRepliesThreadId(threadId);
+    const baseline = new Map(data?.messages.map((row) => [row.id, row]));
+    try {
+      const page = await apiInvoke("load_thread_page", { threadRootId: threadId, beforeSeq: start, limit: THREAD_PAGE_REPLIES });
+      applyThreadPage(threadId, page, baseline);
+    } catch (err) {
+      setAppError(errorMessage(err, "Couldn’t load earlier replies"));
+    } finally {
+      if (loadingEarlierRepliesThreadIdRef.current === threadId) {
+        loadingEarlierRepliesThreadIdRef.current = null;
+        setLoadingEarlierRepliesThreadId(null);
+      }
+    }
+  }
+
   useEffect(() => {
     if (!showThread || !activeThreadId) return;
     let cancelled = false;
     const threadId = activeThreadId;
     const baseline = new Map(data?.messages.map((row) => [row.id, row]));
     loadingThreadIdsRef.current.add(threadId);
-    void apiInvoke("load_thread_messages", { threadRootId: threadId }).then((messages) => {
+    void apiInvoke("load_thread_page", threadPageRequest(threadId, threadReplyStartsRef.current[threadId])).then((page) => {
       if (cancelled) return;
-      for (const message of messages) {
-        acknowledgeOptimisticMessage(message);
-        knownMessageIdsRef.current?.add(message.id);
-        loadedHistoricalMessageIdsRef.current.add(message.id);
-      }
-      setData((current) => current ? { ...current, messages: mergeMessages([], mergeHydratedRows(current.messages, messages, baseline)) } : current);
+      applyThreadPage(threadId, page, baseline);
       requestUiState(["thread_activities", "read_inbox_items", "dismissed_inbox_items"]);
     }).catch((err) => {
       if (!cancelled) setAppError(errorMessage(err, "Couldn’t load thread"));
@@ -3112,10 +3147,12 @@ function App() {
     dispatchNavigation({ type: "selectThread", threadId: null, channelId: activeChannelId });
   }, [activeChannelId, activeThreadId, data]);
 
+  const activeThreadReplyStart = activeRoot ? threadReplyStarts[activeRoot.id] : undefined;
   const replies = useMemo(() => {
     if (!activeRoot) return [];
-    return conversationMessages.filter((m) => m.thread_root_id === activeRoot.id);
-  }, [conversationMessages, activeRoot]);
+    const threadReplies = conversationMessages.filter((m) => m.thread_root_id === activeRoot.id);
+    return repliesInLoadedRun(threadReplies, activeThreadReplyStart, focusedMessageId);
+  }, [conversationMessages, activeRoot, activeThreadReplyStart, focusedMessageId]);
 
   const threadReplySummaries = useMemo(() => {
     const summaries = visibleMessages.reduce<Record<string, ThreadReplySummary>>((summaries, message) => {
@@ -3157,6 +3194,25 @@ function App() {
   const messagesById = useMemo(() => {
     return new Map(visibleMessages.map((message) => [message.id, message]));
   }, [visibleMessages]);
+
+  // A jump to a reply older than the loaded run loads every reply up to it.
+  useEffect(() => {
+    if (!showThread || !activeThreadId || !focusedMessageId) return;
+    if (activeThreadReplyStart === undefined || activeThreadReplyStart === null) return;
+    const target = messagesById.get(focusedMessageId);
+    if (!target || target.thread_root_id !== activeThreadId || !(target.seq > 0) || target.seq >= activeThreadReplyStart) return;
+    const threadId = activeThreadId;
+    const request = `${threadId}:${target.id}`;
+    if (threadJumpRequestRef.current === request) return;
+    threadJumpRequestRef.current = request;
+    const baseline = new Map(data?.messages.map((row) => [row.id, row]));
+    void apiInvoke("load_thread_page", { threadRootId: threadId, sinceSeq: target.seq, limit: THREAD_PAGE_REPLIES })
+      .then((page) => applyThreadPage(threadId, page, baseline))
+      .catch((err) => setAppError(errorMessage(err, "Couldn’t load thread")))
+      .finally(() => {
+        if (threadJumpRequestRef.current === request) threadJumpRequestRef.current = null;
+      });
+  }, [showThread, activeThreadId, focusedMessageId, activeThreadReplyStart, messagesById]);
 
   const threadActivitiesByRoot = useMemo(() => {
     return new Map((data?.thread_activities ?? []).map((activity) => [activity.thread_root_id, activity]));
@@ -5401,6 +5457,12 @@ function App() {
           activeRoot={activeRoot}
           activeTask={activeTask}
           replies={replies}
+          replyCount={typeof activeThreadReplyStart === "number" && activeThreadId
+            ? Math.max(threadActivitiesByRoot.get(activeThreadId)?.reply_count ?? 0, replies.length)
+            : replies.length}
+          hasEarlierReplies={typeof activeThreadReplyStart === "number"}
+          loadingEarlierReplies={Boolean(activeThreadId) && loadingEarlierRepliesThreadId === activeThreadId}
+          onLoadEarlierReplies={() => { if (activeThreadId) void loadEarlierThreadReplies(activeThreadId); }}
           unreadCount={activeThreadId ? threadUnreadCounts[activeThreadId] ?? 0 : 0}
           taskTitleDrafts={taskTitleDrafts}
           replyDraft={replyDraft}

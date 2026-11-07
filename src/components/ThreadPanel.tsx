@@ -88,6 +88,11 @@ type ThreadPanelProps = {
   activeRoot: Message | null;
   activeTask: Task | null;
   replies: Message[];
+  /** Replies in the whole thread, including earlier ones not loaded yet. */
+  replyCount: number;
+  hasEarlierReplies: boolean;
+  loadingEarlierReplies: boolean;
+  onLoadEarlierReplies: () => void;
   unreadCount: number;
   taskTitleDrafts: Record<string, string>;
   replyDraft: string;
@@ -179,6 +184,10 @@ export function ThreadPanel({
   activeRoot,
   activeTask,
   replies,
+  replyCount,
+  hasEarlierReplies,
+  loadingEarlierReplies,
+  onLoadEarlierReplies,
   taskTitleDrafts,
   replyDraft,
   replyAttachments,
@@ -225,6 +234,9 @@ export function ThreadPanel({
   const threadScrollStateByThreadRef = useRef<Map<string, ThreadScrollState>>(new Map());
   const threadScrollAnchorRef = useRef<ThreadScrollAnchor | null>(null);
   const focusedThreadMessageScrollKeyRef = useRef<string | null>(null);
+  const earlierRepliesRef = useRef<HTMLButtonElement | null>(null);
+  const earlierRepliesAnchorRef = useRef<ThreadScrollAnchor | null>(null);
+  const earlierRepliesScrollWriteRef = useRef<number | null>(null);
   const openLinkedAgentDetail = useEventCallback((handle: string) => {
     const agent = agents.find((candidate) => candidate.handle.toLowerCase() === handle.toLowerCase());
     if (agent) openAgentDetail(agent);
@@ -515,7 +527,47 @@ export function ThreadPanel({
       shouldShowBackToBottom = Boolean(activeRoot);
     }
     setShowBackToBottom((current) => current === shouldShowBackToBottom ? current : shouldShowBackToBottom);
-    rememberThreadScrollMetrics(element);
+    // The scroll that placed earlier replies keeps their anchor: the rows just
+    // inserted have not rendered at full height yet, so a new anchor among
+    // them would drift as they settle.
+    const placedEarlierReplies = earlierRepliesScrollWriteRef.current !== null
+      && Math.abs(element.scrollTop - earlierRepliesScrollWriteRef.current) <= 1;
+    earlierRepliesScrollWriteRef.current = null;
+    if (placedEarlierReplies) {
+      threadScrollMetricsRef.current = { scrollHeight: element.scrollHeight, scrollTop: element.scrollTop, clientHeight: element.clientHeight };
+    } else {
+      rememberThreadScrollMetrics(element);
+    }
+    if (loadingEarlierReplies) rememberEarlierRepliesAnchor(element);
+    else if (!shouldFollowThreadRef.current) loadEarlierRepliesWhenNear(element);
+  }
+
+  // Scrolling up loads the previous page while it is still a screen away.
+  // Rows render lazily, so the scroll height changes as the reader scrolls up;
+  // that is why this checks distance, not the scroll direction.
+  function loadEarlierRepliesWhenNear(element: HTMLDivElement) {
+    const marker = earlierRepliesRef.current;
+    if (!hasEarlierReplies || loadingEarlierReplies || !marker) return;
+    const viewportTop = element.getBoundingClientRect().top;
+    if (marker.getBoundingClientRect().bottom < viewportTop - element.clientHeight) return;
+    rememberEarlierRepliesAnchor(element);
+    onLoadEarlierReplies();
+  }
+
+  // Earlier replies go in above the oldest loaded reply. Keep that reply where
+  // it is: the general anchor can be the root, which stays above the insert.
+  function rememberEarlierRepliesAnchor(element: HTMLDivElement) {
+    const firstReply = replies[0] ? threadMessageRefs.current.get(replies[0].id) : null;
+    earlierRepliesAnchorRef.current = firstReply && replies[0]
+      ? { messageId: replies[0].id, topOffset: firstReply.getBoundingClientRect().top - element.getBoundingClientRect().top }
+      : null;
+  }
+
+  function showEarlierReplies() {
+    stopFollowingThread();
+    const element = threadScrollRef.current;
+    if (element) rememberEarlierRepliesAnchor(element);
+    onLoadEarlierReplies();
   }
 
   function handleThreadWheel(event: ReactWheelEvent<HTMLDivElement>) {
@@ -611,6 +663,22 @@ export function ThreadPanel({
     if (focusedMessageId) return;
     preserveThreadViewport();
   }, [activeRoot?.id, focusedMessageId, activeRoot?.updated_at, replies.length, lastReply?.id, lastReply?.updated_at, lastReply?.delivery_state]);
+
+  const firstReplyId = replies[0]?.id ?? null;
+  useLayoutEffect(() => {
+    const anchor = earlierRepliesAnchorRef.current;
+    if (!anchor || anchor.messageId === firstReplyId) return;
+    earlierRepliesAnchorRef.current = null;
+    if (shouldFollowThreadRef.current || !threadMessageRefs.current.has(anchor.messageId)) return;
+    threadScrollAnchorRef.current = anchor;
+    restoreThreadScrollAnchor(false);
+    earlierRepliesScrollWriteRef.current = threadScrollRef.current?.scrollTop ?? null;
+  }, [firstReplyId]);
+
+  useLayoutEffect(() => {
+    // A failed or empty load must not leave the anchor for a later change.
+    if (!loadingEarlierReplies) earlierRepliesAnchorRef.current = null;
+  }, [loadingEarlierReplies]);
 
   useLayoutEffect(() => {
     if (!focusedMessageId) {
@@ -947,7 +1015,7 @@ export function ThreadPanel({
             <div className="thread-replies-divider" aria-label="Beginning of replies">
               <span />
               <div>
-                                <small>{replies.length} {replies.length === 1 ? "reply" : "replies"}</small>
+                                <small>{replyCount} {replyCount === 1 ? "reply" : "replies"}</small>
               </div>
               <span />
             </div>
@@ -960,6 +1028,18 @@ export function ThreadPanel({
                 <h2>No thread open</h2>
                 <p>Tap a message to open its thread.</p>
               </div>
+            )}
+            {activeRoot && hasEarlierReplies && (
+              <button
+                ref={earlierRepliesRef}
+                type="button"
+                className="thread-earlier-replies"
+                onClick={showEarlierReplies}
+                disabled={loadingEarlierReplies}
+                aria-live="polite"
+              >
+                {loadingEarlierReplies ? "Loading…" : "Show earlier replies"}
+              </button>
             )}
             {replies.map((reply, index) => <MessageRow
               key={reply.id} data={rows[reply.id]} actions={rowActions} variant="reply"
