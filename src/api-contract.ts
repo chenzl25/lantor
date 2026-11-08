@@ -8,6 +8,7 @@ import type {
   Artifact,
   Bootstrap,
   ChannelMessagePage,
+  ThreadFindHit,
   ThreadMessagePage,
   ChannelWikiOverview,
   ChannelWikiSearchHit,
@@ -150,6 +151,14 @@ export type ApiContract = {
       limit: number;
     };
     result: Message[];
+  };
+  find_in_thread: {
+    args: {
+      threadRootId: string;
+      query: string;
+      beforeSeq?: number | null;
+    };
+    result: ThreadFindHit[];
   };
   load_message: {
     args: { messageId: string };
@@ -423,6 +432,7 @@ const API_COMMAND_NAMES = {
   load_channel_previews: true,
   load_activity_messages: true,
   search_messages: true,
+  find_in_thread: true,
   load_message: true,
   create_channel: true,
   update_channel: true,

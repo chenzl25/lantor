@@ -289,6 +289,8 @@ button,
   --state-danger: var(--status-danger-soft);
   --state-warning: var(--status-warning-soft);
   --state-success: var(--status-success-soft);
+  --state-find-match: rgba(255, 196, 0, 0.36);
+  --state-find-current: rgba(255, 140, 0, 0.6);
   --accent-soft: rgba(10, 132, 255, 0.1);
   --accent-soft-border: rgba(10, 132, 255, 0.22);
   --accent-soft-ink: #1262b3;
@@ -577,6 +579,8 @@ button,
   --state-danger: var(--status-danger-soft);
   --state-warning: var(--status-warning-soft);
   --state-success: var(--status-success-soft);
+  --state-find-match: rgba(255, 204, 64, 0.28);
+  --state-find-current: rgba(255, 150, 30, 0.62);
   --accent-soft: rgba(105, 170, 252, 0.14);
   --accent-soft-border: rgba(105, 170, 252, 0.28);
   --accent-soft-ink: var(--accent);
@@ -2141,7 +2145,8 @@ button,
      Chromium crashes if a press that moves focus out flips the row back to auto. */
   .message-render-boundary:has(.attachment-lightbox, .attachment-download-toast),
   .message-render-boundary[data-streaming="true"],
-  .message-render-boundary[data-jump-focused="true"] {
+  .message-render-boundary[data-jump-focused="true"],
+  .message-render-boundary[data-find-current="true"] {
     content-visibility: visible;
   }
 
@@ -7857,6 +7862,71 @@ body.resizing-column * {
   color: var(--muted);
   pointer-events: none;
 }
+/* Thread find (Cmd+F): a bar floating over the top of the thread. */
+.thread-find-bar {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: min(380px, calc(100% - 24px));
+  padding: 3px 3px 3px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--surface-floating);
+  box-shadow: var(--surface-shadow);
+}
+
+.thread-find-icon {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.thread-find-bar input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 32px;
+  padding: 0 6px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--type-size-body);
+}
+
+.thread-find-bar input::placeholder {
+  color: var(--ink-placeholder);
+}
+
+.thread-find-count {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: var(--type-size-caption);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.thread-find-bar .icon-button {
+  width: 30px;
+  height: 30px;
+}
+
+.thread-scroll-shell.finding .thread-progress-layer {
+  top: 52px;
+}
+
+::highlight(lantor-thread-find) {
+  background-color: var(--state-find-match);
+}
+
+::highlight(lantor-thread-find-current) {
+  background-color: var(--state-find-current);
+}
+
 .thread-back-to-bottom,
 .message-list-back-to-bottom {
   position: absolute;

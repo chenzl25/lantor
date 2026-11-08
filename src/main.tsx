@@ -995,6 +995,7 @@ function App() {
   const [loadingEarlierRepliesThreadId, setLoadingEarlierRepliesThreadId] = useState<string | null>(null);
   const loadingEarlierRepliesThreadIdRef = useRef<string | null>(null);
   const threadJumpRequestRef = useRef<string | null>(null);
+  const [threadFindRequest, setThreadFindRequest] = useState(0);
   const agentDetailRequestsRef = useRef(new Map<string, Promise<ApiResult<"load_agent_detail">>>());
   const backendSubscriptionRef = useRef<EventSubscription | null>(null);
   const uiStateScopesRef = useRef(new Set<UiStateScope>());
@@ -1485,6 +1486,18 @@ function App() {
     };
     setThreadReplyStarts(threadReplyStartsRef.current);
     setData((current) => current ? { ...current, messages: mergeMessages([], mergeHydratedRows(current.messages, page.messages, baseline)) } : current);
+  }
+
+  /** Loads every reply from `seq` on, so a find match in an earlier reply renders. */
+  async function loadThreadRepliesSince(threadId: string, seq: number) {
+    const baseline = new Map(data?.messages.map((row) => [row.id, row]));
+    try {
+      const page = await apiInvoke("load_thread_page", { threadRootId: threadId, sinceSeq: seq, limit: THREAD_PAGE_REPLIES });
+      applyThreadPage(threadId, page, baseline);
+    } catch (err) {
+      setAppError(errorMessage(err, "Couldn’t load thread"));
+      throw err;
+    }
   }
 
   async function loadEarlierThreadReplies(threadId: string) {
@@ -2666,6 +2679,15 @@ function App() {
       if (modifier && event.key.toLowerCase() === "k") {
         event.preventDefault();
         openSearchModal();
+        return;
+      }
+
+      // Cmd+F finds in the open thread; without one the browser keeps its own find.
+      if (modifier && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "f") {
+        const surface = appSurfaceStateRef.current;
+        if (!surface.showThread || surface.selectedAgentId || surface.activeModal || surface.blockingModalOpen || activeDialog()) return;
+        event.preventDefault();
+        setThreadFindRequest((current) => current + 1);
         return;
       }
 
@@ -5463,6 +5485,10 @@ function App() {
           hasEarlierReplies={typeof activeThreadReplyStart === "number"}
           loadingEarlierReplies={Boolean(activeThreadId) && loadingEarlierRepliesThreadId === activeThreadId}
           onLoadEarlierReplies={() => { if (activeThreadId) void loadEarlierThreadReplies(activeThreadId); }}
+          loadedReplyStart={activeThreadReplyStart}
+          onFindUnloadedReplies={(threadRootId, query, beforeSeq) => apiInvoke("find_in_thread", { threadRootId, query, beforeSeq })}
+          onLoadRepliesSince={loadThreadRepliesSince}
+          findRequest={threadFindRequest}
           unreadCount={activeThreadId ? threadUnreadCounts[activeThreadId] ?? 0 : 0}
           taskTitleDrafts={taskTitleDrafts}
           replyDraft={replyDraft}

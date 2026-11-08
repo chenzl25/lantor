@@ -211,3 +211,91 @@ async fn indexed_plan_uses_fts_rowids_and_channel_index() {
     assert!(!plan.contains("SCAN m "), "{plan}");
     drop_test_schema(pool, path).await;
 }
+
+#[tokio::test]
+async fn thread_find_counts_folded_matches_in_unloaded_replies() {
+    let (pool, schema) = test_pool().await.expect("isolated database");
+    let channel = insert_test_channel(&pool, "thread-find").await.unwrap();
+    let insert = |thread_root_id: Option<Uuid>, body: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Uuid>("insert into messages(channel_id,thread_root_id,sender_name,sender_role,body) values($1,$2,'owner','owner',$3) returning id")
+                .bind(channel).bind(thread_root_id).bind(body).fetch_one(&pool).await.unwrap()
+        }
+    };
+    let root = insert(None, "Root mentions RetryBudget").await;
+    let other = insert(None, "other root").await;
+    let code = insert(
+        Some(root),
+        "```rust\nlet retry_budget = RetryBudget::new();\n```\nretrybudget again",
+    )
+    .await;
+    insert(Some(root), "nothing to see").await;
+    let cjk = insert(Some(root), "重试预算 RETRY\nBUDGET 重试预算").await;
+    let overlap = insert(Some(root), "aaaa").await;
+    insert(Some(other), "RetryBudget in another thread").await;
+    let newest = insert(Some(root), "RetryBudget in the loaded page").await;
+    let seq = |id: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>("select seq from messages where id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let hits = |query: &'static str, before: Option<i64>| {
+        let pool = pool.clone();
+        async move {
+            super::find_in_thread(&pool, root, query, before)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|hit| (hit.message_id, hit.seq, hit.matches))
+                .collect::<Vec<_>>()
+        }
+    };
+
+    // Case folds and the root, other threads and loaded replies stay out.
+    let newest_seq = seq(newest).await;
+    assert_eq!(
+        hits("retrybudget", Some(newest_seq)).await,
+        vec![(code, seq(code).await, 2)]
+    );
+    assert_eq!(hits("retrybudget", None).await.len(), 2);
+    // A line break matches a space, and non-ASCII text matches as typed.
+    assert_eq!(
+        hits("retry budget", Some(newest_seq)).await,
+        vec![(cjk, seq(cjk).await, 1)]
+    );
+    assert_eq!(hits("重试预算", None).await, vec![(cjk, seq(cjk).await, 2)]);
+    // Matches do not overlap, as in the client.
+    assert_eq!(
+        hits("aa", None).await,
+        vec![(overlap, seq(overlap).await, 2)]
+    );
+    assert!(hits("   ", None).await.is_empty());
+    assert!(hits("", None).await.is_empty());
+    assert!(hits("absent", None).await.is_empty());
+    drop_test_schema(pool, schema).await;
+}
+
+#[test]
+fn find_folding_keeps_offsets() {
+    for text in [
+        "İstanbul",
+        "ẞ straße",
+        "Σίσυφος",
+        "tab\there\u{3000}wide",
+        "😀 Emoji",
+    ] {
+        let folded = super::fold_for_find(text);
+        assert_eq!(
+            folded.encode_utf16().count(),
+            text.encode_utf16().count(),
+            "{text:?}"
+        );
+    }
+    assert_eq!(super::fold_for_find("İ ẞ Σ\tA"), "İ ß σ a");
+}

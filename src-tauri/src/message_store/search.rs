@@ -1,9 +1,10 @@
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
+use uuid::Uuid;
 
 use super::messages_from_rows;
 use crate::{
     app::{to_string, CommandResult},
-    models::Message,
+    models::{Message, ThreadFindHit},
 };
 
 const MESSAGE_SEARCH_LIMIT_MAX: i64 = 100;
@@ -108,6 +109,61 @@ fn search_sql(use_fts: bool) -> String {
         limit $3
     "#
     )
+}
+
+/// Counts the matches for a thread's find bar in its replies below
+/// `before_seq`: the replies the client has not loaded. Loaded replies are
+/// searched in the rendered page instead, so they are not sent again.
+pub(crate) async fn find_in_thread(
+    pool: &SqlitePool,
+    thread_root_id: Uuid,
+    query: &str,
+    before_seq: Option<i64>,
+) -> CommandResult<Vec<ThreadFindHit>> {
+    let needle = fold_for_find(query);
+    if needle.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query(
+        "select id, seq, body from messages where thread_root_id = $1 and seq < $2 order by seq",
+    )
+    .bind(thread_root_id)
+    .bind(before_seq.unwrap_or(i64::MAX))
+    .fetch_all(pool)
+    .await
+    .map_err(to_string)?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let matches = fold_for_find(row.get::<&str, _>("body"))
+                .matches(&needle)
+                .count();
+            (matches > 0).then(|| ThreadFindHit {
+                message_id: row.get("id"),
+                seq: row.get("seq"),
+                matches,
+            })
+        })
+        .collect())
+}
+
+/// The find bar's matching rule, shared with `foldFindText` in
+/// `src/thread-find.ts`: each character is lowercased when that keeps its
+/// UTF-16 length, and each whitespace character becomes a space, so a match
+/// in the folded text has the same offsets as in the original.
+fn fold_for_find(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_whitespace() {
+                return ' ';
+            }
+            let mut lower = c.to_lowercase();
+            match (lower.next(), lower.next()) {
+                (Some(l), None) if l.len_utf16() == c.len_utf16() => l,
+                _ => c,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

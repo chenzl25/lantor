@@ -1,8 +1,9 @@
-import { type CSSProperties, type MouseEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { type CSSProperties, type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { openExternalUrl } from "../apiClient";
 import { copyText } from "../clipboard";
 import {
   CODE_BLOCK_COLLAPSE_LINES,
+  CODE_BLOCK_EXPAND_EVENT,
   type DiffLine,
   type HighlightLanguage,
   MAX_HIGHLIGHT_CHARS,
@@ -154,13 +155,22 @@ export function CodeBlock({ code, lang, meta, streaming = false, stateKey }: Cod
   const startLine = diff ? null : fence.startLine;
   const numbered = diff ? diff.numbered : startLine !== null;
 
-  function toggleExpanded() {
-    const next = !expandedState;
+  function setExpanded(next: boolean) {
     setExpandedState(next);
     if (!stateKey) return;
     if (next) expandedBlocks.add(stateKey);
     else expandedBlocks.delete(stateKey);
   }
+  const setExpandedRef = useRef(setExpanded);
+  setExpandedRef.current = setExpanded;
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const shell = shellRef.current;
+    if (!shell) return;
+    const expand = () => setExpandedRef.current(true);
+    shell.addEventListener(CODE_BLOCK_EXPAND_EVENT, expand);
+    return () => shell.removeEventListener(CODE_BLOCK_EXPAND_EVENT, expand);
+  }, []);
 
   let body: ReactNode;
   let gutterDigits = 0;
@@ -210,7 +220,7 @@ export function CodeBlock({ code, lang, meta, streaming = false, stateKey }: Cod
   const preStyle = numbered ? { "--code-gutter-digits": String(Math.max(gutterDigits, 1)) } as CSSProperties : undefined;
 
   return (
-    <div className={shellClass} data-language={fence.language ?? undefined}>
+    <div ref={shellRef} className={shellClass} data-language={fence.language ?? undefined}>
       {fence.title ? (
         <div className="code-block-header">
           <span className="code-block-location">
@@ -226,7 +236,7 @@ export function CodeBlock({ code, lang, meta, streaming = false, stateKey }: Cod
       ) : <CopyButton code={code} className="code-block-copy floating" />}
       <pre className={preClass} style={preStyle}><code>{body}</code></pre>
       {collapsible && (
-        <button type="button" className="code-block-expand" aria-expanded={!collapsed} onClick={toggleExpanded}>
+        <button type="button" className="code-block-expand" aria-expanded={!collapsed} onClick={() => setExpanded(!expandedState)}>
           {collapsed ? `Show all ${lines} lines` : "Show less"}
         </button>
       )}
