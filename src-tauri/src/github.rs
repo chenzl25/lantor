@@ -34,7 +34,13 @@ pub(crate) use comparisons::{
 };
 
 const GITHUB_CLI_TIMEOUT: Duration = Duration::from_secs(30);
-const GITHUB_REVIEW_REQUEST_LIMIT: &str = "50";
+/// Review requests kept per sync. Pull requests past it drop out of the cache
+/// and count as new review requests when they come back.
+const GITHUB_REVIEW_REQUEST_LIMIT: usize = 200;
+/// `gh pr list` asks for `min(--limit, 100)` pull requests per GraphQL page.
+/// With `statusCheckRollup`, one page of about 85 risingwave pull requests
+/// already gets a 504 from GitHub, so the queue is read in smaller pages.
+const GITHUB_REVIEW_REQUEST_PAGE_SIZE: usize = 50;
 const GITHUB_AUTHORED_PULL_REQUEST_LIMIT: &str = "100";
 const GITHUB_RELATED_ISSUE_LIMIT: &str = "100";
 const GITHUB_OPEN_ISSUE_LIMIT: &str = "100";
@@ -749,28 +755,78 @@ fn parse_review_requests(bytes: &[u8]) -> CommandResult<Vec<GithubPullRequestCli
     parse_json(bytes, "GitHub review requests")
 }
 
+fn review_request_search_query(review_login: &str, updated_at_or_before: Option<&str>) -> String {
+    let mut query = format!("review-requested:{review_login} sort:updated-desc");
+    if let Some(updated_at) = updated_at_or_before {
+        query.push_str(" updated:<=");
+        query.push_str(updated_at);
+    }
+    query
+}
+
 async fn search_review_requests(
     binding: &GithubRepositoryBinding,
 ) -> CommandResult<Vec<GithubPullRequestCli>> {
-    let output = run_github_cli(vec![
-        "pr".to_owned(),
-        "list".to_owned(),
-        "--repo".to_owned(),
-        binding.name_with_owner.clone(),
-        "--state".to_owned(),
-        "open".to_owned(),
-        "--search".to_owned(),
-        format!(
-            "review-requested:{} sort:updated-desc",
-            binding.review_login
-        ),
-        "--limit".to_owned(),
-        GITHUB_REVIEW_REQUEST_LIMIT.to_owned(),
-        "--json".to_owned(),
-        "number,title,url,author,isDraft,state,updatedAt,headRefOid,statusCheckRollup".to_owned(),
-    ])
-    .await?;
-    parse_review_requests(&output)
+    collect_review_request_pages(move |updated_at_or_before| async move {
+        let output = run_github_cli(vec![
+            "pr".to_owned(),
+            "list".to_owned(),
+            "--repo".to_owned(),
+            binding.name_with_owner.clone(),
+            "--state".to_owned(),
+            "open".to_owned(),
+            "--search".to_owned(),
+            review_request_search_query(&binding.review_login, updated_at_or_before.as_deref()),
+            "--limit".to_owned(),
+            GITHUB_REVIEW_REQUEST_PAGE_SIZE.to_string(),
+            "--json".to_owned(),
+            "number,title,url,author,isDraft,state,updatedAt,headRefOid,statusCheckRollup"
+                .to_owned(),
+        ])
+        .await?;
+        parse_review_requests(&output)
+    })
+    .await
+}
+
+/// Reads the review queue newest first, one page at a time. Each later page
+/// asks for pull requests updated at or before the oldest one read so far, so
+/// the pull requests on that boundary come back again and are skipped.
+async fn collect_review_request_pages<F, Fut>(
+    mut fetch_page: F,
+) -> CommandResult<Vec<GithubPullRequestCli>>
+where
+    F: FnMut(Option<String>) -> Fut,
+    Fut: std::future::Future<Output = CommandResult<Vec<GithubPullRequestCli>>>,
+{
+    let mut requests = Vec::new();
+    let mut seen = HashSet::new();
+    let mut updated_at_or_before = None;
+    loop {
+        let page = fetch_page(updated_at_or_before.take()).await?;
+        let is_full_page = page.len() >= GITHUB_REVIEW_REQUEST_PAGE_SIZE;
+        let oldest_updated_at = page
+            .last()
+            .map(|pull_request| pull_request.updated_at.clone());
+        let read_before = requests.len();
+        for pull_request in page {
+            if seen.insert(pull_request.number) {
+                requests.push(pull_request);
+            }
+        }
+        // A short page ends the queue. A full page with nothing new means more
+        // than a page of pull requests share one update time, and asking again
+        // would return the same page.
+        if !is_full_page
+            || requests.len() == read_before
+            || requests.len() >= GITHUB_REVIEW_REQUEST_LIMIT
+        {
+            break;
+        }
+        updated_at_or_before = oldest_updated_at;
+    }
+    requests.truncate(GITHUB_REVIEW_REQUEST_LIMIT);
+    Ok(requests)
 }
 
 async fn search_authored_pull_requests(
@@ -2419,14 +2475,16 @@ pub(crate) async fn create_github_review_task_record(
 #[cfg(test)]
 mod tests {
     use super::{
-        complete_closed_github_review_tasks, create_github_issue_task_record,
-        create_github_review_task_record, load_cached_github_channel_overview, load_resource_links,
+        collect_review_request_pages, complete_closed_github_review_tasks,
+        create_github_issue_task_record, create_github_review_task_record,
+        load_cached_github_channel_overview, load_resource_links,
         mark_github_review_attention_read, merge_issue_snapshots, merge_pull_request_snapshots,
         parse_issues, parse_review_requests, replace_cached_issues, replace_cached_review_requests,
-        rereview_github_review_task_record, rereview_task_body, summarize_checks, task_body,
-        GithubActorCli, GithubCheckSummary, GithubIssueDetailCli, GithubIssueSnapshot, GithubLabel,
-        GithubPullRequestCli, GithubPullRequestDetail, GithubPullRequestSnapshot,
-        GithubRepositoryBinding, GithubStatusCheckCli, PULL_REQUEST_RESOURCE_KIND,
+        rereview_github_review_task_record, rereview_task_body, review_request_search_query,
+        summarize_checks, task_body, GithubActorCli, GithubCheckSummary, GithubIssueDetailCli,
+        GithubIssueSnapshot, GithubLabel, GithubPullRequestCli, GithubPullRequestDetail,
+        GithubPullRequestSnapshot, GithubRepositoryBinding, GithubStatusCheckCli,
+        GITHUB_REVIEW_REQUEST_LIMIT, GITHUB_REVIEW_REQUEST_PAGE_SIZE, PULL_REQUEST_RESOURCE_KIND,
     };
     use crate::channels::load_channels;
     use crate::test_support::{
@@ -2469,6 +2527,108 @@ mod tests {
         );
         assert_eq!(pull_requests[0].head_ref_oid, "abc123");
         assert_eq!(pull_requests[0].status_check_rollup.len(), 1);
+        Ok(())
+    }
+
+    /// Open review requests, newest first, each updated a minute before the
+    /// previous one.
+    fn review_queue(len: usize) -> Vec<GithubPullRequestCli> {
+        (0..len)
+            .map(|index| GithubPullRequestCli {
+                number: 10_000 - index as i64,
+                title: format!("Pull request {index}"),
+                url: format!("https://github.com/acme/stream/pull/{}", 10_000 - index),
+                author: None,
+                is_draft: false,
+                state: "open".to_owned(),
+                updated_at: format!(
+                    "2026-11-08T{:02}:{:02}:00Z",
+                    23 - index / 60,
+                    59 - index % 60
+                ),
+                head_ref_oid: String::new(),
+                status_check_rollup: Vec::new(),
+            })
+            .collect()
+    }
+
+    /// Reads `queue` the way GitHub answers the search: newest first, at most
+    /// a page, only pull requests updated at or before the cursor. Returns the
+    /// pull numbers read.
+    async fn read_review_queue(queue: &[GithubPullRequestCli]) -> Result<Vec<i64>, String> {
+        let requests = collect_review_request_pages(|updated_at_or_before: Option<String>| {
+            let page = queue
+                .iter()
+                .filter(|pull_request| {
+                    updated_at_or_before
+                        .as_deref()
+                        .is_none_or(|cursor| pull_request.updated_at.as_str() <= cursor)
+                })
+                .take(GITHUB_REVIEW_REQUEST_PAGE_SIZE)
+                .cloned()
+                .collect::<Vec<_>>();
+            std::future::ready(Ok(page))
+        })
+        .await?;
+        Ok(requests
+            .into_iter()
+            .map(|pull_request| pull_request.number)
+            .collect())
+    }
+
+    fn pull_numbers(queue: &[GithubPullRequestCli]) -> Vec<i64> {
+        queue
+            .iter()
+            .map(|pull_request| pull_request.number)
+            .collect()
+    }
+
+    #[test]
+    fn review_request_search_pages_by_update_time() {
+        assert_eq!(
+            review_request_search_query("octocat", None),
+            "review-requested:octocat sort:updated-desc"
+        );
+        assert_eq!(
+            review_request_search_query("octocat", Some("2026-07-29T18:22:54Z")),
+            "review-requested:octocat sort:updated-desc updated:<=2026-07-29T18:22:54Z"
+        );
+    }
+
+    #[tokio::test]
+    async fn review_requests_past_the_first_page_stay_in_the_queue() -> Result<(), String> {
+        for len in [
+            GITHUB_REVIEW_REQUEST_PAGE_SIZE,
+            GITHUB_REVIEW_REQUEST_PAGE_SIZE + 4,
+            120,
+        ] {
+            let queue = review_queue(len);
+            assert_eq!(read_review_queue(&queue).await?, pull_numbers(&queue));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn review_request_pages_stop_at_the_limit() -> Result<(), String> {
+        let queue = review_queue(GITHUB_REVIEW_REQUEST_LIMIT + 60);
+        assert_eq!(
+            read_review_queue(&queue).await?,
+            pull_numbers(&queue[..GITHUB_REVIEW_REQUEST_LIMIT])
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn review_request_pages_stop_when_a_page_shares_one_update_time() -> Result<(), String> {
+        let mut queue = review_queue(GITHUB_REVIEW_REQUEST_PAGE_SIZE + 10);
+        let shared_time = queue[0].updated_at.clone();
+        for pull_request in &mut queue[..GITHUB_REVIEW_REQUEST_PAGE_SIZE + 5] {
+            pull_request.updated_at = shared_time.clone();
+        }
+        assert_eq!(
+            read_review_queue(&queue).await?,
+            pull_numbers(&queue[..GITHUB_REVIEW_REQUEST_PAGE_SIZE])
+        );
         Ok(())
     }
 
