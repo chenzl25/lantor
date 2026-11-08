@@ -171,6 +171,14 @@ pub(crate) struct ThreadMessagePage {
     pub(crate) has_more: bool,
 }
 
+/// A reply that matches a thread's find query, with its number of matches.
+#[derive(Debug, Serialize)]
+pub(crate) struct ThreadFindHit {
+    pub(crate) message_id: Uuid,
+    pub(crate) seq: i64,
+    pub(crate) matches: usize,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct SavedMessage {
     pub(crate) id: Uuid,

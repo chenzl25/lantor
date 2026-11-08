@@ -124,6 +124,9 @@ installed. Each suite has an npm script, for example:
 - `npm run test:thread-pages` checks that a long thread opens with its newest
   replies and loads earlier ones without moving the replies on screen (see
   [`bootstrap-payload.md`](bootstrap-payload.md#thread-pages)).
+- `npm run test:thread-find` checks that Cmd+F finds text across a long
+  thread, including replies that are not loaded and collapsed text (see
+  [`bootstrap-payload.md`](bootstrap-payload.md#finding-in-a-thread)).
 - `npm run test:ui-panels`, `test:dialogs`, `test:image-lightbox`,
   `test:attachment-sheet`, `test:activity`, `test:app-shell`, `test:streaming`,
   `test:web-sync`, `test:message-rows`, `test:message-state-races`,

@@ -45,6 +45,33 @@ replies after it load.
 pages loaded before thread paging: a Home Screen app keeps its loaded page until
 the owner taps **Refresh**.
 
+### Finding in a thread
+
+Cmd+F (or **Find in thread** in the thread header or its phone menu) opens a
+find bar over the top of the open thread. Without an open thread, Cmd+F is left
+to the browser. The bar counts every match in the thread, root included, and
+moves between them in thread order: Enter or Cmd+G goes to the next match,
+Shift+Enter or Shift+Cmd+G to the previous one, and Escape closes the bar.
+
+- Matching ignores case and treats any whitespace as a space; matches do not
+  overlap. `foldFindText` in `src/thread-find.ts` and `fold_for_find` in
+  `message_store/search.rs` apply the same rule.
+- Loaded messages are searched in their rendered text (the elements marked
+  `data-find-text`), which includes collapsed long messages and code blocks but
+  not buttons. Matches are painted with the CSS Custom Highlight API, so the
+  message DOM is never rewritten.
+- Replies older than the loaded run are counted by `find_in_thread`
+  (`threadRootId`, `query`, `beforeSeq` set to the run's start), which returns
+  each matching reply's id, seq and number of matches, not its body. A thread
+  that is fully loaded never calls it.
+- Moving to a match in an unloaded reply requests `load_thread_page` with
+  `sinceSeq` set to that reply, as a jump does, then counts it again from the
+  page. A reply that renders without the match (for example a hidden progress
+  line) is skipped.
+- Before scrolling to a match, its collapsed long message or code block
+  expands. The scroll that places a match does not load the previous page, so
+  the match stays in view; scrolling on from there loads it as usual.
+
 ## Mobile channel hydration
 
 Mobile web skips `load_channel_previews`: Home consumes channel metadata, including indexed `latest_message_at` for recent sorting, not full messages from every channel. Selecting a channel requests `load_channel_messages` with `rootsOnly: true, limit: 30`; older pages use the same opt-in. Each page contains only timeline roots plus `thread_activities` for those roots, so the reply count/time and thread entry work without downloading replies. Opening the thread loads its newest page of replies. Desktop/legacy callers keep their existing defaults. Root pagination is clamped to 1–100, uses a strictly decreasing sequence cursor, and preserves the channel reading anchor through hydration.
@@ -57,6 +84,7 @@ Verification:
 
 - `npm test` and `npm run build`.
 - `npm run test:thread-pages`: Chromium and WebKit (desktop and iPhone) checks for the newest page, scroll-up and button loading with a stable viewport, reopening, short threads and jumps to an old reply.
+- `npm run test:thread-find`: Chromium and WebKit (desktop and iPhone) checks that Cmd+F counts loaded and unloaded matches, walks them in order, loads earlier replies, expands collapsed messages and code blocks, paints and clears highlights, and leaves a fully loaded thread to the page.
 - `npm run test:mobile-performance` and `npm run test:channel-reading`: isolated Chromium/WebKit fixtures for lazy mobile navigation, roots/counts, passive gestures, refresh bursts, and reading-position races.
 - `npm run test:web-sync`: lazy workspace/edit configuration, complete thread expansion, normal mutations, stale responses, foreground recovery and real SSE disconnect/reconnect.
 - Existing Markdown, message-row and avatar E2Es.

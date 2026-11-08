@@ -113,7 +113,7 @@ export const MessageRow = memo(function MessageRow({
           onClick={(event) => { event.stopPropagation(); act("save"); }}><Bookmark size={14} /></button>
       </div>
       {decision ? <DecisionCard decision={decision} /> : (message.delivery_state !== "streaming" || messageHasVisibleContent(message)) && <>
-        <div className={collapsible && !expanded ? "message-long-preview collapsed" : "message-long-preview"}>{body}</div>
+        <div className={collapsible && !expanded ? "message-long-preview collapsed" : "message-long-preview"} data-find-text>{body}</div>
         {collapsible && <button type="button" className="message-expand-button" aria-expanded={expanded}
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => { event.stopPropagation(); act("expand"); }}>{expanded ? "Show less" : "Show more"}</button>}
@@ -145,7 +145,7 @@ export const MessageRow = memo(function MessageRow({
         if (system || window.matchMedia("(hover: none)").matches) return;
         event.preventDefault(); event.stopPropagation(); actions.onMenu(message, event.clientX, event.clientY);
       }}>
-      {system ? <div className="system-message-line">{body}<time>{formatTime(message.created_at)}</time></div>
+      {system ? <div className="system-message-line" data-find-text>{body}<time data-find-skip>{formatTime(message.created_at)}</time></div>
         : root ? <div className="thread-message-with-avatar">{contents}</div> : contents}
     </article>
   </>;

@@ -166,6 +166,13 @@ export type ThreadMessagePage = {
   has_more: boolean;
 };
 
+/** A reply that is not loaded yet and matches the thread find query. */
+export type ThreadFindHit = {
+  message_id: string;
+  seq: number;
+  matches: number;
+};
+
 export type ChannelMessagePage = {
   thread_activities?: ThreadActivity[];
   messages: Message[];

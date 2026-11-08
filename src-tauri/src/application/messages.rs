@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::{
     app::CommandResult,
     message_store::{
-        load_activity_messages_without_artifact_content,
+        find_in_thread as find_in_thread_replies, load_activity_messages_without_artifact_content,
         load_channel_preview_messages_without_artifact_content,
         load_message_without_artifact_content,
         load_older_channel_messages_without_artifact_content,
@@ -14,7 +14,7 @@ use crate::{
         set_message_saved_in_pool, CHANNEL_PREVIEW_ROOT_MESSAGES_PER_CHANNEL,
         WEB_BOOTSTRAP_ROOT_MESSAGES_PER_CHANNEL,
     },
-    models::{AttachmentUpload, ChannelMessagePage, Message},
+    models::{AttachmentUpload, ChannelMessagePage, Message, ThreadFindHit},
 };
 
 #[derive(Debug, Deserialize)]
@@ -49,6 +49,14 @@ pub(crate) struct SearchMessagesRequest {
     pub(crate) query: String,
     pub(crate) after: Option<String>,
     pub(crate) limit: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FindInThreadRequest {
+    pub(crate) thread_root_id: Uuid,
+    pub(crate) query: String,
+    pub(crate) before_seq: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,6 +146,19 @@ pub(crate) async fn search_messages(
         &request.query,
         request.after.as_deref(),
         request.limit,
+    )
+    .await
+}
+
+pub(crate) async fn find_in_thread(
+    pool: &SqlitePool,
+    request: FindInThreadRequest,
+) -> CommandResult<Vec<ThreadFindHit>> {
+    find_in_thread_replies(
+        pool,
+        request.thread_root_id,
+        &request.query,
+        request.before_seq,
     )
     .await
 }

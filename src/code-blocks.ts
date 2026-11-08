@@ -12,6 +12,8 @@ export type HighlightLanguage = typeof HIGHLIGHT_LANGUAGES[number];
 
 /** Blocks longer than this collapse (to `--code-collapsed-lines` in CSS) once complete. */
 export const CODE_BLOCK_COLLAPSE_LINES = 30;
+/** Dispatched on a collapsed block's `.code-block-shell` to expand it, as thread find does for a match inside. */
+export const CODE_BLOCK_EXPAND_EVENT = "lantor:code-block-expand";
 /** Larger blocks stay plain so a pasted log cannot stall rendering. */
 export const MAX_HIGHLIGHT_CHARS = 60_000;
 

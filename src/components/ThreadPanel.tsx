@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowLeft, CheckCircle2, Crosshair, FileImage, Hash, Maximize2, MessageSquare, Minimize2, MoreHorizontal, Paperclip, RotateCcw, Send, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, CheckCircle2, Crosshair, FileImage, Hash, Maximize2, MessageSquare, Minimize2, MoreHorizontal, Paperclip, RotateCcw, Search, Send, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type TextareaHTMLAttributes, type WheelEvent as ReactWheelEvent } from "react";
 import { composerDraftKey, rememberComposerDraft } from "../composer-drafts";
 import { useEventCallback } from "../hooks/useEventCallback";
@@ -8,6 +8,7 @@ import { useAutoGrowTextarea } from "../hooks/useAutoGrowTextarea";
 import { useCoarsePointer } from "../hooks/useCoarsePointer";
 import { useMentionPicker } from "../hooks/useMentionPicker";
 import { useMobileViewport } from "../hooks/useMobileViewport";
+import { useThreadFind } from "../hooks/useThreadFind";
 import { APP_DISPLAY_NAME } from "../branding";
 import { isImeComposing, isInputComposing } from "../input-utils";
 import { mentionableAgentsForChannel } from "../mentions";
@@ -19,7 +20,7 @@ import { messageToMarkdown } from "../message-share";
 import { appendMessageReferenceToken, messageReferenceToken, parseMessageReferences, removeMessageReferenceToken, withoutMessageReferenceTokens, type MessageReferenceKind, type ResolvedMessageReference } from "../message-references";
 import { openGeneratedFileSheet } from "../attachment-sheet";
 import { renderThreadPanelSvg } from "../thread-svg-export";
-import { Agent, AgentActivity, AgentRun, AgentWorkItem, Artifact, Channel, DraftAttachment, Message, OwnerProfile, TASK_STATUSES, Task } from "../types";
+import { Agent, AgentActivity, AgentRun, AgentWorkItem, Artifact, Channel, DraftAttachment, Message, OwnerProfile, TASK_STATUSES, Task, type ThreadFindHit } from "../types";
 import { formatClockTime, formatTime, isSameCalendarDay, visibleAgentDescription, visibleChannelDescription } from "../ui-utils";
 import { ActivityProgressDock, activeProgressByAgent, indexProgress } from "./ActivityProgressDock";
 import { AgentAvatar } from "./AgentAvatar";
@@ -30,6 +31,7 @@ import { MessageActionMenu } from "./MessageActionMenu";
 import { MessageRow, type MessageRowActions, type MessageRowAction } from "./MessageRow";
 import { MessageReferencePreview, type MessageReferencePreviewItem } from "./MessageReferencePreview";
 import { TaskAssigneePicker } from "./TaskAssigneePicker";
+import { ThreadFindBar } from "./ThreadFindBar";
 
 type WritingSuggestionsTextareaAttrs = TextareaHTMLAttributes<HTMLTextAreaElement> & { "writingsuggestions": "false" };
 
@@ -93,6 +95,14 @@ type ThreadPanelProps = {
   hasEarlierReplies: boolean;
   loadingEarlierReplies: boolean;
   onLoadEarlierReplies: () => void;
+  /** Seq of the oldest loaded reply; null once every reply is loaded, undefined before the first page. */
+  loadedReplyStart: number | null | undefined;
+  /** Counts find matches in the replies below `beforeSeq`. */
+  onFindUnloadedReplies: (threadId: string, query: string, beforeSeq: number) => Promise<ThreadFindHit[]>;
+  /** Loads the replies from `seq` on. */
+  onLoadRepliesSince: (threadId: string, seq: number) => Promise<void>;
+  /** Changes each time Cmd+F asks to find in the thread. */
+  findRequest: number;
   unreadCount: number;
   taskTitleDrafts: Record<string, string>;
   replyDraft: string;
@@ -152,6 +162,8 @@ const THREAD_MESSAGE_EXPANSION_TTL_MS = 24 * 60 * 60 * 1000;
 const THREAD_MESSAGE_EXPANSION_MAX_ENTRIES = 50;
 const THREAD_SCROLL_STATE_TTL_MS = 24 * 60 * 60 * 1000;
 const THREAD_SCROLL_STATE_MAX_ENTRIES = 100;
+/** The find bar floats over the top of the thread; a match under it is not in view. */
+const THREAD_FIND_BAR_CLEARANCE = 56;
 
 function pruneThreadMessageExpansionState(
   entries: Map<string, ThreadMessageExpansionState>,
@@ -188,6 +200,10 @@ export function ThreadPanel({
   hasEarlierReplies,
   loadingEarlierReplies,
   onLoadEarlierReplies,
+  loadedReplyStart,
+  onFindUnloadedReplies,
+  onLoadRepliesSince,
+  findRequest,
   taskTitleDrafts,
   replyDraft,
   replyAttachments,
@@ -237,6 +253,7 @@ export function ThreadPanel({
   const earlierRepliesRef = useRef<HTMLButtonElement | null>(null);
   const earlierRepliesAnchorRef = useRef<ThreadScrollAnchor | null>(null);
   const earlierRepliesScrollWriteRef = useRef<number | null>(null);
+  const findScrollWriteRef = useRef<number | null>(null);
   const openLinkedAgentDetail = useEventCallback((handle: string) => {
     const agent = agents.find((candidate) => candidate.handle.toLowerCase() === handle.toLowerCase());
     if (agent) openAgentDetail(agent);
@@ -538,8 +555,13 @@ export function ThreadPanel({
     } else {
       rememberThreadScrollMetrics(element);
     }
+    // A find match placed near the top must not pull in a page that would
+    // push it out of view; scrolling from there loads earlier replies as usual.
+    const placedFindMatch = findScrollWriteRef.current !== null
+      && Math.abs(element.scrollTop - findScrollWriteRef.current) <= 1;
+    findScrollWriteRef.current = null;
     if (loadingEarlierReplies) rememberEarlierRepliesAnchor(element);
-    else if (!shouldFollowThreadRef.current) loadEarlierRepliesWhenNear(element);
+    else if (!shouldFollowThreadRef.current && !placedFindMatch) loadEarlierRepliesWhenNear(element);
   }
 
   // Scrolling up loads the previous page while it is still a screen away.
@@ -761,6 +783,43 @@ export function ThreadPanel({
     });
   }
 
+  const threadFind = useThreadFind({
+    threadId: activeRoot?.id ?? null,
+    viewportRef: threadScrollRef,
+    contentRef: threadScrollContentRef,
+    loadedReplyStart,
+    findUnloaded: onFindUnloadedReplies,
+    revealReply: async (threadId, seq) => {
+      // Earlier replies load above the view; stay put until the match scrolls in.
+      stopFollowingThread();
+      await onLoadRepliesSince(threadId, seq);
+    },
+    expandMessage: (messageId) => updateActiveThreadExpandedMessageIds((current) => (
+      current.has(messageId) ? current : new Set(current).add(messageId)
+    )),
+    scrollToMatch: scrollThreadToFindMatch,
+  });
+  const handledFindRequestRef = useRef(findRequest);
+  useEffect(() => {
+    if (handledFindRequestRef.current === findRequest) return;
+    handledFindRequestRef.current = findRequest;
+    if (activeRoot) threadFind.openFind();
+  }, [findRequest]);
+
+  /** Scrolls a find match to the middle of the view unless it is already in view below the find bar. */
+  function scrollThreadToFindMatch(range: Range) {
+    const element = threadScrollRef.current;
+    if (!element) return true;
+    const match = range.getBoundingClientRect();
+    const view = element.getBoundingClientRect();
+    if (match.height > 0 && match.top >= view.top + THREAD_FIND_BAR_CLEARANCE && match.bottom <= view.bottom - 16) return true;
+    stopFollowingThread(element);
+    element.scrollTop += match.top - view.top - (element.clientHeight - match.height) / 2;
+    findScrollWriteRef.current = element.scrollTop;
+    rememberThreadScrollMetrics(element);
+    return false;
+  }
+
   async function exportThreadVectorImage() {
     const threadPanel = threadPanelRef.current;
     if (!activeRoot || !threadPanel) return;
@@ -845,6 +904,18 @@ export function ThreadPanel({
                 disabled={!activeRoot}
                 onClick={() => {
                   setShowMobileThreadActions(false);
+                  threadFind.openFind();
+                }}
+              >
+                <Search size={18} />
+                <span>Find in thread</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!activeRoot}
+                onClick={() => {
+                  setShowMobileThreadActions(false);
                   exportThreadVectorImage();
                 }}
               >
@@ -867,6 +938,16 @@ export function ThreadPanel({
           )}
         </span>
         <span className="thread-header-actions">
+          <IconButton
+            className="thread-find-toggle"
+            onClick={() => (threadFind.open ? threadFind.close() : threadFind.openFind())}
+            disabled={!activeRoot}
+            aria-pressed={threadFind.open}
+            data-tooltip="Find in thread (⌘F)"
+            label="Find in thread"
+          >
+            <Search size={18} />
+          </IconButton>
           <IconButton
             className="thread-export-svg"
             onClick={exportThreadVectorImage}
@@ -902,10 +983,11 @@ export function ThreadPanel({
       </header>
 
       <section className="thread-focus">
-        <div className="thread-scroll-shell">
+        <div className={threadFind.open ? "thread-scroll-shell finding" : "thread-scroll-shell"}>
           <div className="thread-progress-layer">
             <ActivityProgressDock progress={progress} onOpenWorkItem={openWorkItem} onLoadActivityHistory={loadActivityHistory} />
           </div>
+          {threadFind.open && activeRoot && <ThreadFindBar find={threadFind} />}
           <div
             ref={threadScrollRef}
             className="thread-scroll"

@@ -49,9 +49,9 @@ use crate::application::{
     },
     inbox::{self as inbox_commands, InboxItemsRequest, MarkChannelReadRequest},
     messages::{
-        self as message_commands, LoadActivityMessagesRequest, LoadChannelMessagesRequest,
-        LoadOlderChannelMessagesRequest, MessageIdRequest, SearchMessagesRequest,
-        SendMessageRequest, SetMessageSavedRequest,
+        self as message_commands, FindInThreadRequest, LoadActivityMessagesRequest,
+        LoadChannelMessagesRequest, LoadOlderChannelMessagesRequest, MessageIdRequest,
+        SearchMessagesRequest, SendMessageRequest, SetMessageSavedRequest,
     },
     tasks::{self as task_commands, UpdateTaskStatusRequest, UpdateTaskTitleRequest},
     wiki::{
@@ -283,6 +283,10 @@ fn api_router(state: Arc<WebState>) -> Router {
         .route(
             "/api/search_messages",
             post(api_search_messages).layer(CompressionLayer::new()),
+        )
+        .route(
+            "/api/find_in_thread",
+            post(api_find_in_thread).layer(CompressionLayer::new()),
         )
         .route(
             "/api/load_message",
@@ -630,6 +634,16 @@ async fn api_search_messages(
     Json(request): Json<SearchMessagesRequest>,
 ) -> Result<impl IntoResponse, Response> {
     message_commands::search_messages(&state.pool, request)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_find_in_thread(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<FindInThreadRequest>,
+) -> Result<impl IntoResponse, Response> {
+    message_commands::find_in_thread(&state.pool, request)
         .await
         .map(Json)
         .map_err(api_error)

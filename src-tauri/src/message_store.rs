@@ -2,7 +2,7 @@ mod linked_files;
 mod search;
 
 pub(crate) use linked_files::attach_linked_files_best_effort;
-pub(crate) use search::search_messages_without_artifact_content;
+pub(crate) use search::{find_in_thread, search_messages_without_artifact_content};
 
 use std::collections::HashMap;
 
