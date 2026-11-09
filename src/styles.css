@@ -14371,11 +14371,45 @@ body.resizing-column * {
 }
 
 .github-inbox-type {
+  position: relative;
   color: var(--ink-muted);
 }
 
 .github-inbox-row.unread .github-inbox-type {
   color: var(--ink-primary);
+}
+
+/* Once the PR or issue state is known, the type icon shows it in GitHub's
+   colors, read or unread. */
+.github-inbox-row .github-inbox-type[data-status="open"] {
+  color: var(--status-success);
+}
+
+.github-inbox-row .github-inbox-type[data-status="draft"],
+.github-inbox-row .github-inbox-type[data-status="not_planned"] {
+  color: var(--muted);
+}
+
+.github-inbox-row .github-inbox-type[data-status="merged"],
+.github-inbox-row .github-inbox-type[data-status="completed"] {
+  color: var(--badge-phase-file-ink);
+}
+
+.github-inbox-row .github-inbox-type[data-status="closed"] {
+  color: var(--status-danger);
+}
+
+/* Unread: a dot left of the type icon, where GitHub puts it. */
+.github-inbox-unread-dot {
+  position: absolute;
+  top: 50%;
+  left: -6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--activity-feed-unread-bg);
+  box-shadow: var(--activity-feed-unread-shadow);
+  transform: translateY(-50%);
 }
 
 .github-inbox-row .activity-feed-row-meta .github-reference {
@@ -14389,10 +14423,6 @@ body.resizing-column * {
 }
 
 /* As on GitHub, read threads stay listed but quieter than unread ones. */
-.github-inbox-row .activity-feed-unread-dot {
-  display: block;
-}
-
 .github-inbox-row:not(.unread) h3 {
   color: var(--ink-secondary);
   font-weight: var(--type-weight-medium);
@@ -14439,9 +14469,36 @@ body.resizing-column * {
   transition: background 600ms ease-out, box-shadow 600ms ease-out;
 }
 
+/* The row's one action. Opening a thread already marks it read. */
+.github-inbox-done {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink-secondary);
+  box-shadow: none;
+  transition: opacity 120ms ease-out, background 120ms ease-out, color 120ms ease-out;
+}
+
 .github-inbox-done:hover {
   background: var(--activity-feed-action-success-bg);
   color: var(--activity-feed-action-success-ink);
+}
+
+/* With a mouse, Done shows on the row under the pointer (or in focus), as on GitHub. */
+@media (hover: hover) and (pointer: fine) {
+  .github-inbox-row .github-inbox-done {
+    opacity: 0;
+  }
+
+  .github-inbox-row:hover .github-inbox-done,
+  .github-inbox-row:focus-within .github-inbox-done {
+    opacity: 1;
+  }
 }
 
 @media (max-width: 760px) {
@@ -14467,10 +14524,9 @@ body.resizing-column * {
     height: 44px;
   }
 
-  /* Phones hide the Activity row buttons in favor of swipes; GitHub keeps Done,
-     and opening a thread marks it read. */
-  .github-inbox-row .activity-feed-dismiss.github-inbox-done {
-    display: grid;
+  .github-inbox-done {
+    width: 44px;
+    height: 44px;
   }
 
   /* A missed tap lands on the row, which opens GitHub and marks the thread

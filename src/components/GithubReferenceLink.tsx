@@ -23,6 +23,7 @@ import {
   requestGithubReferenceLookup,
   subscribeGithubReferenceLookups,
 } from "../github-references";
+import type { GithubReferenceItem } from "../types";
 
 type GithubReferenceLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
   href: string;
@@ -32,6 +33,8 @@ type GithubReferenceLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
   compactLabel?: boolean;
   /** Show the PR/issue title after the label once its state is known. */
   showTitle?: boolean;
+  /** Leave out the state icon when the surrounding row already shows it. */
+  hideStatusIcon?: boolean;
   children?: ReactNode;
 };
 
@@ -45,8 +48,13 @@ const STATUS_LABELS: Record<GithubReferenceStatus, string> = {
 };
 const CHECK_LABELS: Record<string, string> = { success: "checks passed", failure: "checks failing", pending: "checks running" };
 
-function StatusIcon({ kind, status }: { kind: "pull" | "issue"; status: GithubReferenceStatus }) {
-  const props = { size: 12, "aria-hidden": true, className: "github-reference-icon" } as const;
+export function GithubStatusIcon({ kind, status, size = 12, className = "github-reference-icon" }: {
+  kind: "pull" | "issue";
+  status: GithubReferenceStatus;
+  size?: number;
+  className?: string;
+}) {
+  const props = { size, "aria-hidden": true, className } as const;
   if (kind === "issue") {
     if (status === "completed") return <CircleCheck {...props} />;
     if (status === "not_planned") return <CircleSlash {...props} />;
@@ -67,6 +75,23 @@ function ChecksIcon({ status }: { status: string }) {
 }
 
 /**
+ * The state of a PR or issue: from the synced queues, or looked up on demand
+ * (then null until the lookup finds it). Null for no link.
+ */
+export function useGithubReferenceItem(link: GithubIssueLink | null, references: GithubReferenceIndex): GithubReferenceItem | null {
+  const queued = link ? githubReferenceItem(references, link) : null;
+  const key = link ? githubReferenceKey(link) : "";
+  const getLookedUp = useCallback(() => (key ? lookedUpGithubReference(key) : null), [key]);
+  const lookedUp = useSyncExternalStore(subscribeGithubReferenceLookups, getLookedUp, getLookedUp);
+  const nameWithOwner = link?.nameWithOwner;
+  const number = link?.number;
+  useEffect(() => {
+    if (!queued && nameWithOwner && number !== undefined) requestGithubReferenceLookup({ nameWithOwner, number });
+  }, [queued, nameWithOwner, number]);
+  return queued ?? lookedUp;
+}
+
+/**
  * A link to a GitHub PR or issue with a state icon, a CI mark (open PRs), an
  * optional truncated title and the full title in a tooltip. Items in the synced
  * GitHub queues have their state locally; others are looked up on demand and
@@ -78,19 +103,12 @@ export function GithubReferenceLink({
   references,
   compactLabel = false,
   showTitle = false,
+  hideStatusIcon = false,
   children,
   className,
   ...props
 }: GithubReferenceLinkProps) {
-  const queued = githubReferenceItem(references, link);
-  const key = githubReferenceKey(link);
-  const getLookedUp = useCallback(() => lookedUpGithubReference(key), [key]);
-  const lookedUp = useSyncExternalStore(subscribeGithubReferenceLookups, getLookedUp, getLookedUp);
-  const { nameWithOwner, number } = link;
-  useEffect(() => {
-    if (!queued) requestGithubReferenceLookup({ nameWithOwner, number });
-  }, [queued, nameWithOwner, number]);
-  const item = queued ?? lookedUp;
+  const item = useGithubReferenceItem(link, references);
   const label = compactLabel ? githubReferenceLabel(references, link) : children;
   // Links generated from `#123` use /issues/; point them at the real page.
   const resolvedHref = item && href === `https://github.com/${link.nameWithOwner}/issues/${link.number}` ? item.url || href : href;
@@ -111,7 +129,7 @@ export function GithubReferenceLink({
       rel="noreferrer"
     >
       <span className="github-reference-ref">
-        {item && status && <StatusIcon kind={item.kind} status={status} />}
+        {item && status && !hideStatusIcon && <GithubStatusIcon kind={item.kind} status={status} />}
         {label}
         {item && checks && <ChecksIcon status={item.checks_status} />}
       </span>

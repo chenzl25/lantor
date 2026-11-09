@@ -30,12 +30,22 @@ GitHub's requested interval, and five minutes after a failure. Opening the
 panel also syncs when the last sync is over 30 seconds old. A failure keeps the
 cached threads and shows the error in the panel.
 
+## List
+
+Unread threads come first, then read ones, each newest first. A thread read
+while the list is open keeps its place until the list is shown again (the
+panel reopens, or the channel tab comes back to Notifications), so reading a
+row does not move the rows around it (`useGithubInboxOrder`). An unread thread
+has a dot left of its type icon. Once the pull request or issue state is known
+(`useGithubReferenceItem`), the type icon shows it in GitHub's colors.
+
 ## Read and done
 
 Opening a thread opens its GitHub page, at its latest comment when GitHub names
-one, and marks it read. **Done** marks it done. Both write to GitHub first
-(`PATCH` / `DELETE notifications/threads/{id}`) and change nothing locally when
-that fails. GitHub has no API to mark a thread unread.
+one, and marks it read. **Done**, the row's only button, marks it done; with a
+mouse it shows on the row under the pointer, as on GitHub. Both write to GitHub
+first (`PATCH` / `DELETE notifications/threads/{id}`) and change nothing
+locally when that fails. GitHub has no API to mark a thread unread.
 
 Locally the mark keeps the thread's GitHub `updated_at` (`read_updated_at`,
 `done_updated_at`). A sync that started before GitHub took the write still
@@ -64,8 +74,8 @@ Once the inbox is on for the account a channel reviews as
   tab no longer clears it; reading a thread on either side does, on GitHub
   too. Until then, and for a channel that reviews as another login, the badge
   counts review requests not seen yet and clears when the tab opens.
-- The tab's **Notifications** view lists those threads with the inbox's row,
-  read and Done, and **Mark all read**, which writes each unread one to GitHub
+- The tab's **Notifications** view lists those threads with the inbox's row
+  and order, and **Mark all read**, which writes each unread one to GitHub
   in turn (`mark_github_inbox_repository_read`). A thread GitHub took stays
   read when a later one fails.
 - Pull request and issue cards with an unread thread show its reason; opening

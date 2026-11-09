@@ -9,6 +9,7 @@ import {
 } from "../github-inbox";
 import { getGithubReferenceIndex, subscribeGithubReferences } from "../github-references";
 import { useGithubInboxMarks } from "../hooks/useGithubInboxMarks";
+import { useGithubInboxOrder } from "../hooks/useGithubInboxOrder";
 import type { Agent, Channel, GithubInbox, GithubInboxItem } from "../types";
 import { formatTime } from "../ui-utils";
 import { DialogHeader } from "./DialogHeader";
@@ -68,10 +69,12 @@ export function GithubInboxModal({
     [items, repository],
   );
   const counts = useMemo(() => githubInboxCounts(repositoryItems), [repositoryItems]);
-  const visibleItems = useMemo(
+  const filteredItems = useMemo(
     () => repositoryItems.filter((item) => matchesGithubInboxFilter(item, filter)),
     [repositoryItems, filter],
   );
+  // Each opening of the panel orders unread threads first again.
+  const visibleItems = useGithubInboxOrder(filteredItems, open);
 
   async function refresh() {
     if (refreshingRef.current) return;
@@ -227,7 +230,7 @@ export function GithubInboxModal({
               references={references}
               channelName={channelName}
               onOpen={openItem}
-              onMark={(target, kind) => void mark(target, kind)}
+              onDone={(target) => void mark(target, "done")}
               onOpenThread={(target, threadRootId) => {
                 if (target.unread) void mark(target, "read");
                 onOpenThread(threadRootId);

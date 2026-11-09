@@ -11,6 +11,7 @@ import {
   githubNotificationKey,
   githubNotificationsByResource,
   matchesGithubInboxFilter,
+  orderGithubInboxItems,
 } from "../src/github-inbox";
 import { scopesForRefresh } from "../src/ui-state-sync";
 import type { GithubInbox, GithubInboxItem } from "../src/types";
@@ -62,6 +63,19 @@ test("pending marks apply before the backend answers", () => {
   assert.equal(githubInboxCounts(pending).participating, 2);
   const none = { read: new Set<string>(), done: new Set<string>() };
   assert.equal(githubInboxItemsWithPending(items, none), items);
+});
+
+test("unread threads come first, each group newest first", () => {
+  const at = (entry: GithubInboxItem, updated_at: string) => ({ ...entry, updated_at });
+  const items = [
+    at(item("1", "mention", false), "2026-11-09T05:00:00Z"),
+    at(item("2", "mention", true), "2026-11-09T01:00:00Z"),
+    at(item("3", "mention", false), "2026-11-09T04:00:00Z"),
+    at(item("4", "mention", true), "2026-11-09T03:00:00Z"),
+  ];
+  assert.deepEqual(orderGithubInboxItems(items).map((entry) => entry.thread_id), ["4", "2", "1", "3"]);
+  // A thread read while the list is open keeps its unread place.
+  assert.deepEqual(orderGithubInboxItems(items, new Set(["3", "4"])).map((entry) => entry.thread_id), ["3", "4", "2", "1"]);
 });
 
 test("repositories list the most unread first", () => {

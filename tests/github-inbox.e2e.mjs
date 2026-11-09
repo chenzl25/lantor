@@ -186,9 +186,11 @@ async function run(engine, name, contextOptions) {
     if (mobile) await page.locator(".mobile-bottom-nav button.active", { hasText: "GitHub" }).waitFor();
     const rows = panel.locator(".github-inbox-row");
     const visibleIds = () => rows.evaluateAll(nodes => nodes.map(node => node.dataset.threadId));
-    // Cached threads show at once, newest first; the stale cache is checked again.
-    assert.deepEqual(await visibleIds(), ["101", "102", "103", "104", "105"], `${name}: cached threads first`);
+    // Cached threads show at once, unread first, then newest first; the stale
+    // cache is checked again.
+    assert.deepEqual(await visibleIds(), ["101", "102", "104", "105", "103"], `${name}: cached threads, unread first`);
     await panel.locator('.github-inbox-row[data-thread-id="100"]').waitFor();
+    assert.deepEqual(await visibleIds(), ["100", "101", "102", "104", "105", "103"], `${name}: a new unread thread on top`);
     assert.equal(calls("/api/refresh_github_inbox").length, 1, `${name}: opening a stale inbox checks GitHub once`);
     await panel.getByText("@octo · 5 unread").waitFor();
 
@@ -205,13 +207,17 @@ async function run(engine, name, contextOptions) {
     assert.deepEqual(await visibleIds(), ["102"], `${name}: one repository`);
     await panel.getByRole("combobox", { name: "Repository" }).selectOption("");
 
-    // Opening a thread opens GitHub at the latest comment and marks it read there.
+    // Opening a thread opens GitHub at the latest comment and marks it read
+    // there; it keeps its place until the panel opens again.
     await panel.locator('.github-inbox-row[data-thread-id="101"] h3').click();
     await panel.locator('.github-inbox-row[data-thread-id="101"]:not(.unread)').waitFor();
     assert.deepEqual(await page.evaluate(() => window.__opened), ["https://github.com/org/repo/pull/101#issuecomment-5"], name);
     assert.deepEqual(calls("/api/mark_github_inbox_read"), [{ threadId: "101" }], name);
     await panel.getByText("@octo · 4 unread").waitFor();
     await entry.filter({ hasText: "4" }).waitFor({ state: "attached" });
+    assert.deepEqual(await visibleIds(), ["100", "101", "102", "104", "105", "103"], `${name}: a read row stays put`);
+    // One action per row: Done. Opening a thread is what marks it read.
+    assert.equal(await rows.getByRole("button", { name: "Mark as read" }).count(), 0, name);
 
     // Done hides a thread; a refused write brings it back with the error.
     await panel.locator('.github-inbox-row[data-thread-id="102"]').getByRole("button", { name: "Done" }).click();
@@ -222,15 +228,13 @@ async function run(engine, name, contextOptions) {
     await panel.locator('.github-inbox-row[data-thread-id="105"].unread').waitFor();
     assert.deepEqual(calls("/api/mark_github_inbox_done"), [{ threadId: "102" }, { threadId: "105" }], name);
 
-    // Mark as read without opening GitHub (desktop; phones show only Done).
-    const markRead = panel.locator('.github-inbox-row[data-thread-id="104"]').getByRole("button", { name: "Mark as read" });
-    if (mobile) {
-      assert.equal(await markRead.isVisible(), false, name);
-    } else {
-      await markRead.click();
-      await panel.locator('.github-inbox-row[data-thread-id="104"]:not(.unread)').waitFor();
-      assert.equal((await page.evaluate(() => window.__opened)).length, 1, `${name}: marking read opens nothing`);
-    }
+
+    // Opened again, read threads move below the unread ones.
+    await page.keyboard.press("Escape");
+    await panel.waitFor({ state: "detached" });
+    await entry.click();
+    await panel.waitFor();
+    assert.deepEqual(await visibleIds(), ["100", "104", "105", "101", "103"], `${name}: reopened, unread first`);
 
     // A pull request with a Lantor review thread opens it.
     await panel.locator('.github-inbox-row[data-thread-id="101"]').getByRole("button", { name: "Open Lantor thread" }).click();
@@ -308,7 +312,7 @@ async function runLinked(engine, name, contextOptions) {
     await list.locator('.github-inbox-row.highlighted[data-thread-id="106"]').waitFor();
     // Pull requests and issues of org/repo; not its advisory, not org/docs.
     assert.deepEqual(await list.locator(".github-inbox-row").evaluateAll(nodes => nodes.map(node => node.dataset.threadId)),
-      ["101", "103", "105", "106"], name);
+      ["101", "105", "106", "103"], `${name}: unread first`);
 
     // A pull request card shows its unread notification; opening it reads it on GitHub.
     await page.getByRole("tab", { name: /^Pull requests/ }).click();
