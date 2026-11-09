@@ -6,7 +6,6 @@ import {
   GitCommitHorizontal,
   GitPullRequest,
   Hash,
-  MailOpen,
   MessageSquare,
   MessagesSquare,
   ShieldAlert,
@@ -14,10 +13,10 @@ import {
 } from "lucide-react";
 
 import { githubInboxReasonLabel } from "../github-inbox";
-import type { GithubReferenceIndex } from "../github-references";
+import { type GithubReferenceIndex, githubReferenceStatus } from "../github-references";
 import type { GithubInboxItem } from "../types";
 import { formatRelativeTime, formatTime } from "../ui-utils";
-import { GithubReferenceLink } from "./GithubReferenceLink";
+import { GithubReferenceLink, GithubStatusIcon, useGithubReferenceItem } from "./GithubReferenceLink";
 
 function SubjectIcon({ type }: { type: string }) {
   const props = { size: 18, "aria-hidden": true } as const;
@@ -38,7 +37,7 @@ type GithubInboxRowProps = {
   channelName?: string | null;
   /** Opens the thread's GitHub page and marks it read. */
   onOpen: (item: GithubInboxItem) => void;
-  onMark: (item: GithubInboxItem, kind: "read" | "done") => void;
+  onDone: (item: GithubInboxItem) => void;
   onOpenThread: (item: GithubInboxItem, threadRootId: string) => void;
   onOpenChannel?: (item: GithubInboxItem) => void;
   /** Hands the pull request to an agent; absent when it cannot be reviewed here. */
@@ -52,7 +51,7 @@ export function GithubInboxRow({
   highlighted = false,
   channelName,
   onOpen,
-  onMark,
+  onDone,
   onOpenThread,
   onOpenChannel,
   onReview,
@@ -60,6 +59,9 @@ export function GithubInboxRow({
   const link = item.number !== null && (item.subject_type === "PullRequest" || item.subject_type === "Issue")
     ? { nameWithOwner: item.repository, number: item.number }
     : null;
+  // Like GitHub, the type icon shows the PR or issue state once it is known.
+  const reference = useGithubReferenceItem(link, references);
+  const status = reference ? githubReferenceStatus(reference) : null;
   const threadRootId = item.thread_root_id;
   const showChannel = Boolean(channelName && onOpenChannel);
   return (
@@ -69,8 +71,11 @@ export function GithubInboxRow({
       data-thread-id={item.thread_id}
       onClick={() => onOpen(item)}
     >
-      <span className="activity-feed-row-avatar github-inbox-type" aria-hidden="true">
-        <SubjectIcon type={item.subject_type} />
+      <span className="activity-feed-row-avatar github-inbox-type" data-status={status ?? undefined} aria-hidden="true">
+        {item.unread && <span className="github-inbox-unread-dot" />}
+        {reference && status
+          ? <GithubStatusIcon kind={reference.kind} status={status} size={18} className="github-inbox-type-icon" />
+          : <SubjectIcon type={item.subject_type} />}
       </span>
       <div
         className="activity-feed-row-main"
@@ -90,6 +95,7 @@ export function GithubInboxRow({
               link={link}
               references={references}
               compactLabel
+              hideStatusIcon
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -152,29 +158,14 @@ export function GithubInboxRow({
         )}
       </div>
       <div className="activity-feed-row-actions">
-        {item.unread ? <span className="activity-feed-unread-dot" aria-label="Unread" /> : null}
-        {item.unread ? (
-          <button
-            type="button"
-            className="activity-feed-check"
-            title="Mark as read"
-            aria-label="Mark as read"
-            onClick={(event) => {
-              event.stopPropagation();
-              onMark(item, "read");
-            }}
-          >
-            <MailOpen size={18} />
-          </button>
-        ) : null}
         <button
           type="button"
-          className="activity-feed-dismiss github-inbox-done"
+          className="github-inbox-done"
           title="Done"
           aria-label="Done"
           onClick={(event) => {
             event.stopPropagation();
-            onMark(item, "done");
+            onDone(item);
           }}
         >
           <Check size={18} />
