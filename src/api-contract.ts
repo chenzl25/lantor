@@ -12,6 +12,7 @@ import type {
   ThreadMessagePage,
   ChannelWikiOverview,
   ChannelWikiSearchHit,
+  CliVersionStatus,
   Decision,
   GithubChannelOverview,
   GithubInbox,
@@ -98,6 +99,14 @@ export type ApiContract = {
   check_runtime: {
     args: { runtime: string };
     result: RuntimeCheck;
+  };
+  load_cli_version: {
+    args: { runtime: string };
+    result: CliVersionStatus;
+  };
+  update_cli: {
+    args: { runtime: string };
+    result: CliVersionStatus;
   };
   report_client_crash: {
     args: {
@@ -446,6 +455,8 @@ const API_COMMAND_NAMES = {
   load_thread_page: true,
   replay_ui_events: true,
   check_runtime: true,
+  load_cli_version: true,
+  update_cli: true,
   report_client_crash: true,
   send_message: true,
   load_older_channel_messages: true,
