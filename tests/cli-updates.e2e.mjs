@@ -32,6 +32,7 @@ const outcomes = {
 // What load_cli_version returns: before an update, while it runs (one poll), then after.
 let scenario = "failure", phase = "idle";
 function cliStatus() {
+  if (scenario === "latest") return { ...base, installed: "0.168.0", update_available: false };
   if (phase === "idle") return base;
   if (phase === "updating") { phase = "done"; return { ...base, updating: true }; }
   return scenario === "success"
@@ -88,6 +89,21 @@ const freshState = () => ({ db_url: "synthetic://cli-updates", web_base_url: nul
   saved_messages: [], dismissed_inbox_items: {}, read_inbox_items: {}, artifacts: [], reminders: [], agent_runs: [],
   agent_work_items: [], agent_activities: [], supervisor: { pid: null, status: "stopped", updated_at: null },
   launch_agent: { label: "", plist_path: "", installed: false, loaded: false }, ui_event_cursor: 0 });
+
+// Clips the page rather than screenshotting the card, which would scroll it and
+// move the avatar out from under the pointer.
+async function shootCard(page, card, name) {
+  if (!process.env.LANTOR_UI_SCREENSHOTS) return;
+  await mkdir(process.env.LANTOR_UI_SCREENSHOTS, { recursive: true });
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    const clip = await card.boundingBox();
+    await page.screenshot({ animations: "disabled", clip, path: join(process.env.LANTOR_UI_SCREENSHOTS, `cli-update-hover-${name}-${theme}.png`) });
+  }
+}
+
+const agentMessage = { ...message(2, channelId, "Fixture reply"), sender_agent_id: agent.id, sender_name: agent.display_name, sender_role: "agent" };
+const hoverState = () => ({ ...freshState(), messages: [message(1, channelId, "Fixture channel"), agentMessage] });
 
 let browser;
 try {
@@ -159,6 +175,72 @@ try {
       assert.deepEqual(errors, []);
       await browser.close(); browser = null;
       console.log(`✓ ${engineName} ${run}`);
+    }
+  }
+
+  // The avatar hover card offers the same update, so it is found without opening the profile.
+  for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
+    for (const run of ["latest", "success", "failure"]) {
+      scenario = run; phase = "idle"; state = hoverState(); requests.length = 0;
+      browser = await engine.launch();
+      const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 1440, height: 960 } });
+      const page = await context.newPage(); page.setDefaultTimeout(10000);
+      const errors = []; page.on("pageerror", error => errors.push(error.message));
+      await page.goto(`http://127.0.0.1:${api.address().port}`, { waitUntil: "domcontentloaded" });
+      const avatar = page.locator(".message-list .agent-avatar-profile-anchor").first();
+      const reads = () => requests.filter(r => r.path === "/api/load_cli_version").length;
+      const firstRead = page.waitForResponse(response => response.url().endsWith("/api/load_cli_version"));
+      await avatar.hover();
+      const card = page.getByRole("tooltip");
+      await card.getByText("@Aster", { exact: true }).waitFor();
+      const hint = card.getByRole("group", { name: "Codex update" });
+
+      if (run === "latest") {
+        await firstRead;
+        await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+        assert.equal(reads(), 1, "the card read the status");
+        assert.equal(await hint.count(), 0, "an up-to-date CLI adds nothing to the card");
+      } else {
+        await hint.getByText("Codex 0.168.0 is available").waitFor();
+        await hint.getByText("This Mac has 0.167.0").waitFor();
+        assert.ok(await card.evaluate(e => e.scrollWidth <= e.clientWidth + 1), "the card has no horizontal overflow");
+        if (run === "success") await shootCard(page, card, `available-${engineName}`);
+        await hint.getByRole("button", { name: "Update", exact: true }).click();
+        await hint.getByText("Updating Codex to 0.168.0…").waitFor();
+        assert.deepEqual(requests.filter(r => r.path === "/api/update_cli").map(r => r.args), [{ runtime: "codex" }]);
+        if (run === "success") {
+          await hint.getByText("Codex updated to 0.168.0").waitFor({ timeout: 15000 });
+          assert.equal(await hint.getByRole("button").count(), 0);
+          // Leave and come back: the card reuses the status it just read.
+          const before = reads();
+          await page.mouse.move(5, 950);
+          await card.waitFor({ state: "detached" });
+          await avatar.hover();
+          await card.getByRole("group", { name: "Codex update" }).getByText("Codex updated to 0.168.0").waitFor();
+          assert.equal(reads(), before, "a second hover within a minute does not read the CLI again");
+          // The profile shares the status the card updated.
+          await page.getByRole("button", { name: "@Aster’s profile", exact: true }).click();
+          await page.getByRole("tab", { name: /^Profile/ }).click();
+          const row = page.getByRole("group", { name: "Codex version" });
+          await row.getByText("Latest", { exact: true }).waitFor();
+          await row.getByText(/Updated from 0\.167\.0 to 0\.168\.0 just now/).waitFor();
+        } else {
+          await hint.getByText("Codex update failed").waitFor({ timeout: 15000 });
+          assert.equal(await hint.getByRole("button", { name: "Update", exact: true }).count(), 0, "Try again replaces Update");
+          await hint.getByRole("button", { name: "Try again" }).waitFor();
+          await shootCard(page, card, `failed-${engineName}`);
+          await hint.getByRole("button", { name: "Ask @Aster to fix it" }).click();
+          await page.locator(".message-list").getByText("failed on this Mac", { exact: false }).first().waitFor();
+          const sent = requests.filter(r => r.path === "/api/send_message").map(r => r.args);
+          assert.equal(sent.length, 1);
+          assert.equal(sent[0].channelId, dmId);
+          assert.ok(sent[0].body.startsWith("`codex update` failed on this Mac. Codex is 0.167.0; the latest release is 0.168.0."));
+          assert.ok(sent[0].body.includes("npm ERR! fixture line 1\n"), "the agent gets the whole output");
+        }
+      }
+      assert.deepEqual(errors, []);
+      await browser.close(); browser = null;
+      console.log(`✓ ${engineName} hover ${run}`);
     }
   }
 } finally {

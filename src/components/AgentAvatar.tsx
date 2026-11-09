@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, 
 import { createPortal } from "react-dom";
 import { cachedIdenticon, diceBearAvatarCache, diceBearKey, parseDiceBearAvatar } from "../avatar-rendering";
 import type { Agent } from "../types";
+import { AgentCliUpdateHint } from "./AgentCliVersion";
 import { AgentSubscriptionUsage } from "./AgentSubscriptionUsage";
 
 type AgentAvatarProps = {
@@ -299,6 +300,7 @@ export function AgentAvatarWithProfile({
               {!hasSubscription && role ? <span className="agent-avatar-profile-role">{role}</span> : null}
               {!hasSubscription && description ? <span className="agent-avatar-profile-description">{description}</span> : null}
             </span>
+            {hasSubscription && <AgentCliUpdateHint agent={agent} />}
             {hasSubscription && <AgentSubscriptionUsage agent={{ ...agent, runtime: agent.runtime ?? "" }} compact />}
           </div>,
           document.body,

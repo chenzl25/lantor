@@ -140,6 +140,15 @@ the check and the update are per runtime, not per agent
   still older than the latest release afterwards. The page then shows the end
   of the output, **Try again**, and **Ask @agent to fix it**, which opens the
   agent's DM and sends the command, versions and output as an owner message.
+- On the desktop, the agent's avatar hover card offers the same update, so it
+  is seen without opening Profile: a line with **Update** when a later release
+  exists, then the running update, the result for ten minutes, or a failure
+  with **Ask @agent to fix it** and **Try again**. While the CLI is current the
+  card shows nothing extra. Profile and the hover cards share one status per
+  runtime (`src/cli-versions.ts`). Since every read runs `--version` in a
+  login shell, a hover card reuses a status read in the last minute; Profile
+  reads it again each time it opens, and both read it every two seconds while
+  an update runs.
 - Running agents keep their current process. Each one starts the new version
   when its warm process next starts: after the ten-minute idle stop or a
   Restart, resuming the same session.
