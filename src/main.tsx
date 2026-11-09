@@ -73,6 +73,7 @@ import { SavedMessagesModal } from "./components/SavedMessagesModal";
 import { NeedsYouModal } from "./components/NeedsYouModal";
 import { GithubInboxModal } from "./components/GithubInboxModal";
 import { DecisionStore, DecisionStoreContext, deriveNeedsYou } from "./decisions";
+import { CliVersionStore, CliVersionStoreContext } from "./cli-versions";
 import { isPushTarget, OPEN_TARGET_MESSAGE, parseOpenTargetHash, setAppBadge, syncPushSubscription, type PushTarget } from "./web-push";
 import { SearchModal } from "./components/SearchModal";
 import { SettingsModal, type ChatTextSize, type FontPreset, type ThemePreference } from "./components/SettingsModal";
@@ -3318,6 +3319,16 @@ function App() {
     decisionStore.set(data?.decisions);
   }, [data?.decisions, decisionStore]);
 
+  const cliVersionStoreRef = useRef<CliVersionStore | null>(null);
+  if (!cliVersionStoreRef.current) {
+    cliVersionStoreRef.current = new CliVersionStore({
+      load: (runtime) => apiInvoke("load_cli_version", { runtime }),
+      update: (runtime) => apiInvoke("update_cli", { runtime }),
+    });
+  }
+  const cliVersionStore = cliVersionStoreRef.current;
+  cliVersionStore.askAgentToFix = askAgentToFixCli;
+
   const needsYou = useMemo(
     () => deriveNeedsYou(data?.decisions, data?.tasks ?? [], data?.thread_activities ?? [], Date.now()),
     // Opening the view re-derives idle ages against the current clock.
@@ -4753,10 +4764,10 @@ function App() {
   }
 
   /** Opens the agent's DM and sends the owner's request there. */
-  async function askAgentToFixCli(agent: Agent, body: string) {
+  async function askAgentToFixCli(agentId: string, body: string) {
     let channelId: string;
     try {
-      channelId = await apiInvoke("open_dm_with_agent", { agentId: agent.id });
+      channelId = await apiInvoke("open_dm_with_agent", { agentId });
       await reloadUiState(["channels", "channel_members"]);
     } catch (err) {
       setAppError(errorMessage(err, "Couldn’t open chat"));
@@ -5342,6 +5353,7 @@ function App() {
 
   return (
     <DecisionStoreContext.Provider value={decisionStore}>
+    <CliVersionStoreContext.Provider value={cliVersionStore}>
     <main
       className={`app theme-liquid ${selectedAgent || showThread ? "" : "thread-hidden"} ${selectedAgent || activeThreadId ? "right-panel-active" : ""} ${threadExpanded && showThread && !selectedAgent ? "thread-expanded" : ""} ${showMobileSidebar ? "mobile-sidebar-open" : ""} ${mobileDragSurface === "sidebar" ? "mobile-sidebar-dragging" : ""} ${mobileDragSurface === "panel" ? "mobile-panel-dragging" : ""} ${mobileComposerFocused ? "mobile-composer-focused" : ""}`}
       style={{
@@ -5606,7 +5618,6 @@ function App() {
             startEditAgent(agent);
           }}
           onRestart={restartAgent}
-          onAskAgentToFixCli={askAgentToFixCli}
           watchedApps={data.owner_profile.watched_apps ?? DEFAULT_WATCHED_APPS}
           onSaveWatchedApps={async (apps) => {
             await mutate("update_watched_apps", { apps });
@@ -5792,6 +5803,7 @@ function App() {
       />
 
     </main>
+    </CliVersionStoreContext.Provider>
     </DecisionStoreContext.Provider>
   );
 }

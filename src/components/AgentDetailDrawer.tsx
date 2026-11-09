@@ -62,7 +62,6 @@ type AgentDetailDrawerProps = {
   onDelete: (agent: Agent) => void;
   onEdit: (agent: Agent) => void;
   onRestart: (agent: Agent) => void;
-  onAskAgentToFixCli: (agent: Agent, body: string) => Promise<void>;
   watchedApps: string[];
   onSaveWatchedApps: (apps: string[]) => Promise<void>;
   onStopReminder: (reminder: Reminder) => void;
@@ -448,7 +447,6 @@ export function AgentDetailDrawer({
   onDelete,
   onEdit,
   onRestart,
-  onAskAgentToFixCli,
   watchedApps,
   onSaveWatchedApps,
   onStopReminder,
@@ -661,7 +659,7 @@ export function AgentDetailDrawer({
             )}
           </div>
           {(isCodex || isClaude) && (
-            <AgentCliVersion key={agent.runtime} agent={agent} onAskAgentToFix={onAskAgentToFixCli} />
+            <AgentCliVersion key={agent.runtime} agent={agent} />
           )}
         </section>
         <AgentTools
