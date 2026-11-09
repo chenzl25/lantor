@@ -375,7 +375,41 @@ async function runLinked(engine, name, contextOptions) {
   }
 }
 
+// Long repository names on a large window: the panel grows with the window,
+// and each repository button stays inside the rail with its count showing.
+async function runLongNames(engine, name) {
+  resetState();
+  state.github_inbox.items.push(notification("107", "mention", false, {
+    repository: "example-organization/a-repository-with-a-very-long-name-docs", title: "Long name",
+    url: "https://github.com/example-organization/a-repository-with-a-very-long-name-docs/pull/107" }));
+  const browser = await engine.launch();
+  try {
+    const page = await (await browser.newContext({ serviceWorkers: "block", viewport: { width: 1680, height: 1020 } })).newPage();
+    page.setDefaultTimeout(8000);
+    await page.goto(origin);
+    const panel = await openInbox(page, false);
+    const repositories = panel.getByRole("group", { name: "Repositories" });
+    await repositories.getByRole("button").first().waitFor();
+    const fit = await panel.evaluate(node => {
+      const rail = node.querySelector(".github-inbox-rail").getBoundingClientRect();
+      return { panelWidth: node.getBoundingClientRect().width,
+        buttons: [...node.querySelectorAll(".github-inbox-repositories button")].map(button => {
+          const box = button.getBoundingClientRect(), count = button.querySelector(".github-inbox-repository-count").getBoundingClientRect();
+          return { inside: box.right <= rail.right && count.right <= rail.right, counted: count.width > 0 };
+        }) };
+    });
+    assert.ok(fit.panelWidth > 1400, `${name}: the panel is ${fit.panelWidth}px wide`);
+    assert.equal(fit.buttons.length, 3, name);
+    assert.ok(fit.buttons.every(button => button.inside && button.counted), `${name}: ${JSON.stringify(fit.buttons)}`);
+    console.log(`ok - ${name}: long names`);
+  } finally {
+    await browser.close();
+  }
+}
+
 try {
+  await runLongNames(chromium, "chromium desktop");
+  await runLongNames(webkit, "webkit desktop");
   await run(chromium, "chromium desktop", { viewport: { width: 1280, height: 820 } });
   await run(webkit, "webkit desktop", { viewport: { width: 1280, height: 820 } });
   await run(webkit, "webkit iphone", { ...devices["iPhone 13"] });
