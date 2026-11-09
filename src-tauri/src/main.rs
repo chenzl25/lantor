@@ -238,6 +238,7 @@ fn spawn_shared_background_workers(pool: SqlitePool, database_url: String) {
     spawn_ui_events_pruner(pool.clone());
     web::spawn_web_server_if_configured(pool.clone(), database_url);
     web_push::spawn_push_worker(pool.clone());
+    github::spawn_github_inbox_poller(pool.clone());
     spawn_reminder_worker(pool);
 }
 

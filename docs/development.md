@@ -95,6 +95,9 @@ links. Absolute UTC times (`2026-10-13T19:00:00+00:00`,
 and existing links are left alone. List previews (Activity, Saved, threads,
 search, reference chips) show the Markdown as plain text.
 
+The GitHub panel in the sidebar lists the owner's GitHub notifications from
+every repository; see [GitHub inbox](github-inbox.md).
+
 ## Browser tests
 
 The `tests/*.e2e.mjs` suites run the built app from `dist/` in Playwright
@@ -107,6 +110,8 @@ installed. Each suite has an npm script, for example:
   rendering (header, line numbers, diff rows, collapse, failed chunk).
 - `npm run test:message-text` checks GitHub references, local times and
   Markdown-free previews.
+- `npm run test:github-inbox` checks the GitHub notifications panel: filters
+  and counts, opening and marking threads read or done, a refused write.
 - `npm run test:avatar-cache` checks avatar memoization, warm-remount first
   frames, stale asynchronous requests and formatter reuse with React's
   profiling build and test-only counters. It builds a synthetic fixture in a

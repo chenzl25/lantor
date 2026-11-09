@@ -14,6 +14,7 @@ import type {
   ChannelWikiSearchHit,
   Decision,
   GithubChannelOverview,
+  GithubInbox,
   GithubReferenceLookup,
   GithubReferences,
   GithubReviewComparisons,
@@ -211,6 +212,22 @@ export type ApiContract = {
   load_github_review_queue: {
     args: { channelId: string };
     result: GithubChannelOverview;
+  };
+  load_github_inbox: {
+    args: undefined;
+    result: GithubInbox;
+  };
+  refresh_github_inbox: {
+    args: undefined;
+    result: GithubInbox;
+  };
+  mark_github_inbox_read: {
+    args: { threadId: string };
+    result: GithubInbox;
+  };
+  mark_github_inbox_done: {
+    args: { threadId: string };
+    result: GithubInbox;
   };
   load_github_references: {
     args: undefined;
@@ -442,6 +459,10 @@ const API_COMMAND_NAMES = {
   search_channel_wikis: true,
   load_github_review_comparisons: true,
   load_github_review_queue: true,
+  load_github_inbox: true,
+  refresh_github_inbox: true,
+  mark_github_inbox_read: true,
+  mark_github_inbox_done: true,
   load_github_references: true,
   lookup_github_references: true,
   set_github_reference_alias: true,

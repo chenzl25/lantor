@@ -253,6 +253,15 @@ async fn load_bootstrap_with_options(
     );
 
     let started_at = Instant::now();
+    let github_inbox = crate::github::load_github_inbox(pool).await?;
+    push_phase(
+        &mut phases,
+        "github_inbox",
+        started_at,
+        Some(github_inbox.items.len()),
+    );
+
+    let started_at = Instant::now();
     let mut dismissed_inbox_items = load_dismissed_inbox_items(pool).await?;
     push_phase(
         &mut phases,
@@ -393,6 +402,7 @@ async fn load_bootstrap_with_options(
         messages,
         channel_message_history,
         saved_messages,
+        github_inbox,
         dismissed_inbox_items,
         read_inbox_items,
         artifacts,

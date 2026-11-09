@@ -68,6 +68,12 @@ pub(crate) struct CreateGithubIssueTaskRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct GithubInboxThreadRequest {
+    pub(crate) thread_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct SetGithubReferenceAliasRequest {
     pub(crate) channel_id: Uuid,
     pub(crate) alias: String,
@@ -97,6 +103,32 @@ pub(crate) async fn set_github_reference_alias(
     request: SetGithubReferenceAliasRequest,
 ) -> CommandResult<crate::github::GithubReferences> {
     crate::github::set_github_reference_alias(pool, request.channel_id, &request.alias).await
+}
+
+pub(crate) async fn load_github_inbox(
+    pool: &SqlitePool,
+) -> CommandResult<crate::github::GithubInbox> {
+    crate::github::load_github_inbox(pool).await
+}
+
+pub(crate) async fn refresh_github_inbox(
+    pool: &SqlitePool,
+) -> CommandResult<crate::github::GithubInbox> {
+    crate::github::refresh_github_inbox(pool).await
+}
+
+pub(crate) async fn mark_github_inbox_read(
+    pool: &SqlitePool,
+    request: GithubInboxThreadRequest,
+) -> CommandResult<crate::github::GithubInbox> {
+    crate::github::mark_github_inbox_read(pool, &request.thread_id).await
+}
+
+pub(crate) async fn mark_github_inbox_done(
+    pool: &SqlitePool,
+    request: GithubInboxThreadRequest,
+) -> CommandResult<crate::github::GithubInbox> {
+    crate::github::mark_github_inbox_done(pool, &request.thread_id).await
 }
 
 pub(crate) async fn load_github_review_queue(

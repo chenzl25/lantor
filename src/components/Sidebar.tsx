@@ -3,6 +3,7 @@ import {
   ChevronDown,
   Circle,
   Clock3,
+  Github,
   Hash,
   Inbox,
   Bookmark,
@@ -33,9 +34,11 @@ type SidebarProps = {
   channel: Channel | null;
   activityFeedUnreadCount: number;
   savedUnreadCount: number;
+  githubUnreadCount: number;
   openSearch: () => void;
   openActivityFeed: () => void;
   openSaved: () => void;
+  openGithub: () => void;
   openNeedsYou: () => void;
   needsYouCount: number;
   mobileFocus: "home" | "dms";
@@ -69,9 +72,11 @@ export function Sidebar({
   channel,
   activityFeedUnreadCount,
   savedUnreadCount,
+  githubUnreadCount,
   openSearch,
   openActivityFeed,
   openSaved,
+  openGithub,
   openNeedsYou,
   needsYouCount,
   mobileFocus,
@@ -231,6 +236,20 @@ export function Sidebar({
                 role="menuitem"
                 onClick={() => {
                   setShowMobileOwnerMenu(false);
+                  openGithub();
+                }}
+              >
+                <Github size={18} />
+                <span>
+                  <strong>GitHub{githubUnreadCount > 0 ? ` (${githubUnreadCount} unread)` : ""}</strong>
+                  <small>Your notifications from every repository</small>
+                </span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setShowMobileOwnerMenu(false);
                   openOwnerProfileModal();
                 }}
               >
@@ -290,6 +309,15 @@ export function Sidebar({
           <Bookmark size={17} />
           <span className="channel-name">Saved</span>
           {savedUnreadCount > 0 && <UnreadBadge value={savedUnreadCount} />}
+        </button>
+        <button
+          type="button"
+          className={`channel quick-action-row ${githubUnreadCount ? "has-unread" : ""}`}
+          onClick={openGithub}
+        >
+          <Github size={17} />
+          <span className="channel-name">GitHub</span>
+          {githubUnreadCount > 0 && <UnreadBadge value={githubUnreadCount} />}
         </button>
       </section>
 
