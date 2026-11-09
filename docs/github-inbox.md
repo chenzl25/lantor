@@ -11,17 +11,19 @@ participating threads.
 ## Sync
 
 `github/inbox.rs` reads the GitHub notifications API through `gh`, with the
-account `gh` is logged in to:
+account `gh` is logged in to: `notifications?participating=true&all=true`,
+page by page, until a page comes back short or 20 pages (1,000 threads) are
+read. GitHub returns at most 50 threads a page whatever `per_page` asks. That
+is every thread GitHub lists, read or not: unread ones so the counts match
+GitHub's, read ones so a thread stays listed until it is done, as on GitHub.
 
-- `notifications?participating=true`, every page (up to 500 threads): all
-  unread threads, so the counts match GitHub's.
-- `notifications?participating=true&all=true&per_page=50`: the newest threads,
-  read or not, so read ones stay listed as on GitHub.
-
-The union replaces `github_inbox_threads`; threads in neither answer are
-dropped. `gh api user` is checked once an hour; another login clears the
-threads. A sync publishes the `github_inbox_updated` refresh only when the list,
-the account or the error changed, so a quiet minute costs no client reloads.
+The answer replaces `github_inbox_threads`. A thread GitHub no longer lists
+was marked done (on GitHub or elsewhere) and is dropped; when the page limit
+cut the list short, threads older than its last one are kept, since the sync
+did not reach them. `gh api user` is checked once an hour; another login
+clears the threads. A sync publishes the `github_inbox_updated` refresh only
+when the list, the account or the error changed, so a quiet minute costs no
+client reloads.
 
 The inbox is off until the owner first opens the panel: that open runs
 `refresh_github_inbox`, which turns it on. From then on the process that serves

@@ -1,7 +1,8 @@
 //! The owner's GitHub inbox: their participating notifications across every
 //! repository, read from the GitHub notifications API through `gh`.
 //!
-//! A sync keeps every unread thread plus the newest read ones. Marking a thread
+//! A sync reads every participating thread GitHub lists, read or not, so a
+//! thread stays listed until it is done, as on GitHub. Marking a thread
 //! read or done in Lantor writes it back to GitHub first, then locally; the
 //! GitHub `updated_at` at that moment is kept, so a sync that started earlier
 //! cannot undo it, while new activity on the thread brings it back.
@@ -32,10 +33,10 @@ const POLL_INTERVAL: Duration = Duration::from_secs(60);
 const ERROR_RETRY_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const POLL_TICK: Duration = Duration::from_secs(15);
 const ACCOUNT_RECHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
-/// Read threads kept besides the unread ones, newest first.
-const RECENT_THREAD_LIMIT: usize = 50;
-const UNREAD_PAGE_SIZE: usize = 100;
-const UNREAD_PAGE_LIMIT: usize = 5;
+/// GitHub returns at most 50 notifications a page, whatever `per_page` asks.
+const PAGE_SIZE: usize = 50;
+/// Pages read per sync: the newest 1,000 threads.
+const PAGE_LIMIT: usize = 20;
 const UPDATED_REASON: &str = "github_inbox_updated";
 const CHANNEL_QUEUE_REFRESHED_REASON: &str = "github_channel_queue_refreshed";
 /// Least time between two background refreshes of one channel queue. A full
@@ -375,6 +376,9 @@ struct Snapshot {
     /// Set when the account was checked during this sync.
     account_login: Option<String>,
     threads: Vec<InboxThread>,
+    /// GitHub listed nothing past `threads`; false when the page limit cut
+    /// the list short.
+    complete: bool,
 }
 
 async fn fetch_snapshot<F, Fut>(
@@ -398,39 +402,34 @@ where
         None
     };
 
-    // Every unread thread, so the counts match GitHub's, then the newest ones
-    // whether read or not.
+    // Every thread GitHub lists, read or not, newest first: unread ones so the
+    // counts match GitHub's, read ones so they stay listed until done.
     let mut threads = Vec::new();
-    for page in 1..=UNREAD_PAGE_LIMIT {
+    let mut seen = HashSet::new();
+    let mut complete = false;
+    for page in 1..=PAGE_LIMIT {
         let output = run(vec![
             "api".to_owned(),
-            format!("notifications?participating=true&per_page={UNREAD_PAGE_SIZE}&page={page}"),
+            format!("notifications?participating=true&all=true&per_page={PAGE_SIZE}&page={page}"),
         ])
         .await?;
-        let unread = parse_notifications(&output)?;
-        let last_page = unread.len() < UNREAD_PAGE_SIZE;
-        threads.extend(unread);
+        let listed = parse_notifications(&output)?;
+        let last_page = listed.len() < PAGE_SIZE;
+        // A thread updated between two page reads can show up on both.
+        threads.extend(
+            listed
+                .into_iter()
+                .filter(|thread| seen.insert(thread.thread_id.clone())),
+        );
         if last_page {
+            complete = true;
             break;
-        }
-    }
-    let output = run(vec![
-        "api".to_owned(),
-        format!("notifications?participating=true&all=true&per_page={RECENT_THREAD_LIMIT}"),
-    ])
-    .await?;
-    let mut seen: HashSet<String> = threads
-        .iter()
-        .map(|thread| thread.thread_id.clone())
-        .collect();
-    for thread in parse_notifications(&output)? {
-        if seen.insert(thread.thread_id.clone()) {
-            threads.push(thread);
         }
     }
     Ok(Snapshot {
         account_login,
         threads,
+        complete,
     })
 }
 
@@ -544,7 +543,19 @@ async fn apply_snapshot(
         .await
         .map_err(to_string)?;
     }
-    for thread_id in marks.keys().filter(|id| !kept.contains(id.as_str())) {
+    // A thread GitHub no longer lists is done (on GitHub or elsewhere). When the
+    // page limit cut the list short, threads older than its end are kept.
+    let listed_since = snapshot
+        .threads
+        .iter()
+        .map(|thread| thread.updated_at.as_str())
+        .min();
+    let gone = marks.iter().filter(|(id, stored)| {
+        !kept.contains(id.as_str())
+            && (snapshot.complete
+                || listed_since.is_some_and(|since| stored.github_updated_at.as_str() >= since))
+    });
+    for (thread_id, _) in gone {
         sqlx::query("delete from github_inbox_threads where thread_id = $1")
             .bind(thread_id)
             .execute(&mut *transaction)

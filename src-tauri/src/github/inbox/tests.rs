@@ -8,12 +8,12 @@ use serde_json::{json, Value};
 use super::*;
 use crate::test_support::{drop_test_schema, insert_test_channel, test_pool, ui_event_cursor};
 
-/// Synthetic GitHub responses: the unread threads, the newest threads and the
-/// account login. Records every request.
+/// Synthetic GitHub responses: the participating threads, newest first, read
+/// 50 a page whatever `per_page` asks (as GitHub does), and the account
+/// login. Records every request.
 #[derive(Clone)]
 struct FakeGithub {
-    unread: Arc<StdMutex<Vec<Value>>>,
-    recent: Arc<StdMutex<Vec<Value>>>,
+    threads: Arc<StdMutex<Vec<Value>>>,
     login: Arc<StdMutex<String>>,
     fail: Arc<StdMutex<Option<String>>>,
     /// A request path that fails while the others succeed.
@@ -24,8 +24,7 @@ struct FakeGithub {
 impl FakeGithub {
     fn new() -> Self {
         Self {
-            unread: Arc::default(),
-            recent: Arc::default(),
+            threads: Arc::default(),
             login: Arc::new(StdMutex::new("octo".to_owned())),
             fail: Arc::default(),
             fail_path: Arc::default(),
@@ -33,9 +32,8 @@ impl FakeGithub {
         }
     }
 
-    fn set(&self, unread: Vec<Value>, recent: Vec<Value>) {
-        *self.unread.lock().unwrap() = unread;
-        *self.recent.lock().unwrap() = recent;
+    fn set(&self, threads: Vec<Value>) {
+        *self.threads.lock().unwrap() = threads;
     }
 
     fn calls(&self) -> Vec<Vec<String>> {
@@ -54,14 +52,20 @@ impl FakeGithub {
             }
             let body = if path == "user" {
                 json!({ "login": *self.login.lock().unwrap() })
-            } else if path.starts_with("notifications?participating=true&all=true") {
-                Value::Array(self.recent.lock().unwrap().clone())
-            } else if path.starts_with("notifications?participating=true&per_page=") {
-                if path.ends_with("&page=1") {
-                    Value::Array(self.unread.lock().unwrap().clone())
-                } else {
-                    json!([])
-                }
+            } else if let Some(query) =
+                path.strip_prefix("notifications?participating=true&all=true&")
+            {
+                let param = |name: &str| {
+                    query
+                        .split('&')
+                        .find_map(|pair| pair.strip_prefix(&format!("{name}=")))
+                        .and_then(|value| value.parse::<usize>().ok())
+                };
+                let per_page = param("per_page").unwrap_or(50).min(50);
+                let page = param("page").unwrap_or(1);
+                let threads = self.threads.lock().unwrap();
+                let start = (page - 1) * per_page;
+                Value::Array(threads.iter().skip(start).take(per_page).cloned().collect())
             } else if path.starts_with("notifications/threads/") {
                 return ready(Ok(Vec::new()));
             } else {
@@ -195,22 +199,17 @@ fn subject_pages_point_at_the_latest_comment() {
 }
 
 #[tokio::test]
-async fn sync_keeps_unread_and_newest_threads_and_turns_the_inbox_on() {
+async fn sync_lists_participating_threads_and_turns_the_inbox_on() {
     let (pool, schema) = test_pool().await.expect("create test database");
     assert!(!load_github_inbox(&pool).await.unwrap().enabled);
     assert!(!poll_due(&pool, at(NOW)).await.unwrap());
 
     let github = FakeGithub::new();
-    github.set(
-        vec![
-            notification("3", "mention", true, "2026-11-09T02:00:00Z"),
-            notification("1", "review_requested", true, "2026-11-01T00:00:00Z"),
-        ],
-        vec![
-            notification("4", "author", false, "2026-11-09T02:30:00Z"),
-            notification("3", "mention", true, "2026-11-09T02:00:00Z"),
-        ],
-    );
+    github.set(vec![
+        notification("4", "author", false, "2026-11-09T02:30:00Z"),
+        notification("3", "mention", true, "2026-11-09T02:00:00Z"),
+        notification("1", "review_requested", true, "2026-11-01T00:00:00Z"),
+    ]);
     sync_with(&pool, at(NOW), github.runner()).await.unwrap();
 
     let inbox = load_github_inbox(&pool).await.unwrap();
@@ -225,16 +224,11 @@ async fn sync_keeps_unread_and_newest_threads_and_turns_the_inbox_on() {
     assert_eq!(inbox.items[1].url, "https://github.com/org/repo/pull/3");
     assert_eq!(inbox.items[1].number, Some(3));
 
-    // Read on GitHub, and an old read thread has dropped out of the newest ones.
-    github.set(
-        vec![notification(
-            "1",
-            "review_requested",
-            true,
-            "2026-11-01T00:00:00Z",
-        )],
-        vec![notification("3", "mention", false, "2026-11-09T02:00:00Z")],
-    );
+    // 3 was read on GitHub and stays listed; 4 was marked done there.
+    github.set(vec![
+        notification("3", "mention", false, "2026-11-09T02:00:00Z"),
+        notification("1", "review_requested", true, "2026-11-01T00:00:00Z"),
+    ]);
     sync_with(&pool, at("2026-11-09T03:01:00Z"), github.runner())
         .await
         .unwrap();
@@ -251,14 +245,90 @@ async fn sync_keeps_unread_and_newest_threads_and_turns_the_inbox_on() {
     drop_test_schema(pool, schema).await;
 }
 
+/// `count` threads numbered from `first`, newest first, one a minute back from
+/// `newest`; the first `unread` of them unread.
+fn threads(first: usize, count: usize, unread: usize, newest: &str) -> Vec<Value> {
+    (0..count)
+        .map(|index| {
+            let updated_at = (at(newest) - chrono::Duration::minutes(index as i64))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            notification(
+                &(first + index).to_string(),
+                "mention",
+                index < unread,
+                &updated_at,
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn read_threads_stay_listed_past_the_first_page_until_done() {
+    let (pool, schema) = test_pool().await.expect("create test database");
+    let github = FakeGithub::new();
+    // More unread threads than one page holds, then older read ones.
+    github.set(threads(1, 120, 70, "2026-11-09T02:00:00Z"));
+    sync_with(&pool, at(NOW), github.runner()).await.unwrap();
+    let inbox = load_github_inbox(&pool).await.unwrap();
+    assert_eq!(inbox.items.len(), 120);
+    assert_eq!(unread_ids(&inbox).len(), 70);
+
+    // The oldest thread, read in Lantor, is still listed by the next sync.
+    mark_with(&pool, "120", Mark::Read, github.runner())
+        .await
+        .unwrap();
+    sync_with(&pool, at("2026-11-09T03:01:00Z"), github.runner())
+        .await
+        .unwrap();
+    let inbox = load_github_inbox(&pool).await.unwrap();
+    assert_eq!(inbox.items.len(), 120);
+    assert!(inbox
+        .items
+        .iter()
+        .any(|item| item.thread_id == "120" && !item.unread));
+    drop_test_schema(pool, schema).await;
+}
+
+#[tokio::test]
+async fn threads_past_the_page_limit_are_kept_until_github_lists_them_again() {
+    let (pool, schema) = test_pool().await.expect("create test database");
+    let github = FakeGithub::new();
+    let old = threads(5001, 10, 0, "2026-10-01T00:00:00Z");
+    let mut first = vec![notification(
+        "9000",
+        "mention",
+        false,
+        "2026-11-09T01:00:00Z",
+    )];
+    first.extend(old.clone());
+    github.set(first);
+    sync_with(&pool, at(NOW), github.runner()).await.unwrap();
+
+    // A thousand newer threads fill every page the sync reads: the old ones
+    // are past its end and stay; 9000, within it, was done on GitHub.
+    let mut second = threads(1, PAGE_SIZE * PAGE_LIMIT, 0, "2026-11-09T02:00:00Z");
+    second.extend(old);
+    github.set(second);
+    sync_with(&pool, at("2026-11-09T03:01:00Z"), github.runner())
+        .await
+        .unwrap();
+    let inbox = load_github_inbox(&pool).await.unwrap();
+    assert_eq!(inbox.items.len(), PAGE_SIZE * PAGE_LIMIT + 10);
+    assert!(inbox.items.iter().any(|item| item.thread_id == "5010"));
+    assert!(!inbox.items.iter().any(|item| item.thread_id == "9000"));
+    drop_test_schema(pool, schema).await;
+}
+
 #[tokio::test]
 async fn an_unchanged_sync_publishes_no_refresh() {
     let (pool, schema) = test_pool().await.expect("create test database");
     let github = FakeGithub::new();
-    github.set(
-        vec![notification("1", "mention", true, "2026-11-09T02:00:00Z")],
-        vec![],
-    );
+    github.set(vec![notification(
+        "1",
+        "mention",
+        true,
+        "2026-11-09T02:00:00Z",
+    )]);
     sync_with(&pool, at(NOW), github.runner()).await.unwrap();
     let cursor = ui_event_cursor(&pool).await.unwrap();
     sync_with(&pool, at("2026-11-09T03:01:00Z"), github.runner())
@@ -266,10 +336,12 @@ async fn an_unchanged_sync_publishes_no_refresh() {
         .unwrap();
     assert_eq!(ui_event_cursor(&pool).await.unwrap(), cursor);
 
-    github.set(
-        vec![notification("1", "mention", true, "2026-11-09T02:59:00Z")],
-        vec![],
-    );
+    github.set(vec![notification(
+        "1",
+        "mention",
+        true,
+        "2026-11-09T02:59:00Z",
+    )]);
     sync_with(&pool, at("2026-11-09T03:02:00Z"), github.runner())
         .await
         .unwrap();
@@ -285,7 +357,7 @@ async fn marks_survive_an_older_sync_until_new_activity() {
         notification("1", "review_requested", true, "2026-11-09T01:00:00Z"),
         notification("2", "mention", true, "2026-11-09T02:00:00Z"),
     ];
-    github.set(stale.clone(), vec![]);
+    github.set(stale.clone());
     sync_with(&pool, at(NOW), github.runner()).await.unwrap();
 
     mark_with(&pool, "1", Mark::Read, github.runner())
@@ -319,13 +391,10 @@ async fn marks_survive_an_older_sync_until_new_activity() {
     assert!(unread_ids(&inbox).is_empty());
 
     // New activity brings both back, as GitHub does.
-    github.set(
-        vec![
-            notification("1", "review_requested", true, "2026-11-09T03:05:00Z"),
-            notification("2", "mention", true, "2026-11-09T03:06:00Z"),
-        ],
-        vec![],
-    );
+    github.set(vec![
+        notification("1", "review_requested", true, "2026-11-09T03:05:00Z"),
+        notification("2", "mention", true, "2026-11-09T03:06:00Z"),
+    ]);
     sync_with(&pool, at("2026-11-09T03:07:00Z"), github.runner())
         .await
         .unwrap();
@@ -338,7 +407,7 @@ async fn marks_survive_an_older_sync_until_new_activity() {
 async fn marks_are_checked_before_writing_to_github() {
     let (pool, schema) = test_pool().await.expect("create test database");
     let github = FakeGithub::new();
-    github.set(vec![notification("1", "mention", true, NOW)], vec![]);
+    github.set(vec![notification("1", "mention", true, NOW)]);
     sync_with(&pool, at(NOW), github.runner()).await.unwrap();
     let before = github.calls().len();
 
@@ -364,7 +433,7 @@ async fn marks_are_checked_before_writing_to_github() {
 async fn failures_are_shown_and_retried_later() {
     let (pool, schema) = test_pool().await.expect("create test database");
     let github = FakeGithub::new();
-    github.set(vec![notification("1", "mention", true, NOW)], vec![]);
+    github.set(vec![notification("1", "mention", true, NOW)]);
     sync_with(&pool, at(NOW), github.runner()).await.unwrap();
     assert!(!poll_due(&pool, at("2026-11-09T03:00:59Z")).await.unwrap());
     assert!(poll_due(&pool, at("2026-11-09T03:01:00Z")).await.unwrap());
@@ -399,14 +468,14 @@ async fn failures_are_shown_and_retried_later() {
 async fn another_account_replaces_the_threads() {
     let (pool, schema) = test_pool().await.expect("create test database");
     let github = FakeGithub::new();
-    github.set(vec![notification("1", "mention", true, NOW)], vec![]);
+    github.set(vec![notification("1", "mention", true, NOW)]);
     sync_with(&pool, at(NOW), github.runner()).await.unwrap();
     mark_with(&pool, "1", Mark::Done, github.runner())
         .await
         .unwrap();
 
     *github.login.lock().unwrap() = "other".to_owned();
-    github.set(vec![notification("1", "mention", true, NOW)], vec![]);
+    github.set(vec![notification("1", "mention", true, NOW)]);
     // An hour later the account is checked again.
     sync_with(&pool, at("2026-11-09T04:00:00Z"), github.runner())
         .await
@@ -460,10 +529,10 @@ async fn threads_link_to_their_lantor_task_thread() {
     let mut issue = notification("8", "mention", true, NOW);
     issue["subject"]["type"] = json!("Issue");
     issue["subject"]["url"] = json!("https://api.github.com/repos/org/repo/issues/7");
-    github.set(
-        vec![notification("7", "review_requested", true, NOW), issue],
-        vec![],
-    );
+    github.set(vec![
+        notification("7", "review_requested", true, NOW),
+        issue,
+    ]);
     sync_with(&pool, at(NOW), github.runner()).await.unwrap();
     let inbox = load_github_inbox(&pool).await.unwrap();
     let linked: Vec<_> = inbox
@@ -534,14 +603,12 @@ fn activity(entries: &[(&str, bool, bool)]) -> InboxActivity {
 async fn a_sync_names_repositories_with_new_pull_request_or_issue_activity() {
     let (pool, schema) = test_pool().await.expect("create test database");
     let github = FakeGithub::new();
-    github.set(
-        vec![
-            subject("1", "Org/Repo", "PullRequest", true, NOW),
-            subject("2", "Org/Repo", "Issue", true, NOW),
-            subject("3", "org/docs", "Release", true, NOW),
-        ],
-        vec![subject("4", "org/other", "Issue", false, NOW)],
-    );
+    github.set(vec![
+        subject("1", "Org/Repo", "PullRequest", true, NOW),
+        subject("2", "Org/Repo", "Issue", true, NOW),
+        subject("3", "org/docs", "Release", true, NOW),
+        subject("4", "org/other", "Issue", false, NOW),
+    ]);
     let first = sync_with(&pool, at(NOW), github.runner()).await.unwrap();
     // Every thread is new on the first sync; releases do not change a queue.
     assert_eq!(
@@ -553,14 +620,12 @@ async fn a_sync_names_repositories_with_new_pull_request_or_issue_activity() {
     assert_eq!(unchanged, InboxActivity::new());
 
     let later = "2026-11-09T03:05:00Z";
-    github.set(
-        vec![
-            subject("1", "Org/Repo", "PullRequest", true, later),
-            subject("2", "Org/Repo", "Issue", true, NOW),
-            subject("3", "org/docs", "Release", true, later),
-        ],
-        vec![subject("4", "org/other", "Issue", false, NOW)],
-    );
+    github.set(vec![
+        subject("1", "Org/Repo", "PullRequest", true, later),
+        subject("2", "Org/Repo", "Issue", true, NOW),
+        subject("3", "org/docs", "Release", true, later),
+        subject("4", "org/other", "Issue", false, NOW),
+    ]);
     let next = sync_with(&pool, at(later), github.runner()).await.unwrap();
     assert_eq!(next, activity(&[("org/repo", true, false)]));
     drop_test_schema(pool, schema).await;
@@ -612,13 +677,10 @@ async fn items_name_the_channel_bound_to_their_repository() {
     let _teammate = bind(&pool, "teammate", "org/repo", "someone").await;
     let mine = bind(&pool, "mine", "Org/Repo", "Octo").await;
     let github = FakeGithub::new();
-    github.set(
-        vec![
-            subject("1", "org/repo", "PullRequest", true, NOW),
-            subject("2", "org/unbound", "Issue", true, NOW),
-        ],
-        vec![],
-    );
+    github.set(vec![
+        subject("1", "org/repo", "PullRequest", true, NOW),
+        subject("2", "org/unbound", "Issue", true, NOW),
+    ]);
     sync_with(&pool, at(NOW), github.runner()).await.unwrap();
     let inbox = load_github_inbox(&pool).await.unwrap();
     let channels: Vec<_> = inbox
@@ -652,15 +714,13 @@ async fn a_bound_channel_counts_unread_notifications_once_the_inbox_is_on() {
     assert_eq!(channel_github_unread(&pool, mine).await, (0, false));
 
     let github = FakeGithub::new();
-    github.set(
-        vec![
-            subject("1", "org/repo", "PullRequest", true, NOW),
-            subject("2", "org/repo", "Issue", true, NOW),
-            subject("3", "org/repo", "Release", true, NOW),
-            subject("4", "org/other", "PullRequest", true, NOW),
-        ],
-        vec![subject("5", "org/repo", "PullRequest", false, NOW)],
-    );
+    github.set(vec![
+        subject("1", "org/repo", "PullRequest", true, NOW),
+        subject("2", "org/repo", "Issue", true, NOW),
+        subject("3", "org/repo", "Release", true, NOW),
+        subject("4", "org/other", "PullRequest", true, NOW),
+        subject("5", "org/repo", "PullRequest", false, NOW),
+    ]);
     sync_with(&pool, at(NOW), github.runner()).await.unwrap();
     // Unread pull requests and issues of the repository; not the release.
     assert_eq!(channel_github_unread(&pool, mine).await, (2, true));
@@ -682,15 +742,13 @@ async fn a_bound_channel_counts_unread_notifications_once_the_inbox_is_on() {
 async fn marking_a_repository_read_writes_each_unread_thread_to_github() {
     let (pool, schema) = test_pool().await.expect("create test database");
     let github = FakeGithub::new();
-    github.set(
-        vec![
-            subject("1", "org/repo", "PullRequest", true, NOW),
-            subject("2", "org/repo", "Issue", true, "2026-11-09T02:00:00Z"),
-            subject("3", "org/repo", "Release", true, NOW),
-            subject("4", "org/other", "PullRequest", true, NOW),
-        ],
-        vec![subject("5", "org/repo", "PullRequest", false, NOW)],
-    );
+    github.set(vec![
+        subject("1", "org/repo", "PullRequest", true, NOW),
+        subject("2", "org/repo", "Issue", true, "2026-11-09T02:00:00Z"),
+        subject("3", "org/repo", "Release", true, NOW),
+        subject("4", "org/other", "PullRequest", true, NOW),
+        subject("5", "org/repo", "PullRequest", false, NOW),
+    ]);
     sync_with(&pool, at(NOW), github.runner()).await.unwrap();
     let cursor = ui_event_cursor(&pool).await.unwrap();
     let before = github.calls().len();
@@ -724,14 +782,11 @@ async fn marking_a_repository_read_writes_each_unread_thread_to_github() {
 async fn a_failed_write_keeps_the_threads_github_took() {
     let (pool, schema) = test_pool().await.expect("create test database");
     let github = FakeGithub::new();
-    github.set(
-        vec![
-            subject("1", "org/repo", "PullRequest", true, NOW),
-            subject("2", "org/repo", "Issue", true, "2026-11-09T02:00:00Z"),
-            subject("3", "org/repo", "Issue", true, "2026-11-09T01:00:00Z"),
-        ],
-        vec![],
-    );
+    github.set(vec![
+        subject("1", "org/repo", "PullRequest", true, NOW),
+        subject("2", "org/repo", "Issue", true, "2026-11-09T02:00:00Z"),
+        subject("3", "org/repo", "Issue", true, "2026-11-09T01:00:00Z"),
+    ]);
     sync_with(&pool, at(NOW), github.runner()).await.unwrap();
     *github.fail_path.lock().unwrap() = Some("notifications/threads/2".to_owned());
 
