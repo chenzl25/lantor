@@ -80,3 +80,26 @@ export function githubInboxUnreadCount(inbox: GithubInbox | undefined) {
   if (!inbox?.enabled) return 0;
   return inbox.items.reduce((count, item) => count + (item.unread ? 1 : 0), 0);
 }
+
+/** Pull request and issue threads of one repository: a bound channel's notifications. */
+export function githubInboxWorkItems(items: readonly GithubInboxItem[], repository: string) {
+  const name = repository.toLowerCase();
+  return items.filter((item) => item.repository.toLowerCase() === name && item.number !== null
+    && (item.subject_type === "PullRequest" || item.subject_type === "Issue"));
+}
+
+export function githubNotificationKey(subjectType: string, number: number) {
+  return `${subjectType}:${number}`;
+}
+
+/** The newest thread about each pull request and issue. */
+export function githubNotificationsByResource(items: readonly GithubInboxItem[]) {
+  const byResource = new Map<string, GithubInboxItem>();
+  for (const item of items) {
+    if (item.number === null) continue;
+    const key = githubNotificationKey(item.subject_type, item.number);
+    const current = byResource.get(key);
+    if (!current || item.updated_at > current.updated_at) byResource.set(key, item);
+  }
+  return byResource;
+}

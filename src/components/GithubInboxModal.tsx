@@ -1,34 +1,20 @@
-import {
-  Bell,
-  Check,
-  CircleDot,
-  ExternalLink,
-  GitCommitHorizontal,
-  Github,
-  GitPullRequest,
-  MailOpen,
-  MessageSquare,
-  MessagesSquare,
-  RefreshCw,
-  ShieldAlert,
-  Tag,
-} from "lucide-react";
+import { ExternalLink, Github, RefreshCw } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   GITHUB_INBOX_FILTERS,
   type GithubInboxFilter,
   githubInboxCounts,
-  githubInboxItemsWithPending,
-  githubInboxReasonLabel,
   githubInboxRepositories,
   matchesGithubInboxFilter,
 } from "../github-inbox";
 import { getGithubReferenceIndex, subscribeGithubReferences } from "../github-references";
-import type { GithubInbox, GithubInboxItem } from "../types";
-import { formatRelativeTime, formatTime } from "../ui-utils";
+import { useGithubInboxMarks } from "../hooks/useGithubInboxMarks";
+import type { Agent, Channel, GithubInbox, GithubInboxItem } from "../types";
+import { formatTime } from "../ui-utils";
 import { DialogHeader } from "./DialogHeader";
 import { DialogSurface } from "./DialogSurface";
-import { GithubReferenceLink } from "./GithubReferenceLink";
+import { GithubInboxRow } from "./GithubInboxRow";
+import { GithubReviewDialog, type GithubReviewTarget } from "./GithubReviewDialog";
 
 /** Opening the inbox syncs it when the last sync is older than this. */
 const STALE_AFTER_MS = 30_000;
@@ -38,53 +24,44 @@ type GithubInboxModalProps = {
   open: boolean;
   mobileNavigation?: ReactNode;
   inbox: GithubInbox | undefined;
+  /** Names the channels bound to a thread's repository. */
+  channels: readonly Channel[];
+  /** Agents that can review a pull request in a channel. */
+  reviewAgents: (channelId: string) => Agent[];
   onRefresh: () => Promise<void>;
   onMarkRead: (threadId: string) => Promise<void>;
   onMarkDone: (threadId: string) => Promise<void>;
   onOpenUrl: (url: string) => void;
   onOpenThread: (threadRootId: string) => void;
+  /** Opens the GitHub tab of the thread's channel, at the thread. */
+  onOpenChannel: (item: GithubInboxItem) => void;
+  onCreateReviewTask: (channelId: string, pullNumber: number, agentId: string) => Promise<unknown>;
   onClose: () => void;
 };
-
-function SubjectIcon({ type }: { type: string }) {
-  const props = { size: 18, "aria-hidden": true } as const;
-  if (type === "PullRequest") return <GitPullRequest {...props} />;
-  if (type === "Issue") return <CircleDot {...props} />;
-  if (type === "Release") return <Tag {...props} />;
-  if (type === "Discussion") return <MessagesSquare {...props} />;
-  if (type === "Commit") return <GitCommitHorizontal {...props} />;
-  if (type === "RepositoryAdvisory" || type === "RepositoryVulnerabilityAlert") return <ShieldAlert {...props} />;
-  return <Bell {...props} />;
-}
-
-function errorText(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 
 export function GithubInboxModal({
   open,
   mobileNavigation,
   inbox,
+  channels,
+  reviewAgents,
   onRefresh,
   onMarkRead,
   onMarkDone,
   onOpenUrl,
   onOpenThread,
+  onOpenChannel,
+  onCreateReviewTask,
   onClose,
 }: GithubInboxModalProps) {
   const [filter, setFilter] = useState<GithubInboxFilter>("participating");
   const [repository, setRepository] = useState("");
   const [refreshing, setRefreshing] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [pendingRead, setPendingRead] = useState<ReadonlySet<string>>(() => new Set());
-  const [pendingDone, setPendingDone] = useState<ReadonlySet<string>>(() => new Set());
+  const [review, setReview] = useState<{ channelId: string; target: GithubReviewTarget } | null>(null);
   const refreshingRef = useRef(false);
   const references = useSyncExternalStore(subscribeGithubReferences, getGithubReferenceIndex, getGithubReferenceIndex);
-
-  const items = useMemo(
-    () => githubInboxItemsWithPending(inbox?.items ?? [], { read: pendingRead, done: pendingDone }),
-    [inbox?.items, pendingRead, pendingDone],
-  );
+  const { items, mark, actionError, setActionError } = useGithubInboxMarks(inbox?.items ?? [], onMarkRead, onMarkDone);
+  const channelNames = useMemo(() => new Map(channels.map((channel) => [channel.id, channel.name])), [channels]);
   const repositories = useMemo(() => githubInboxRepositories(items), [items]);
   const repositoryItems = useMemo(
     () => (repository ? items.filter((item) => item.repository === repository) : items),
@@ -104,7 +81,7 @@ export function GithubInboxModal({
     try {
       await onRefresh();
     } catch (error) {
-      setActionError(errorText(error));
+      setActionError(error instanceof Error ? error.message : String(error));
     } finally {
       refreshingRef.current = false;
       setRefreshing(false);
@@ -126,28 +103,17 @@ export function GithubInboxModal({
 
   if (!open) return null;
 
-  async function mark(item: GithubInboxItem, kind: "read" | "done") {
-    const setPending = kind === "read" ? setPendingRead : setPendingDone;
-    const without = (current: ReadonlySet<string>) => {
-      const next = new Set(current);
-      next.delete(item.thread_id);
-      return next;
-    };
-    setPending((current) => new Set(current).add(item.thread_id));
-    setActionError(null);
-    try {
-      await (kind === "read" ? onMarkRead(item.thread_id) : onMarkDone(item.thread_id));
-    } catch (error) {
-      setActionError(errorText(error));
-    } finally {
-      // The response carries the stored inbox, which now has the mark (or not).
-      setPending(without);
-    }
-  }
-
   function openItem(item: GithubInboxItem) {
     onOpenUrl(item.url);
     if (item.unread) void mark(item, "read");
+  }
+
+  function startReview(item: GithubInboxItem) {
+    if (!item.channel_id || item.number === null) return;
+    setReview({
+      channelId: item.channel_id,
+      target: { repository: item.repository, number: item.number, title: item.title, authorLogin: null },
+    });
   }
 
   const unread = counts.participating;
@@ -248,103 +214,37 @@ export function GithubInboxModal({
         )}
 
         {visibleItems.map((item) => {
-          const link = item.number !== null && (item.subject_type === "PullRequest" || item.subject_type === "Issue")
-            ? { nameWithOwner: item.repository, number: item.number }
-            : null;
+          // The channel's GitHub tab lists pull requests and issues, not releases or advisories.
+          const listedInChannel = item.number !== null
+            && (item.subject_type === "PullRequest" || item.subject_type === "Issue");
+          const channelName = item.channel_id && listedInChannel ? channelNames.get(item.channel_id) ?? null : null;
+          const reviewable = item.subject_type === "PullRequest" && item.number !== null && channelName !== null
+            && !item.thread_root_id && reviewAgents(item.channel_id!).length > 0;
           return (
-            <article
+            <GithubInboxRow
               key={item.thread_id}
-              className={`activity-feed-row github-inbox-row ${item.unread ? "unread" : ""}`}
-              data-thread-id={item.thread_id}
-              onClick={() => openItem(item)}
-            >
-              <span className="activity-feed-row-avatar github-inbox-type" aria-hidden="true">
-                <SubjectIcon type={item.subject_type} />
-              </span>
-              <div
-                className="activity-feed-row-main"
-                role="button"
-                tabIndex={0}
-                aria-label={`Open ${item.title} on GitHub`}
-                onKeyDown={(event) => {
-                  if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
-                  event.preventDefault();
-                  openItem(item);
-                }}
-              >
-                <div className="activity-feed-row-meta">
-                  {link ? (
-                    <GithubReferenceLink
-                      href={item.url}
-                      link={link}
-                      references={references}
-                      compactLabel
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        openItem(item);
-                      }}
-                    />
-                  ) : (
-                    <strong>{item.repository}</strong>
-                  )}
-                  <time dateTime={item.updated_at} title={formatTime(item.updated_at)}>
-                    {formatRelativeTime(item.updated_at)}
-                  </time>
-                  <em>{githubInboxReasonLabel(item.reason)}</em>
-                </div>
-                <h3>
-                  <span>{item.title}</span>
-                </h3>
-                {item.thread_root_id && (
-                  <button
-                    type="button"
-                    className="github-inbox-thread"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      if (item.unread) void mark(item, "read");
-                      onOpenThread(item.thread_root_id!);
-                    }}
-                  >
-                    <MessageSquare size={14} />
-                    Open Lantor thread
-                  </button>
-                )}
-              </div>
-              <div className="activity-feed-row-actions">
-                {item.unread ? <span className="activity-feed-unread-dot" aria-label="Unread" /> : null}
-                {item.unread ? (
-                  <button
-                    type="button"
-                    className="activity-feed-check"
-                    title="Mark as read"
-                    aria-label="Mark as read"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void mark(item, "read");
-                    }}
-                  >
-                    <MailOpen size={18} />
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  className="activity-feed-dismiss github-inbox-done"
-                  title="Done"
-                  aria-label="Done"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void mark(item, "done");
-                  }}
-                >
-                  <Check size={18} />
-                </button>
-              </div>
-            </article>
+              item={item}
+              references={references}
+              channelName={channelName}
+              onOpen={openItem}
+              onMark={(target, kind) => void mark(target, kind)}
+              onOpenThread={(target, threadRootId) => {
+                if (target.unread) void mark(target, "read");
+                onOpenThread(threadRootId);
+              }}
+              onOpenChannel={onOpenChannel}
+              onReview={reviewable ? startReview : undefined}
+            />
           );
         })}
       </div>
       {mobileNavigation}
+      <GithubReviewDialog
+        target={review?.target ?? null}
+        agents={review ? reviewAgents(review.channelId) : []}
+        onStart={(agentId) => onCreateReviewTask(review!.channelId, review!.target.number, agentId)}
+        onClose={() => setReview(null)}
+      />
     </DialogSurface>
   );
 }

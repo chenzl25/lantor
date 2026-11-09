@@ -7,15 +7,31 @@ import {
   ExternalLink,
   GitPullRequest,
   Github,
+  Bell,
   LoaderCircle,
+  MailOpen,
   MessageCircle,
   RefreshCw,
   Search,
   Settings2,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+} from "react";
 
 import { apiInvoke, openExternalUrl } from "../apiClient";
+import {
+  githubInboxReasonLabel,
+  githubInboxWorkItems,
+  githubNotificationKey,
+  githubNotificationsByResource,
+} from "../github-inbox";
 import { githubComparisonRequestKey, mergeGithubReviewComparisons } from "../github-review";
 import { formatRelativeTime } from "../ui-utils";
 import {
@@ -23,11 +39,15 @@ import {
   getGithubReferenceIndex,
   loadGithubReferences,
   setGithubReferences,
+  subscribeGithubReferences,
 } from "../github-references";
+import { useGithubInboxMarks } from "../hooks/useGithubInboxMarks";
 import type {
   Agent,
   Channel,
   GithubChannelOverview,
+  GithubInbox,
+  GithubInboxItem,
   GithubIssue,
   GithubIssueDetail,
   GithubIssueTaskResult,
@@ -36,19 +56,42 @@ import type {
   GithubReviewTaskResult,
   GithubReviewComparisons,
 } from "../types";
+import { GithubInboxRow } from "./GithubInboxRow";
 import { GithubIssueDrawer } from "./GithubIssueDrawer";
+import { GithubReviewDialog } from "./GithubReviewDialog";
 import { Modal } from "./Modal";
-import { TaskAssigneePicker } from "./TaskAssigneePicker";
 
 type GithubPanelProps = {
   channel: Channel;
   agents: Agent[];
+  /** The owner's GitHub inbox; its threads in the bound repository are this tab's unread state. */
+  inbox: GithubInbox | undefined;
+  /** A notification thread to show, from the GitHub inbox; `nonce` repeats a request. */
+  focusThread: { threadId: string; nonce: number } | null;
+  onFocusThreadShown: () => void;
   onCreateReviewTask: (pullNumber: number, agentId: string) => Promise<GithubReviewTaskResult>;
   onCreateIssueTask: (issueNumber: number, agentId: string) => Promise<GithubIssueTaskResult>;
   onOpenThread: (threadRootId: string) => void;
+  onRefreshInbox: () => Promise<void>;
+  onMarkInboxRead: (threadId: string) => Promise<void>;
+  onMarkInboxDone: (threadId: string) => Promise<void>;
+  onMarkRepositoryRead: (repository: string) => Promise<void>;
 };
 
+/** What the panel takes from the GitHub inbox, passed through the conversation. */
+export type GithubPanelInboxProps = Pick<
+  GithubPanelProps,
+  | "inbox"
+  | "focusThread"
+  | "onFocusThreadShown"
+  | "onRefreshInbox"
+  | "onMarkInboxRead"
+  | "onMarkInboxDone"
+  | "onMarkRepositoryRead"
+>;
+
 type GithubResource = "pulls" | "issues";
+type GithubPanelView = GithubResource | "notifications";
 type GithubPullRequestFilter = "review_requested" | "authored" | "linked" | "all";
 type GithubIssueFilter = "related" | "assigned" | "authored" | "linked" | "open";
 
@@ -169,15 +212,22 @@ function rereviewActionLabel(pullRequest: GithubPullRequest) {
 export function GithubPanel({
   channel,
   agents,
+  inbox,
+  focusThread,
+  onFocusThreadShown,
   onCreateReviewTask,
   onCreateIssueTask,
   onOpenThread,
+  onRefreshInbox,
+  onMarkInboxRead,
+  onMarkInboxDone,
+  onMarkRepositoryRead,
 }: GithubPanelProps) {
   const [overview, setOverview] = useState<GithubChannelOverview | null>(
     () => githubOverviewCache.get(channel.id) ?? null,
   );
   const [loading, setLoading] = useState(() => !githubOverviewCache.has(channel.id));
-  const [activeResource, setActiveResource] = useState<GithubResource>("pulls");
+  const [activeResource, setActiveResource] = useState<GithubPanelView>("pulls");
   const [refreshingResource, setRefreshingResource] = useState<GithubResource | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showBindingModal, setShowBindingModal] = useState(false);
@@ -187,10 +237,13 @@ export function GithubPanel({
   const [reviewLoginDraft, setReviewLoginDraft] = useState("");
   const [bindingBusy, setBindingBusy] = useState(false);
   const [bindingError, setBindingError] = useState<string | null>(null);
-  const [reviewTarget, setReviewTarget] = useState<GithubPullRequest | null>(null);
-  const [selectedAgentId, setSelectedAgentId] = useState("");
-  const [reviewBusy, setReviewBusy] = useState(false);
-  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [reviewTarget, setReviewTarget] = useState<
+    { number: number; title: string; authorLogin: string | null } | null
+  >(null);
+  const [markingAllRead, setMarkingAllRead] = useState(false);
+  const [refreshingInbox, setRefreshingInbox] = useState(false);
+  const [highlightedThreadId, setHighlightedThreadId] = useState<string | null>(null);
+  const pendingScrollThreadRef = useRef<string | null>(null);
   const [rereviewingPullNumber, setRereviewingPullNumber] = useState<number | null>(null);
   const [pullRequestFilter, setPullRequestFilter] =
     useState<GithubPullRequestFilter>("review_requested");
@@ -207,7 +260,32 @@ export function GithubPanel({
     channelId: channel.id,
     count: channel.github_unread_count,
     syncedAt: channel.github_review_synced_at,
+    issueSyncedAt: channel.github_issue_synced_at,
   });
+  const references = useSyncExternalStore(
+    subscribeGithubReferences,
+    getGithubReferenceIndex,
+    getGithubReferenceIndex,
+  );
+  const boundRepository = overview?.binding?.name_with_owner ?? null;
+  const notificationsShown = channel.github_unread_from_inbox && Boolean(boundRepository);
+  const repositoryNotifications = useMemo(
+    () => (notificationsShown && boundRepository
+      ? githubInboxWorkItems(inbox?.items ?? [], boundRepository)
+      : []),
+    [boundRepository, inbox?.items, notificationsShown],
+  );
+  const {
+    items: notifications,
+    mark: markNotification,
+    actionError: notificationError,
+    setActionError: setNotificationError,
+  } = useGithubInboxMarks(repositoryNotifications, onMarkInboxRead, onMarkInboxDone);
+  const notificationByResource = useMemo(
+    () => githubNotificationsByResource(notifications),
+    [notifications],
+  );
+  const unreadNotificationCount = notifications.filter((item) => item.unread).length;
 
   const enrichOverview = useCallback((next: GithubChannelOverview, requestEpoch: number) => {
     const requestKey = githubComparisonRequestKey(next);
@@ -275,7 +353,9 @@ export function GithubPanel({
       cacheGithubOverview(channel.id, next);
       setOverview(next);
       setLoading(false);
-      if (githubQueueNeedsRefresh(next, activeResource)) {
+      if (activeResource === "notifications") {
+        // The inbox keeps notifications current; queues refresh when shown.
+      } else if (githubQueueNeedsRefresh(next, activeResource)) {
         void refreshOverview(activeResource);
       } else if (activeResource === "pulls") {
         enrichOverview(next, requestEpoch);
@@ -301,22 +381,61 @@ export function GithubPanel({
       channelId: channel.id,
       count: channel.github_unread_count,
       syncedAt: channel.github_review_synced_at,
+      issueSyncedAt: channel.github_issue_synced_at,
     };
     if (previous.channelId !== channel.id) return;
     const hasNewAttention = channel.github_unread_count > previous.count;
+    // A queue refreshed elsewhere: by an agent, or in the background after
+    // new activity in the GitHub inbox.
     const hasNewSync = Boolean(
-      channel.github_review_synced_at
-      && channel.github_review_synced_at !== previous.syncedAt,
+      (channel.github_review_synced_at
+        && channel.github_review_synced_at !== previous.syncedAt)
+      || (channel.github_issue_synced_at
+        && channel.github_issue_synced_at !== previous.issueSyncedAt),
     );
     if (!hasNewAttention && !hasNewSync) return;
     githubOverviewCache.delete(channel.id);
     void loadOverview();
   }, [
+    channel.github_issue_synced_at,
     channel.github_review_synced_at,
     channel.github_unread_count,
     channel.id,
     loadOverview,
   ]);
+
+  const focusThreadId = focusThread?.threadId ?? null;
+  const focusNonce = focusThread?.nonce ?? 0;
+  useEffect(() => {
+    if (!focusThreadId) return;
+    setActiveResource("notifications");
+    setHighlightedThreadId(focusThreadId);
+    pendingScrollThreadRef.current = focusThreadId;
+    // Shown once: coming back to the tab later starts where the owner left it.
+    onFocusThreadShown();
+  }, [focusThreadId, focusNonce]);
+
+  useEffect(() => {
+    if (!highlightedThreadId) return;
+    const timer = window.setTimeout(() => setHighlightedThreadId(null), 2400);
+    return () => window.clearTimeout(timer);
+  }, [highlightedThreadId]);
+
+  useEffect(() => {
+    const threadId = pendingScrollThreadRef.current;
+    if (!threadId || activeResource !== "notifications") return;
+    const row = Array.from(document.querySelectorAll<HTMLElement>(".github-notification-list [data-thread-id]"))
+      .find((element) => element.dataset.threadId === threadId);
+    if (!row) return;
+    pendingScrollThreadRef.current = null;
+    row.scrollIntoView({ block: "center" });
+  });
+
+  useEffect(() => {
+    if (activeResource === "notifications" && !notificationsShown && overview) {
+      setActiveResource("pulls");
+    }
+  }, [activeResource, notificationsShown, overview]);
 
   function openBindingModal() {
     setRepositoryDraft(overview?.binding?.name_with_owner ?? "");
@@ -356,22 +475,50 @@ export function GithubPanel({
   }
 
   function chooseReviewAgent(pullRequest: GithubPullRequest) {
-    setReviewTarget(pullRequest);
-    setSelectedAgentId(agents[0]?.id ?? "");
-    setReviewError(null);
+    setReviewTarget({
+      number: pullRequest.number,
+      title: pullRequest.title,
+      authorLogin: pullRequest.author_login,
+    });
   }
 
-  async function createReviewTask() {
-    if (!reviewTarget || !selectedAgentId || reviewBusy) return;
-    setReviewBusy(true);
-    setReviewError(null);
+  /** The notification about a pull request or issue, if the inbox has one. */
+  function notificationFor(kind: "PullRequest" | "Issue", number: number) {
+    return notificationByResource.get(githubNotificationKey(kind, number)) ?? null;
+  }
+
+  function readNotification(item: GithubInboxItem | null) {
+    if (item?.unread) void markNotification(item, "read");
+  }
+
+  function openNotification(item: GithubInboxItem) {
+    void openGithubUrl(item.url);
+    readNotification(item);
+  }
+
+  async function markAllNotificationsRead() {
+    if (!boundRepository || markingAllRead) return;
+    setMarkingAllRead(true);
+    setNotificationError(null);
     try {
-      await onCreateReviewTask(reviewTarget.number, selectedAgentId);
-      setReviewTarget(null);
-    } catch (createError) {
-      setReviewError(errorMessage(createError, "Couldn’t start the review"));
+      await onMarkRepositoryRead(boundRepository);
+    } catch (markError) {
+      setNotificationError(errorMessage(markError, "Couldn’t mark notifications read"));
     } finally {
-      setReviewBusy(false);
+      setMarkingAllRead(false);
+    }
+  }
+
+  async function refreshInbox() {
+    if (refreshingInbox) return;
+    setRefreshingInbox(true);
+    setNotificationError(null);
+    try {
+      await onRefreshInbox();
+    } catch (refreshError) {
+      setNotificationError(errorMessage(refreshError, "Couldn’t check GitHub"));
+    } finally {
+      setRefreshingInbox(false);
     }
   }
 
@@ -559,9 +706,14 @@ export function GithubPanel({
   if (!overview) return null;
 
   const binding = overview.binding;
-  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? null;
-  const refreshing = refreshingResource === activeResource;
-  const syncedAt = githubQueueSyncedAt(overview, activeResource);
+  const showingNotifications = activeResource === "notifications";
+  const refreshing = showingNotifications ? refreshingInbox : refreshingResource === activeResource;
+  const syncedAt = activeResource === "notifications"
+    ? inbox?.synced_at ?? null
+    : githubQueueSyncedAt(overview, activeResource);
+  const refreshLabel = activeResource === "notifications"
+    ? "notifications"
+    : activeResource === "pulls" ? "pull requests" : "issues";
   const drawerIssue = selectedIssue
     ? overview.issues.find((issue) => issue.number === selectedIssue.number) ?? selectedIssue
     : null;
@@ -595,16 +747,19 @@ export function GithubPanel({
                       syncedAt,
                     )}`
                   : refreshing
-                    ? `Syncing ${activeResource === "pulls" ? "pull requests" : "issues"}…`
+                    ? `Syncing ${refreshLabel}…`
                     : "Not updated yet"}
               </span>
             </div>
             <div className="github-toolbar-actions">
               <button
                 type="button"
-                disabled={Boolean(refreshingResource)}
-                onClick={() => void refreshOverview(activeResource)}
-                title={`Refresh ${activeResource === "pulls" ? "pull requests" : "issues"}`}
+                disabled={showingNotifications ? refreshingInbox : Boolean(refreshingResource)}
+                onClick={() => {
+                  if (activeResource === "notifications") void refreshInbox();
+                  else void refreshOverview(activeResource);
+                }}
+                title={`Refresh ${refreshLabel}`}
               >
                 <RefreshCw className={refreshing ? "spin" : ""} size={16} />
                 Refresh
@@ -639,9 +794,83 @@ export function GithubPanel({
               Issues
               <mark>{issueCounts.related}</mark>
             </button>
+            {notificationsShown && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeResource === "notifications"}
+                className={[
+                  activeResource === "notifications" ? "active" : "",
+                  unreadNotificationCount > 0 ? "has-unread" : "",
+                ].filter(Boolean).join(" ")}
+                onClick={() => setActiveResource("notifications")}
+              >
+                <Bell size={16} />
+                Notifications
+                <mark aria-label={`${unreadNotificationCount} unread`}>{unreadNotificationCount}</mark>
+              </button>
+            )}
           </div>
 
-          {activeResource === "pulls" ? (
+          {activeResource === "notifications" ? (
+            <section className="github-queue github-notifications" aria-label="GitHub notifications">
+              <div className="github-issue-controls">
+                <p className="github-notifications-summary">
+                  Unread notifications here are the ones in your GitHub inbox; reading one in either
+                  place reads it on GitHub.
+                </p>
+                <button
+                  type="button"
+                  className="github-notifications-read-all"
+                  disabled={unreadNotificationCount === 0 || markingAllRead}
+                  onClick={() => void markAllNotificationsRead()}
+                >
+                  {markingAllRead ? <LoaderCircle className="spin" size={15} /> : <MailOpen size={15} />}
+                  Mark all read
+                </button>
+              </div>
+              {(notificationError ?? inbox?.error) && (
+                <div className="github-inline-error" role="alert">
+                  {notificationError ?? inbox?.error}
+                </div>
+              )}
+              {notifications.length === 0 ? (
+                <div className="empty-state compact github-empty-state">
+                  <Bell size={32} />
+                  <h2>No notifications</h2>
+                  <p>Review requests, mentions and replies on {binding.name_with_owner} show up here.</p>
+                </div>
+              ) : (
+                <div className="github-notification-list">
+                  {notifications.map((item) => {
+                    const reviewable = item.subject_type === "PullRequest" && item.number !== null
+                      && !item.thread_root_id && agents.length > 0;
+                    return (
+                      <GithubInboxRow
+                        key={item.thread_id}
+                        item={item}
+                        references={references}
+                        highlighted={highlightedThreadId === item.thread_id}
+                        onOpen={openNotification}
+                        onMark={(target, kind) => void markNotification(target, kind)}
+                        onOpenThread={(target, threadRootId) => {
+                          readNotification(target);
+                          onOpenThread(threadRootId);
+                        }}
+                        onReview={reviewable
+                          ? (target) => setReviewTarget({
+                              number: target.number!,
+                              title: target.title,
+                              authorLogin: null,
+                            })
+                          : undefined}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          ) : activeResource === "pulls" ? (
             <section className="github-queue" aria-label="GitHub pull requests">
               <div className="github-issue-controls">
                 <div className="github-issue-filters" role="group" aria-label="Filter pull requests">
@@ -707,12 +936,15 @@ export function GithubPanel({
                     const linked = Boolean(pullRequest.linked_thread_root_id);
                     const rereviewing = rereviewingPullNumber === pullRequest.number;
                     const checkLabel = checkSummaryLabel(pullRequest);
+                    const notification = notificationFor("PullRequest", pullRequest.number);
+                    const unread = Boolean(notification?.unread);
                     return (
                       <article
                         className={[
                           "github-pull-card",
                           linked ? "linked" : "",
                           pullRequest.review_is_stale ? "stale" : "",
+                          unread ? "unread" : "",
                         ]
                           .filter(Boolean)
                           .join(" ")}
@@ -726,6 +958,11 @@ export function GithubPanel({
                               aria-hidden="true"
                             />
                             <span>PR #{pullRequest.number}</span>
+                            {unread && notification && (
+                              <mark className="notification" title="Unread in your GitHub inbox">
+                                {githubInboxReasonLabel(notification.reason)}
+                              </mark>
+                            )}
                             {pullRequest.is_review_requested &&
                               pullRequestFilter !== "review_requested" && (
                                 <mark className="attention">Review requested</mark>
@@ -761,7 +998,10 @@ export function GithubPanel({
                           <button
                             type="button"
                             className="github-pull-title"
-                            onClick={() => void openGithubUrl(pullRequest.url)}
+                            onClick={() => {
+                              void openGithubUrl(notification?.unread ? notification.url : pullRequest.url);
+                              readNotification(notification);
+                            }}
                           >
                             <span className="github-card-title-text">{pullRequest.title}</span>
                             <ExternalLink size={14} />
@@ -912,15 +1152,26 @@ export function GithubPanel({
                   {filteredIssues.map((issue) => {
                     const linked = Boolean(issue.linked_thread_root_id);
                     const relation = issueRelation(issue, binding.review_login);
+                    const notification = notificationFor("Issue", issue.number);
+                    const unread = Boolean(notification?.unread);
                     return (
                       <article
-                        className={`github-issue-card ${linked ? "linked" : ""}`}
+                        className={[
+                          "github-issue-card",
+                          linked ? "linked" : "",
+                          unread ? "unread" : "",
+                        ].filter(Boolean).join(" ")}
                         key={issue.number}
                       >
                         <div className="github-issue-main">
                           <div className="github-issue-eyebrow">
                             <CircleDot size={13} className="state-open" aria-hidden="true" />
                             <span>Issue #{issue.number}</span>
+                            {unread && notification && (
+                              <mark className="notification" title="Unread in your GitHub inbox">
+                                {githubInboxReasonLabel(notification.reason)}
+                              </mark>
+                            )}
                             {relation.assigned && issueFilter !== "assigned" && (
                               <mark className="attention">Assigned</mark>
                             )}
@@ -944,14 +1195,20 @@ export function GithubPanel({
                             <button
                               type="button"
                               className="github-issue-title"
-                              onClick={() => openIssue(issue)}
+                              onClick={() => {
+                                openIssue(issue);
+                                readNotification(notification);
+                              }}
                             >
                               <span className="github-card-title-text">{issue.title}</span>
                             </button>
                             <button
                               type="button"
                               className="github-issue-external"
-                              onClick={() => void openGithubUrl(issue.url)}
+                              onClick={() => {
+                                void openGithubUrl(notification?.unread ? notification.url : issue.url);
+                                readNotification(notification);
+                              }}
                               aria-label={`Open issue #${issue.number} on GitHub`}
                               title="Open on GitHub"
                             >
@@ -1118,61 +1375,14 @@ export function GithubPanel({
         </div>
       </Modal>
 
-      <Modal
-        open={Boolean(reviewTarget)}
-        title={reviewTarget ? `Review ${binding?.name_with_owner}#${reviewTarget.number}` : "Review PR"}
-        onClose={() => {
-          if (!reviewBusy) setReviewTarget(null);
-        }}
-        closeOnBackdrop={!reviewBusy}
-        closeOnEscape={!reviewBusy}
-        width={540}
-      >
-        {reviewTarget && (
-          <div className="modal-form">
-            <div className="github-review-target">
-              <GitPullRequest size={20} />
-              <div>
-                <strong>{reviewTarget.title}</strong>
-                <span>by @{reviewTarget.author_login}</span>
-              </div>
-            </div>
-            <div className="modal-field github-agent-assignment">
-              <span className="modal-field-label">Assign agent</span>
-              <TaskAssigneePicker
-                agents={agents}
-                assignee={selectedAgent}
-                allowUnassigned={false}
-                ariaLabel={`Assign review agent for ${binding?.name_with_owner}#${reviewTarget.number}`}
-                onChange={setSelectedAgentId}
-              />
-            </div>
-            {selectedAgent && (
-              <p className="github-modal-note">
-                A Task and canonical thread will be created and dispatched to @{selectedAgent.handle}.
-              </p>
-            )}
-            <p className="github-modal-note">
-              The task is anchored to the latest PR head SHA. The Agent reports in Lantor and
-              will not publish a GitHub review.
-            </p>
-            {reviewError && <div className="github-inline-error" role="alert">{reviewError}</div>}
-            <div className="modal-actions">
-              <button type="button" disabled={reviewBusy} onClick={() => setReviewTarget(null)}>
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="primary"
-                disabled={!selectedAgentId || reviewBusy}
-                onClick={() => void createReviewTask()}
-              >
-                {reviewBusy ? "Creating…" : "Start review"}
-              </button>
-            </div>
-          </div>
-        )}
-      </Modal>
+      <GithubReviewDialog
+        target={reviewTarget && binding
+          ? { repository: binding.name_with_owner, ...reviewTarget }
+          : null}
+        agents={agents}
+        onStart={(agentId) => onCreateReviewTask(reviewTarget!.number, agentId)}
+        onClose={() => setReviewTarget(null)}
+      />
     </div>
   );
 }

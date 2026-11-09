@@ -7,6 +7,9 @@ import {
   githubInboxReasonLabel,
   githubInboxRepositories,
   githubInboxUnreadCount,
+  githubInboxWorkItems,
+  githubNotificationKey,
+  githubNotificationsByResource,
   matchesGithubInboxFilter,
 } from "../src/github-inbox";
 import { scopesForRefresh } from "../src/ui-state-sync";
@@ -24,6 +27,7 @@ function item(thread_id: string, reason: string, unread: boolean, repository = "
     unread,
     updated_at: "2026-11-09T02:00:00Z",
     thread_root_id: null,
+    channel_id: null,
   };
 }
 
@@ -80,8 +84,29 @@ test("reasons read as GitHub writes them", () => {
   assert.equal(githubInboxReasonLabel("member_feature_requested"), "member feature requested");
 });
 
-test("an inbox update reloads only the inbox", () => {
-  assert.deepEqual(scopesForRefresh("github_inbox_updated"), ["github_inbox"]);
+test("an inbox update reloads the inbox and the channels that count it", () => {
+  assert.deepEqual(scopesForRefresh("github_inbox_updated"), ["github_inbox", "channels"]);
+  // A new binding changes which channel an inbox thread names.
+  assert.deepEqual(scopesForRefresh("github_repository_bound"), ["github_inbox", "channels"]);
+  // A new review task links its pull request in the inbox.
+  assert.ok(scopesForRefresh("github_review_task_created")?.includes("github_inbox"));
   // Other GitHub refreshes still reload the channels' queue badges.
   assert.deepEqual(scopesForRefresh("github_review_attention_read"), ["channels"]);
+  assert.deepEqual(scopesForRefresh("github_channel_queue_refreshed"), ["channels"]);
+});
+
+test("a bound channel shows the pull request and issue threads of its repository", () => {
+  const issue = { ...item("7", "mention", true, "Org/Repo"), subject_type: "Issue", url: "https://github.com/Org/Repo/issues/7" };
+  const release = { ...item("8", "subscribed", true), subject_type: "Release", number: null };
+  const threads = [...items, issue, release];
+  assert.deepEqual(
+    githubInboxWorkItems(threads, "ORG/repo").map((entry) => entry.thread_id),
+    ["1", "2", "4", "5", "7"],
+  );
+
+  const byResource = githubNotificationsByResource(githubInboxWorkItems(threads, "org/repo"));
+  assert.equal(byResource.get(githubNotificationKey("PullRequest", 1))?.thread_id, "1");
+  assert.equal(byResource.get(githubNotificationKey("Issue", 7))?.thread_id, "7");
+  // Pull request 7 and issue 7 are different resources.
+  assert.equal(byResource.get(githubNotificationKey("PullRequest", 7)), undefined);
 });

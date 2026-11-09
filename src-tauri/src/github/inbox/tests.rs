@@ -16,6 +16,8 @@ struct FakeGithub {
     recent: Arc<StdMutex<Vec<Value>>>,
     login: Arc<StdMutex<String>>,
     fail: Arc<StdMutex<Option<String>>>,
+    /// A request path that fails while the others succeed.
+    fail_path: Arc<StdMutex<Option<String>>>,
     calls: Arc<StdMutex<Vec<Vec<String>>>>,
 }
 
@@ -26,6 +28,7 @@ impl FakeGithub {
             recent: Arc::default(),
             login: Arc::new(StdMutex::new("octo".to_owned())),
             fail: Arc::default(),
+            fail_path: Arc::default(),
             calls: Arc::default(),
         }
     }
@@ -46,6 +49,9 @@ impl FakeGithub {
                 return ready(Err(error));
             }
             let path = args.last().cloned().unwrap_or_default();
+            if self.fail_path.lock().unwrap().as_deref() == Some(path.as_str()) {
+                return ready(Err(format!("{path} failed")));
+            }
             let body = if path == "user" {
                 json!({ "login": *self.login.lock().unwrap() })
             } else if path.starts_with("notifications?participating=true&all=true") {
@@ -467,5 +473,274 @@ async fn threads_link_to_their_lantor_task_thread() {
         .collect();
     // Issue 7 is not the reviewed pull request 7.
     assert_eq!(linked, [("8", None), ("7", Some(root_id))]);
+    drop_test_schema(pool, schema).await;
+}
+
+/// A notification about `kind` (`PullRequest`, `Issue`, `Release`) number `id`
+/// in `repository`.
+fn subject(id: &str, repository: &str, kind: &str, unread: bool, updated_at: &str) -> Value {
+    let mut value = notification(id, "comment", unread, updated_at);
+    let path = match kind {
+        "PullRequest" => format!("pulls/{id}"),
+        "Issue" => format!("issues/{id}"),
+        _ => format!("releases/{id}"),
+    };
+    value["subject"]["type"] = json!(kind);
+    value["subject"]["url"] = json!(format!("https://api.github.com/repos/{repository}/{path}"));
+    value["repository"] = json!({
+        "full_name": repository,
+        "html_url": format!("https://github.com/{repository}"),
+    });
+    value
+}
+
+async fn bind(pool: &SqlitePool, name: &str, repository: &str, review_login: &str) -> Uuid {
+    let channel_id = insert_test_channel(pool, name).await.unwrap();
+    sqlx::query(
+        r#"
+        insert into channel_github_repositories (
+            channel_id, repository_id, name_with_owner, url, account_login, review_login
+        )
+        values ($1, $2, $3, $4, 'octo', $5)
+        "#,
+    )
+    .bind(channel_id)
+    .bind(format!("R_{name}"))
+    .bind(repository)
+    .bind(format!("https://github.com/{repository}"))
+    .bind(review_login)
+    .execute(pool)
+    .await
+    .unwrap();
+    channel_id
+}
+
+fn activity(entries: &[(&str, bool, bool)]) -> InboxActivity {
+    entries
+        .iter()
+        .map(|(repository, pull_requests, issues)| {
+            (
+                (*repository).to_owned(),
+                RepositoryActivity {
+                    pull_requests: *pull_requests,
+                    issues: *issues,
+                },
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_sync_names_repositories_with_new_pull_request_or_issue_activity() {
+    let (pool, schema) = test_pool().await.expect("create test database");
+    let github = FakeGithub::new();
+    github.set(
+        vec![
+            subject("1", "Org/Repo", "PullRequest", true, NOW),
+            subject("2", "Org/Repo", "Issue", true, NOW),
+            subject("3", "org/docs", "Release", true, NOW),
+        ],
+        vec![subject("4", "org/other", "Issue", false, NOW)],
+    );
+    let first = sync_with(&pool, at(NOW), github.runner()).await.unwrap();
+    // Every thread is new on the first sync; releases do not change a queue.
+    assert_eq!(
+        first,
+        activity(&[("org/repo", true, true), ("org/other", false, true)])
+    );
+
+    let unchanged = sync_with(&pool, at(NOW), github.runner()).await.unwrap();
+    assert_eq!(unchanged, InboxActivity::new());
+
+    let later = "2026-11-09T03:05:00Z";
+    github.set(
+        vec![
+            subject("1", "Org/Repo", "PullRequest", true, later),
+            subject("2", "Org/Repo", "Issue", true, NOW),
+            subject("3", "org/docs", "Release", true, later),
+        ],
+        vec![subject("4", "org/other", "Issue", false, NOW)],
+    );
+    let next = sync_with(&pool, at(later), github.runner()).await.unwrap();
+    assert_eq!(next, activity(&[("org/repo", true, false)]));
+    drop_test_schema(pool, schema).await;
+}
+
+#[tokio::test]
+async fn bound_channel_queues_refresh_at_most_every_five_minutes() {
+    let (pool, schema) = test_pool().await.expect("create test database");
+    let repo = bind(&pool, "repo", "Org/Repo", "octo").await;
+    let other = bind(&pool, "other", "org/other", "octo").await;
+    sqlx::query(
+        r#"
+        update channel_github_repositories
+        set review_queue_synced_at = '2026-11-09T02:58:00Z', issue_queue_synced_at = null
+        where channel_id = $1
+        "#,
+    )
+    .bind(repo)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let active = activity(&[("org/repo", true, true), ("org/unbound", true, true)]);
+
+    let due = channel_queues_due(&pool, &active, at(NOW)).await.unwrap();
+    // Pull requests synced two minutes ago wait; issues were never synced.
+    assert_eq!(due, [(repo, ChannelQueue::Issues)]);
+
+    let due = channel_queues_due(&pool, &active, at("2026-11-09T03:03:00Z"))
+        .await
+        .unwrap();
+    assert_eq!(
+        due,
+        [
+            (repo, ChannelQueue::PullRequests),
+            (repo, ChannelQueue::Issues)
+        ]
+    );
+
+    let due = channel_queues_due(&pool, &activity(&[("org/other", true, false)]), at(NOW))
+        .await
+        .unwrap();
+    assert_eq!(due, [(other, ChannelQueue::PullRequests)]);
+    drop_test_schema(pool, schema).await;
+}
+
+#[tokio::test]
+async fn items_name_the_channel_bound_to_their_repository() {
+    let (pool, schema) = test_pool().await.expect("create test database");
+    let _teammate = bind(&pool, "teammate", "org/repo", "someone").await;
+    let mine = bind(&pool, "mine", "Org/Repo", "Octo").await;
+    let github = FakeGithub::new();
+    github.set(
+        vec![
+            subject("1", "org/repo", "PullRequest", true, NOW),
+            subject("2", "org/unbound", "Issue", true, NOW),
+        ],
+        vec![],
+    );
+    sync_with(&pool, at(NOW), github.runner()).await.unwrap();
+    let inbox = load_github_inbox(&pool).await.unwrap();
+    let channels: Vec<_> = inbox
+        .items
+        .iter()
+        .map(|item| (item.thread_id.as_str(), item.channel_id))
+        .collect();
+    // The channel that reviews as the inbox's account wins over an older one.
+    assert_eq!(channels, [("2", None), ("1", Some(mine))]);
+    drop_test_schema(pool, schema).await;
+}
+
+async fn channel_github_unread(pool: &SqlitePool, channel_id: Uuid) -> (i32, bool) {
+    let channel = crate::channels::load_channels(pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|channel| channel.id == channel_id)
+        .unwrap();
+    (
+        channel.github_unread_count,
+        channel.github_unread_from_inbox,
+    )
+}
+
+#[tokio::test]
+async fn a_bound_channel_counts_unread_notifications_once_the_inbox_is_on() {
+    let (pool, schema) = test_pool().await.expect("create test database");
+    let mine = bind(&pool, "mine", "Org/Repo", "octo").await;
+    let teammate = bind(&pool, "teammate", "org/repo", "someone").await;
+    assert_eq!(channel_github_unread(&pool, mine).await, (0, false));
+
+    let github = FakeGithub::new();
+    github.set(
+        vec![
+            subject("1", "org/repo", "PullRequest", true, NOW),
+            subject("2", "org/repo", "Issue", true, NOW),
+            subject("3", "org/repo", "Release", true, NOW),
+            subject("4", "org/other", "PullRequest", true, NOW),
+        ],
+        vec![subject("5", "org/repo", "PullRequest", false, NOW)],
+    );
+    sync_with(&pool, at(NOW), github.runner()).await.unwrap();
+    // Unread pull requests and issues of the repository; not the release.
+    assert_eq!(channel_github_unread(&pool, mine).await, (2, true));
+    // Another login's queue keeps its own review-request count.
+    assert_eq!(channel_github_unread(&pool, teammate).await, (0, false));
+
+    mark_with(&pool, "1", Mark::Read, github.runner())
+        .await
+        .unwrap();
+    assert_eq!(channel_github_unread(&pool, mine).await, (1, true));
+    mark_with(&pool, "2", Mark::Done, github.runner())
+        .await
+        .unwrap();
+    assert_eq!(channel_github_unread(&pool, mine).await, (0, true));
+    drop_test_schema(pool, schema).await;
+}
+
+#[tokio::test]
+async fn marking_a_repository_read_writes_each_unread_thread_to_github() {
+    let (pool, schema) = test_pool().await.expect("create test database");
+    let github = FakeGithub::new();
+    github.set(
+        vec![
+            subject("1", "org/repo", "PullRequest", true, NOW),
+            subject("2", "org/repo", "Issue", true, "2026-11-09T02:00:00Z"),
+            subject("3", "org/repo", "Release", true, NOW),
+            subject("4", "org/other", "PullRequest", true, NOW),
+        ],
+        vec![subject("5", "org/repo", "PullRequest", false, NOW)],
+    );
+    sync_with(&pool, at(NOW), github.runner()).await.unwrap();
+    let cursor = ui_event_cursor(&pool).await.unwrap();
+    let before = github.calls().len();
+
+    mark_repository_read_with(&pool, "Org/Repo", github.runner())
+        .await
+        .unwrap();
+    let writes: Vec<_> = github.calls()[before..]
+        .iter()
+        .map(|args| args.join(" "))
+        .collect();
+    assert_eq!(
+        writes,
+        [
+            "api --method PATCH notifications/threads/1",
+            "api --method PATCH notifications/threads/2",
+        ]
+    );
+    let inbox = load_github_inbox(&pool).await.unwrap();
+    assert_eq!(unread_ids(&inbox), ["4", "3"]);
+    assert!(ui_event_cursor(&pool).await.unwrap() > cursor);
+
+    // An older sync that still reports them unread does not undo the marks.
+    sync_with(&pool, at(NOW), github.runner()).await.unwrap();
+    let inbox = load_github_inbox(&pool).await.unwrap();
+    assert_eq!(unread_ids(&inbox), ["4", "3"]);
+    drop_test_schema(pool, schema).await;
+}
+
+#[tokio::test]
+async fn a_failed_write_keeps_the_threads_github_took() {
+    let (pool, schema) = test_pool().await.expect("create test database");
+    let github = FakeGithub::new();
+    github.set(
+        vec![
+            subject("1", "org/repo", "PullRequest", true, NOW),
+            subject("2", "org/repo", "Issue", true, "2026-11-09T02:00:00Z"),
+            subject("3", "org/repo", "Issue", true, "2026-11-09T01:00:00Z"),
+        ],
+        vec![],
+    );
+    sync_with(&pool, at(NOW), github.runner()).await.unwrap();
+    *github.fail_path.lock().unwrap() = Some("notifications/threads/2".to_owned());
+
+    let error = mark_repository_read_with(&pool, "org/repo", github.runner())
+        .await
+        .unwrap_err();
+    assert_eq!(error, "notifications/threads/2 failed");
+    let inbox = load_github_inbox(&pool).await.unwrap();
+    // Thread 1 was written; 2 failed, so 3 was not tried.
+    assert_eq!(unread_ids(&inbox), ["2", "3"]);
     drop_test_schema(pool, schema).await;
 }

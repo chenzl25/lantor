@@ -43,9 +43,9 @@ use crate::application::{
     decisions::{self as decision_commands, AnswerDecisionRequest, DecisionIdRequest},
     github::{
         self as github_commands, BindGithubRepositoryRequest, CreateGithubIssueTaskRequest,
-        CreateGithubReviewTaskRequest, GithubChannelRequest, GithubInboxThreadRequest,
-        GithubIssueRequest, LookupGithubReferencesRequest, RereviewGithubPullRequestRequest,
-        SetGithubReferenceAliasRequest,
+        CreateGithubReviewTaskRequest, GithubChannelRequest, GithubInboxRepositoryRequest,
+        GithubInboxThreadRequest, GithubIssueRequest, LookupGithubReferencesRequest,
+        RereviewGithubPullRequestRequest, SetGithubReferenceAliasRequest,
     },
     inbox::{self as inbox_commands, InboxItemsRequest, MarkChannelReadRequest},
     messages::{
@@ -319,6 +319,10 @@ fn api_router(state: Arc<WebState>) -> Router {
         .route(
             "/api/mark_github_inbox_done",
             post(api_mark_github_inbox_done).layer(CompressionLayer::new()),
+        )
+        .route(
+            "/api/mark_github_inbox_repository_read",
+            post(api_mark_github_inbox_repository_read).layer(CompressionLayer::new()),
         )
         .route(
             "/api/load_github_review_comparisons",
@@ -778,6 +782,16 @@ async fn api_mark_github_inbox_done(
     Json(request): Json<GithubInboxThreadRequest>,
 ) -> Result<impl IntoResponse, Response> {
     github_commands::mark_github_inbox_done(&state.pool, request)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_mark_github_inbox_repository_read(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<GithubInboxRepositoryRequest>,
+) -> Result<impl IntoResponse, Response> {
+    github_commands::mark_github_inbox_repository_read(&state.pool, request)
         .await
         .map(Json)
         .map_err(api_error)

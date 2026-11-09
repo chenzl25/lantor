@@ -229,6 +229,10 @@ export type ApiContract = {
     args: { threadId: string };
     result: GithubInbox;
   };
+  mark_github_inbox_repository_read: {
+    args: { repository: string };
+    result: GithubInbox;
+  };
   load_github_references: {
     args: undefined;
     result: GithubReferences;
@@ -463,6 +467,7 @@ const API_COMMAND_NAMES = {
   refresh_github_inbox: true,
   mark_github_inbox_read: true,
   mark_github_inbox_done: true,
+  mark_github_inbox_repository_read: true,
   load_github_references: true,
   lookup_github_references: true,
   set_github_reference_alias: true,
