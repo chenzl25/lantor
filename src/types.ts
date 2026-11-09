@@ -400,6 +400,33 @@ export type GithubReferenceLookup = {
   error: string | null;
 };
 
+export type GithubInboxItem = {
+  thread_id: string;
+  /** `owner/repo`. */
+  repository: string;
+  /** GitHub's subject type: `PullRequest`, `Issue`, `Release`, `Discussion`, ... */
+  subject_type: string;
+  title: string;
+  number: number | null;
+  /** Web page of the subject, at its latest comment when GitHub names one. */
+  url: string;
+  /** Why the owner gets it: `review_requested`, `mention`, `assign`, `author`, ... */
+  reason: string;
+  unread: boolean;
+  updated_at: string;
+  /** The Lantor thread of a review or issue task for this PR or issue. */
+  thread_root_id: string | null;
+};
+
+export type GithubInbox = {
+  /** Off until the owner first opens the inbox; only then does Lantor poll GitHub. */
+  enabled: boolean;
+  account_login: string;
+  synced_at: string | null;
+  error: string | null;
+  items: GithubInboxItem[];
+};
+
 export type GithubReferences = {
   repositories: GithubReferenceRepository[];
   items: GithubReferenceItem[];
@@ -589,6 +616,8 @@ export type Bootstrap = {
   messages: Message[];
   channel_message_history: ChannelMessageHistory[];
   saved_messages: SavedMessage[];
+  /** The owner's GitHub notifications. Absent in older fixtures. */
+  github_inbox?: GithubInbox;
   dismissed_inbox_items: Record<string, string>;
   read_inbox_items: Record<string, string>;
   artifacts: Artifact[];

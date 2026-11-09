@@ -581,6 +581,32 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         )
         "#,
         r#"
+        create table if not exists github_inbox_state (
+            id integer primary key default 1 check (id = 1),
+            enabled boolean not null default 0,
+            account_login text not null default '',
+            account_checked_at text,
+            synced_at text,
+            attempted_at text,
+            error text
+        )
+        "#,
+        r#"
+        create table if not exists github_inbox_threads (
+            thread_id text primary key not null,
+            repository text not null,
+            subject_type text not null,
+            title text not null,
+            number integer,
+            url text not null,
+            reason text not null,
+            unread boolean not null,
+            github_updated_at text not null,
+            read_updated_at text,
+            done_updated_at text
+        )
+        "#,
+        r#"
         create table if not exists push_announced_items (
             item_key text primary key not null,
             announced_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))

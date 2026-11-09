@@ -27,9 +27,11 @@ import {
   apiInvokeMeasured,
   completeStartupSplash,
   isTauriRuntime,
+  openExternalUrl,
   sendMessage,
   subscribeBackendEvents,
 } from "./apiClient";
+import { githubInboxUnreadCount } from "./github-inbox";
 import type { ApiArgsTuple, ApiCommand, ApiResult } from "./api-contract";
 import { applyUiStatePatch, scopesForRefresh, type UiStateScope } from "./ui-state-sync";
 import { streamingMessages, type StreamingMessageSnapshot } from "./streaming-message-store";
@@ -69,6 +71,7 @@ import { OwnerProfileModal, ownerProfileToForm, type OwnerProfileForm } from "./
 import { DEFAULT_WATCHED_APPS } from "./components/AgentTools";
 import { SavedMessagesModal } from "./components/SavedMessagesModal";
 import { NeedsYouModal } from "./components/NeedsYouModal";
+import { GithubInboxModal } from "./components/GithubInboxModal";
 import { DecisionStore, DecisionStoreContext, deriveNeedsYou } from "./decisions";
 import { isPushTarget, OPEN_TARGET_MESSAGE, parseOpenTargetHash, setAppBadge, syncPushSubscription, type PushTarget } from "./web-push";
 import { SearchModal } from "./components/SearchModal";
@@ -112,6 +115,7 @@ import {
   Reminder,
   RuntimeCheck,
   SavedMessage,
+  GithubInbox,
   SearchResult,
   SearchScope,
   SearchTimeRange,
@@ -855,6 +859,7 @@ function App() {
   const showActivityFeedModal = activeAppModal === "activity";
   const showSavedModal = activeAppModal === "saved";
   const showNeedsYouModal = activeAppModal === "needs";
+  const showGithubInboxModal = activeAppModal === "github";
   /** Closes `modal` if it is the open panel. */
   function dismissAppModal(modal: AppModal) {
     dispatchNavigation({ type: "closePanel", modal });
@@ -2750,6 +2755,7 @@ function App() {
     showSettingsModal,
     showSavedModal,
     showNeedsYouModal,
+    showGithubInboxModal,
     showSearchModal,
     showThread,
   ]);
@@ -2943,6 +2949,7 @@ function App() {
       showSettingsModal ||
       showSavedModal ||
       showNeedsYouModal ||
+      showGithubInboxModal ||
       showSearchModal;
     const isSidebarSwipe = !showThread && !selectedAgentId;
     if (!isMobileViewport() || showMobileSidebar || hasOpenModal) return;
@@ -3061,6 +3068,7 @@ function App() {
     showSettingsModal,
     showSavedModal,
     showNeedsYouModal,
+    showGithubInboxModal,
     showSearchModal,
     showThread,
   ]);
@@ -3284,6 +3292,8 @@ function App() {
     if (!Number.isFinite(readUntilTime)) return items.length;
     return items.filter((item) => new Date(item.created_at).getTime() > readUntilTime).length;
   }, [data?.saved_messages, dismissedActivityFeedItems]);
+
+  const githubInboxUnread = useMemo(() => githubInboxUnreadCount(data?.github_inbox), [data?.github_inbox]);
 
   const decisionStoreRef = useRef<DecisionStore | null>(null);
   if (!decisionStoreRef.current) decisionStoreRef.current = new DecisionStore();
@@ -4156,6 +4166,37 @@ function App() {
     setMobileSidebarFocus("home");
     dispatchNavigation({ type: "openPanel", modal: "saved" });
     void markSavedMessagesRead();
+  }
+
+  function openGithubInboxModal() {
+    setMobileSidebarFocus("home");
+    dispatchNavigation({ type: "openPanel", modal: "github" });
+  }
+
+  function applyGithubInbox(inbox: GithubInbox) {
+    setData((current) => current ? { ...current, github_inbox: inbox } : current);
+  }
+
+  async function refreshGithubInbox() {
+    applyGithubInbox(await apiInvoke("refresh_github_inbox"));
+  }
+
+  async function markGithubInboxRead(threadId: string) {
+    applyGithubInbox(await apiInvoke("mark_github_inbox_read", { threadId }));
+  }
+
+  async function markGithubInboxDone(threadId: string) {
+    applyGithubInbox(await apiInvoke("mark_github_inbox_done", { threadId }));
+  }
+
+  function openGithubUrl(url: string) {
+    void openExternalUrl(url).catch((err) => setAppError(errorMessage(err, "Couldn’t open GitHub")));
+  }
+
+  function openGithubInboxThread(threadRootId: string) {
+    dismissAppModal("github");
+    void revealMessageById(threadRootId)
+      .catch((err) => setAppError(errorMessage(err, "Couldn’t open this thread")));
   }
 
   function openNeedsYouModal() {
@@ -5232,10 +5273,12 @@ function App() {
         channel={channel}
         activityFeedUnreadCount={activityFeedUnreadCount}
         savedUnreadCount={savedUnreadCount}
+        githubUnreadCount={githubInboxUnread}
         needsYouCount={needsYou.count}
         openSearch={openSearchModal}
         openActivityFeed={openActivityFeedModal}
         openSaved={openSavedModal}
+        openGithub={openGithubInboxModal}
         openNeedsYou={openNeedsYouModal}
         mobileFocus={mobileSidebarFocus}
         openCreateChannelModal={() => {
@@ -5330,6 +5373,18 @@ function App() {
         onOpenItem={openSavedMessage}
         onUnsaveItem={unsaveSavedMessage}
         onClose={() => closeAppModal("saved", () => dismissAppModal("saved"))}
+      />
+
+      <GithubInboxModal
+        open={showGithubInboxModal}
+        mobileNavigation={mobileBottomNavigation}
+        inbox={data.github_inbox}
+        onRefresh={refreshGithubInbox}
+        onMarkRead={markGithubInboxRead}
+        onMarkDone={markGithubInboxDone}
+        onOpenUrl={openGithubUrl}
+        onOpenThread={openGithubInboxThread}
+        onClose={() => closeAppModal("github", () => dismissAppModal("github"))}
       />
 
       <NeedsYouModal

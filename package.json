@@ -32,6 +32,7 @@
     "test:composer-drafts": "node tests/composer-drafts.e2e.mjs",
     "test:thread-pages": "node tests/thread-pages.e2e.mjs",
     "test:thread-find": "node tests/thread-find.e2e.mjs",
+    "test:github-inbox": "node tests/github-inbox.e2e.mjs",
     "dev": "vite --host 127.0.0.1",
     "web:backend": "cargo run --manifest-path src-tauri/Cargo.toml -- --web-only",
     "web:dev": "npm run build && npm run web:backend",

@@ -43,8 +43,8 @@ use crate::application::{
     decisions::{self as decision_commands, AnswerDecisionRequest, DecisionIdRequest},
     github::{
         self as github_commands, BindGithubRepositoryRequest, CreateGithubIssueTaskRequest,
-        CreateGithubReviewTaskRequest, GithubChannelRequest, GithubIssueRequest,
-        LookupGithubReferencesRequest, RereviewGithubPullRequestRequest,
+        CreateGithubReviewTaskRequest, GithubChannelRequest, GithubInboxThreadRequest,
+        GithubIssueRequest, LookupGithubReferencesRequest, RereviewGithubPullRequestRequest,
         SetGithubReferenceAliasRequest,
     },
     inbox::{self as inbox_commands, InboxItemsRequest, MarkChannelReadRequest},
@@ -303,6 +303,22 @@ fn api_router(state: Arc<WebState>) -> Router {
         .route(
             "/api/search_channel_wikis",
             post(api_search_channel_wikis).layer(CompressionLayer::new()),
+        )
+        .route(
+            "/api/load_github_inbox",
+            post(api_load_github_inbox).layer(CompressionLayer::new()),
+        )
+        .route(
+            "/api/refresh_github_inbox",
+            post(api_refresh_github_inbox).layer(CompressionLayer::new()),
+        )
+        .route(
+            "/api/mark_github_inbox_read",
+            post(api_mark_github_inbox_read).layer(CompressionLayer::new()),
+        )
+        .route(
+            "/api/mark_github_inbox_done",
+            post(api_mark_github_inbox_done).layer(CompressionLayer::new()),
         )
         .route(
             "/api/load_github_review_comparisons",
@@ -724,6 +740,44 @@ async fn api_load_github_review_comparisons(
     Json(request): Json<GithubChannelRequest>,
 ) -> Result<impl IntoResponse, Response> {
     github_commands::load_github_review_comparisons(&state.pool, request)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_load_github_inbox(
+    State(state): State<Arc<WebState>>,
+) -> Result<impl IntoResponse, Response> {
+    github_commands::load_github_inbox(&state.pool)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_refresh_github_inbox(
+    State(state): State<Arc<WebState>>,
+) -> Result<impl IntoResponse, Response> {
+    github_commands::refresh_github_inbox(&state.pool)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_mark_github_inbox_read(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<GithubInboxThreadRequest>,
+) -> Result<impl IntoResponse, Response> {
+    github_commands::mark_github_inbox_read(&state.pool, request)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_mark_github_inbox_done(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<GithubInboxThreadRequest>,
+) -> Result<impl IntoResponse, Response> {
+    github_commands::mark_github_inbox_done(&state.pool, request)
         .await
         .map(Json)
         .map_err(api_error)

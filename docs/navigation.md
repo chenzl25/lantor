@@ -2,7 +2,8 @@
 
 `App()` in `src/main.tsx` owns which view is showing: the channel, its thread,
 the tab (Chat, Tasks, GitHub, Wiki), the agent panel, the full-screen panel
-(Search, Activity, Saved, Needs you) and, on phones, Home (the sidebar).
+(Search, Activity, Saved, Needs you, GitHub notifications) and, on phones, Home
+(the sidebar).
 
 ## State
 

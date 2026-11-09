@@ -492,6 +492,7 @@ pub(crate) struct Bootstrap {
     pub(crate) messages: Vec<Message>,
     pub(crate) channel_message_history: Vec<ChannelMessageHistory>,
     pub(crate) saved_messages: Vec<SavedMessage>,
+    pub(crate) github_inbox: crate::github::GithubInbox,
     pub(crate) dismissed_inbox_items: HashMap<String, DateTime<Utc>>,
     pub(crate) read_inbox_items: HashMap<String, DateTime<Utc>>,
     pub(crate) artifacts: Vec<Artifact>,

@@ -1,4 +1,4 @@
-export const APP_MODALS = ["search", "activity", "saved", "needs"] as const;
+export const APP_MODALS = ["search", "activity", "saved", "needs", "github"] as const;
 
 /** The full-screen app panels. At most one is open at a time. */
 export type AppModal = (typeof APP_MODALS)[number];

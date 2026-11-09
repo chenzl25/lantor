@@ -2,7 +2,7 @@ import type { Bootstrap } from "./types";
 import { removeChannelsFromBootstrap, savedMessagesWithState, type SnapshotOptimisticState } from "./state-sync";
 
 export type UiStateScope = "owner_profile" | "channels" | "channel_members" | "thread_activities"
-  | "agents" | "saved_messages" | "dismissed_inbox_items" | "read_inbox_items" | "artifacts"
+  | "agents" | "saved_messages" | "github_inbox" | "dismissed_inbox_items" | "read_inbox_items" | "artifacts"
   | "tasks" | "decisions" | "reminders" | "agent_runs" | "agent_work_items"
   | "agent_activities" | "supervisor" | "launch_agent";
 export type UiStatePatch = Partial<Pick<Bootstrap, UiStateScope>>;
@@ -20,6 +20,7 @@ export function scopesForRefresh(reason?: string): UiStateScope[] | null {
   // These only touch the tasks table; thread_activities is a full-history aggregate.
   if (reason === "task_status_updated" || reason === "task_title_updated" || reason === "task_claimed" || reason === "task_ready_for_review") return ["tasks"];
   if (reason.startsWith("task_") || /^github_(issue|review)_task_/.test(reason)) return ["tasks", "channels", "thread_activities"];
+  if (reason === "github_inbox_updated") return ["github_inbox"];
   if (reason.startsWith("github_")) return ["channels"];
   if (reason.startsWith("reminder_")) return ["reminders"];
   if (reason.startsWith("decision_")) return ["decisions"];

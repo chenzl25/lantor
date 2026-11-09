@@ -30,6 +30,7 @@ pub(crate) async fn load_ui_state_in_pool(
                 serde_json::to_value(crate::channels::load_thread_activities(pool).await?)
             }
             "agents" => serde_json::to_value(crate::agent_profile::load_agents(pool).await?),
+            "github_inbox" => serde_json::to_value(crate::github::load_github_inbox(pool).await?),
             "saved_messages" => {
                 serde_json::to_value(crate::message_store::load_saved_messages(pool).await?)
             }
