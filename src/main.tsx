@@ -4752,6 +4752,34 @@ function App() {
     }
   }
 
+  /** Opens the agent's DM and sends the owner's request there. */
+  async function askAgentToFixCli(agent: Agent, body: string) {
+    let channelId: string;
+    try {
+      channelId = await apiInvoke("open_dm_with_agent", { agentId: agent.id });
+      await reloadUiState(["channels", "channel_members"]);
+    } catch (err) {
+      setAppError(errorMessage(err, "Couldn’t open chat"));
+      console.error(err);
+      return;
+    }
+    const optimisticId = addOptimisticOwnerMessage(channelId, null, body, false);
+    dispatchNavigation({ type: "closeAgent" });
+    dispatchNavigation({ type: "goToChannel", channelId, tab: "chat" });
+    try {
+      const persistedMessage = await sendMessage(
+        { messageId: optimisticId, channelId, threadRootId: null, body, asTask: false },
+        [],
+      );
+      settleOptimisticMessage(optimisticId, persistedMessage);
+    } catch (err) {
+      if (!removeOptimisticMessage(optimisticId)) return;
+      updateRootComposerDraft(channelId, () => ({ text: body, attachments: [] }));
+      setAppError(errorMessage(err, "Message not sent"));
+      console.error(err);
+    }
+  }
+
   async function sendReply(bodyOverride?: string, attachmentsOverride?: DraftAttachment[]) {
     const rawBody = bodyOverride ?? replyDraft;
     const attachments = attachmentsOverride ?? replyAttachments;
@@ -5578,6 +5606,7 @@ function App() {
             startEditAgent(agent);
           }}
           onRestart={restartAgent}
+          onAskAgentToFixCli={askAgentToFixCli}
           watchedApps={data.owner_profile.watched_apps ?? DEFAULT_WATCHED_APPS}
           onSaveWatchedApps={async (apps) => {
             await mutate("update_watched_apps", { apps });

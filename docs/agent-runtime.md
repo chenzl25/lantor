@@ -119,6 +119,33 @@ discovery without starting a backend: explicitly set `LANTOR_TOOLS_TEST_DB`
 and `LANTOR_TOOLS_TEST_AGENT`. It opens that database read-only and reports
 counts, not transcripts or environment values.
 
+## CLI updates
+
+Profile shows the installed Claude Code or Codex version under Model
+(`load_cli_version`) and offers **Update to x.y.z** when the npm registry has a
+later release. One install of each CLI serves every agent on that runtime, so
+the check and the update are per runtime, not per agent
+(`application/cli_updates.rs`).
+
+- The installed version comes from `claude --version` or `codex --version` in
+  a login shell, read on every request. The latest version comes from the npm
+  registry manifest of `@anthropic-ai/claude-code` or `@openai/codex`, cached
+  for an hour (ten minutes after a failed fetch). Claude Code follows the
+  `latest` tag unless `autoUpdatesChannel` in its `settings.json` is `stable`.
+- **Update** (`update_cli`) runs the CLI's own `claude update` or
+  `codex update`, which knows how the CLI was installed. It runs in the
+  background in the API process, at most one per runtime, with a five-minute
+  limit; the page polls `load_cli_version` until it finishes.
+- An update counts as failed when the command exits non-zero or the CLI is
+  still older than the latest release afterwards. The page then shows the end
+  of the output, **Try again**, and **Ask @agent to fix it**, which opens the
+  agent's DM and sends the command, versions and output as an owner message.
+- Running agents keep their current process. Each one starts the new version
+  when its warm process next starts: after the ten-minute idle stop or a
+  Restart, resuming the same session.
+- The result of the last update lives in memory and is gone after the app
+  restarts.
+
 ## Run Lifecycle
 
 A run, the work item it carries, and its agent each have a status, and they

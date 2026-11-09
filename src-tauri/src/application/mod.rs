@@ -6,6 +6,7 @@ pub(crate) mod agents;
 pub(crate) mod artifacts;
 pub(crate) mod bootstrap;
 pub(crate) mod channels;
+pub(crate) mod cli_updates;
 pub(crate) mod decisions;
 pub(crate) mod github;
 pub(crate) mod inbox;

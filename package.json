@@ -12,6 +12,7 @@
     "test:ui-panels": "node tests/ui-panels.e2e.mjs",
     "test:agent-loops": "node tests/agent-loops.e2e.mjs",
     "test:agent-tools": "node tests/agent-tools.e2e.mjs",
+    "test:cli-updates": "node tests/cli-updates.e2e.mjs",
     "test:activity": "node tests/activity-feed.e2e.mjs",
     "test:app-shell": "node tests/app-shell.e2e.mjs",
     "test:streaming": "node tests/streaming.e2e.mjs",
