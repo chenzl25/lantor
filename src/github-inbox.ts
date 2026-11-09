@@ -51,18 +51,6 @@ export function githubInboxItemsWithPending(items: readonly GithubInboxItem[], p
     .map((item) => (item.unread && pending.read.has(item.thread_id) ? { ...item, unread: false } : item));
 }
 
-/**
- * Unread threads first, then read ones, each newest first. Threads in
- * `keepWithUnread` (read while the list was open) keep their unread place so
- * rows do not move under the pointer.
- */
-export function orderGithubInboxItems(items: readonly GithubInboxItem[], keepWithUnread: ReadonlySet<string> = new Set()) {
-  const group = (item: GithubInboxItem) => (item.unread || keepWithUnread.has(item.thread_id) ? 0 : 1);
-  return [...items].sort((left, right) => group(left) - group(right)
-    || right.updated_at.localeCompare(left.updated_at)
-    || left.thread_id.localeCompare(right.thread_id));
-}
-
 export function githubInboxCounts(items: readonly GithubInboxItem[]) {
   const counts = Object.fromEntries(GITHUB_INBOX_FILTERS.map(({ id }) => [id, 0])) as Record<GithubInboxFilter, number>;
   for (const item of items) {

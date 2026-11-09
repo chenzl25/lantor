@@ -5951,10 +5951,6 @@ a.code-block-title:hover {
   cursor: default;
 }
 
-.github-notification-list {
-  display: grid;
-  gap: 8px;
-}
 
 .github-resource-tabs button.has-unread mark {
   background: var(--accent-soft);
@@ -14323,37 +14319,131 @@ body.resizing-column * {
   color: var(--status-danger);
 }
 
-/* GitHub inbox: the Activity panel layout with GitHub's filters. */
-.github-inbox-filters {
-  align-items: center;
+/* GitHub inbox: github.com/notifications' layout in a Lantor panel. Filters
+   and repositories sit beside one list; unread rows are brighter and carry a
+   blue dot; read rows stay listed, quieter, until they are done. */
+.github-inbox-panel {
+  grid-template-rows: auto minmax(0, 1fr);
+  height: min(820px, calc(100vh - 56px));
 }
 
-.github-inbox-filters button {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
+.github-inbox-layout {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  min-height: 0;
 }
 
-.github-inbox-filter-count {
-  min-width: 20px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--surface-control-hover);
+.github-inbox-rail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 10px 20px 16px;
+  border-right: 1px solid var(--line);
+  background: var(--activity-feed-filters-bg);
+}
+
+.github-inbox-rail-heading {
+  margin: 0 10px 6px;
+  color: var(--ink-muted);
+  font-size: var(--type-size-caption);
+  font-weight: var(--type-weight-semibold);
+}
+
+.github-inbox-repositories-heading {
+  margin-top: 18px;
+}
+
+.github-inbox-filters,
+.github-inbox-repositories {
+  display: grid;
+  gap: 2px;
+}
+
+.github-inbox-filters button,
+.github-inbox-repositories button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
   color: var(--ink-secondary);
-  font-size: var(--type-size-meta);
+  font-size: var(--type-size-body);
+  font-weight: var(--type-weight-medium);
+  text-align: left;
+}
+
+.github-inbox-filters button:hover,
+.github-inbox-repositories button:hover {
+  background: var(--bg-hover);
+  color: var(--ink-primary);
+}
+
+/* The chosen filter or repository: a tinted row with GitHub's accent bar. */
+.github-inbox-filters button.active,
+.github-inbox-repositories button[aria-pressed="true"] {
+  background: var(--bg-selected-soft);
+  color: var(--ink-primary);
+  font-weight: var(--type-weight-semibold);
+}
+
+.github-inbox-filters button.active::before,
+.github-inbox-repositories button[aria-pressed="true"]::before {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: -7px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  content: "";
+}
+
+.github-inbox-filter-label,
+.github-inbox-repository-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.github-inbox-filter-count,
+.github-inbox-repository-count {
+  flex: 0 0 auto;
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: var(--type-size-caption);
   line-height: 18px;
   text-align: center;
 }
 
-.github-inbox-filters button.active .github-inbox-filter-count {
-  background: var(--surface-control-selected);
-  color: var(--activity-feed-filter-active-ink);
+.github-inbox-filter-count {
+  background: var(--surface-control-hover);
+  color: var(--ink-secondary);
+  font-weight: var(--type-weight-semibold);
 }
 
+.github-inbox-filters button.active .github-inbox-filter-count {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.github-inbox-repository-count {
+  color: var(--ink-muted);
+}
+
+/* Phones pick a repository from this menu; wider screens list them. */
 .github-inbox-repository {
+  display: none;
+  flex: 0 0 auto;
   height: 34px;
-  max-width: 260px;
-  margin-left: auto;
+  max-width: 220px;
   padding: 0 10px;
   border: 1px solid var(--activity-feed-filter-border);
   border-radius: 999px;
@@ -14385,10 +14475,20 @@ body.resizing-column * {
   animation: progress-spin 1.2s linear infinite;
 }
 
+.github-inbox-main {
+  display: grid;
+  grid-auto-rows: max-content;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px 24px;
+  scrollbar-gutter: stable;
+}
+
 .github-inbox-error {
   display: grid;
   gap: 2px;
-  margin: 12px 20px 0;
   padding: 10px 12px;
   border: 1px solid var(--status-danger-border);
   border-radius: 12px;
@@ -14401,13 +14501,93 @@ body.resizing-column * {
   color: var(--ink-secondary);
 }
 
-.github-inbox-type {
-  position: relative;
+.github-inbox-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
   color: var(--ink-muted);
+  font-size: var(--type-size-meta);
 }
 
-.github-inbox-row.unread .github-inbox-type {
+/* Unread only: a pill that turns blue with GitHub's unread dot. */
+.github-inbox-unread-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--activity-feed-filter-border);
+  border-radius: 999px;
+  background: var(--activity-feed-filter-bg);
+  color: var(--ink-secondary);
+  font-size: var(--type-size-meta);
+  font-weight: var(--type-weight-semibold);
+}
+
+.github-inbox-unread-toggle:hover {
   color: var(--ink-primary);
+}
+
+.github-inbox-unread-toggle-dot {
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--ink-muted);
+  border-radius: 999px;
+}
+
+.github-inbox-unread-toggle[aria-pressed="true"] {
+  border-color: var(--accent-soft-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.github-inbox-unread-toggle[aria-pressed="true"] .github-inbox-unread-toggle-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+/* One bordered list with hairline dividers, as on GitHub. */
+.github-inbox-list {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-recessed) 45%, var(--bg-panel));
+}
+
+.github-inbox-row {
+  display: grid;
+  grid-template-areas: "type main reason end";
+  grid-template-columns: 30px minmax(0, 1fr) max-content 88px;
+  align-items: center;
+  column-gap: 14px;
+  padding: 10px 14px 10px 12px;
+  color: inherit;
+  cursor: pointer;
+}
+
+.github-inbox-row + .github-inbox-row {
+  border-top: 1px solid var(--line);
+}
+
+.github-inbox-row.unread {
+  background: var(--bg-panel-strong);
+}
+
+.github-inbox-row:hover {
+  background: var(--bg-hover);
+}
+
+.github-inbox-type {
+  position: relative;
+  display: flex;
+  grid-area: type;
+  align-items: center;
+  align-self: start;
+  justify-content: flex-end;
+  height: 20px;
+  color: var(--ink-muted);
 }
 
 /* Once the PR or issue state is known, the type icon shows it in GitHub's
@@ -14430,41 +14610,108 @@ body.resizing-column * {
   color: var(--status-danger);
 }
 
-/* Unread: a dot left of the type icon, where GitHub puts it. */
+/* Unread: GitHub's blue dot, left of the type icon. */
 .github-inbox-unread-dot {
   position: absolute;
   top: 50%;
-  left: -6px;
+  left: 0;
   width: 8px;
   height: 8px;
   border-radius: 999px;
-  background: var(--activity-feed-unread-bg);
-  box-shadow: var(--activity-feed-unread-shadow);
+  background: var(--accent);
   transform: translateY(-50%);
 }
 
-.github-inbox-row .activity-feed-row-meta .github-reference {
-  color: inherit;
-  font-weight: var(--type-weight-semibold);
-  text-decoration: none;
+.github-inbox-row-main {
+  grid-area: main;
+  min-width: 0;
 }
 
-.github-inbox-row .activity-feed-row-meta .github-reference:hover {
+.github-inbox-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--ink-muted);
+  font-size: var(--type-size-meta);
+  line-height: 20px;
+}
+
+.github-inbox-row-meta .github-reference,
+.github-inbox-row-repository {
+  overflow: hidden;
+  color: inherit;
+  font-weight: var(--type-weight-medium);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.github-inbox-row-meta .github-reference:hover {
+  color: var(--ink-secondary);
   text-decoration: underline;
 }
 
-/* As on GitHub, read threads stay listed but quieter than unread ones. */
-.github-inbox-row:not(.unread) h3 {
+/* Reason and time ride on the meta line only where their columns are gone. */
+.github-inbox-row-inline {
+  display: none;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.github-inbox-row-inline em {
+  font-style: normal;
+}
+
+.github-inbox-row h3 {
+  display: -webkit-box;
+  margin: 1px 0 0;
+  overflow: hidden;
   color: var(--ink-secondary);
-  font-weight: var(--type-weight-medium);
+  font-size: var(--type-size-body);
+  font-weight: var(--type-weight-regular);
+  line-height: 21px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.github-inbox-row.unread h3 {
+  color: var(--ink-primary);
+  font-weight: var(--type-weight-semibold);
+}
+
+.github-inbox-row-reason {
+  grid-area: reason;
+  color: var(--ink-secondary);
+  font-size: var(--type-size-meta);
+  white-space: nowrap;
+}
+
+/* The time, and in its place under the pointer the row's action, as on GitHub. */
+.github-inbox-row-end {
+  display: grid;
+  grid-area: end;
+  align-items: center;
+  justify-items: end;
+}
+
+.github-inbox-row-end > * {
+  grid-area: 1 / 1;
+}
+
+.github-inbox-row-end time {
+  color: var(--ink-muted);
+  font-size: var(--type-size-meta);
+  white-space: nowrap;
 }
 
 .github-inbox-links {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 14px;
-  margin-top: 6px;
+  gap: 4px 14px;
+  margin-top: 4px;
 }
 
 .github-inbox-thread,
@@ -14500,15 +14747,15 @@ body.resizing-column * {
   transition: background 600ms ease-out, box-shadow 600ms ease-out;
 }
 
-/* The row's one action. Opening a thread already marks it read. */
+/* Done, the row's one action. Opening a thread already marks it read. */
 .github-inbox-done {
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: 10px;
+  border-radius: 9px;
   background: transparent;
   color: var(--ink-secondary);
   box-shadow: none;
@@ -14520,7 +14767,6 @@ body.resizing-column * {
   color: var(--activity-feed-action-success-ink);
 }
 
-/* With a mouse, Done shows on the row under the pointer (or in focus), as on GitHub. */
 @media (hover: hover) and (pointer: fine) {
   .github-inbox-row .github-inbox-done {
     opacity: 0;
@@ -14530,13 +14776,31 @@ body.resizing-column * {
   .github-inbox-row:focus-within .github-inbox-done {
     opacity: 1;
   }
+
+  .github-inbox-row:hover .github-inbox-row-end time,
+  .github-inbox-row:focus-within .github-inbox-row-end time {
+    visibility: hidden;
+  }
+}
+
+/* Touch screens always show Done; the reason and time move to the meta line. */
+@media (hover: none), (pointer: coarse) {
+  .github-inbox-row {
+    grid-template-areas: "type main end";
+    grid-template-columns: 30px minmax(0, 1fr) auto;
+  }
+
+  .github-inbox-row-reason,
+  .github-inbox-row-end time {
+    display: none;
+  }
+
+  .github-inbox-row-inline {
+    display: inline-flex;
+  }
 }
 
 @media (max-width: 760px) {
-  .github-inbox-repository {
-    margin-left: 0;
-  }
-
   /* Two icon buttons fit beside the title, unlike Activity's bulk actions. */
   .github-inbox-panel .dialog-header {
     flex-wrap: nowrap;
@@ -14555,6 +14819,71 @@ body.resizing-column * {
     height: 44px;
   }
 
+  /* The rail folds into one scrolling row of filter pills and a menu. */
+  .github-inbox-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .github-inbox-rail {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 12px 14px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .github-inbox-rail-heading,
+  .github-inbox-repositories {
+    display: none;
+  }
+
+  .github-inbox-filters {
+    display: flex;
+    gap: 8px;
+  }
+
+  .github-inbox-filters button {
+    flex: 0 0 auto;
+    min-height: 34px;
+    padding: 0 13px;
+    border: 1px solid var(--activity-feed-filter-border);
+    border-radius: 999px;
+    background: var(--activity-feed-filter-bg);
+    white-space: nowrap;
+  }
+
+  .github-inbox-filters button svg,
+  .github-inbox-filters button.active::before {
+    display: none;
+  }
+
+  .github-inbox-filters button.active {
+    border-color: var(--activity-feed-filter-active-border);
+    background: var(--activity-feed-filter-active-bg);
+    color: var(--activity-feed-filter-active-ink);
+  }
+
+  .github-inbox-repository {
+    display: block;
+  }
+
+  .github-inbox-main {
+    padding: 10px 10px calc(96px + env(safe-area-inset-bottom));
+  }
+
+  .github-inbox-row {
+    column-gap: 10px;
+    padding: 12px 10px 12px 8px;
+  }
+
+  .github-inbox-row h3 {
+    -webkit-line-clamp: 3;
+  }
+
   .github-inbox-done {
     width: 44px;
     height: 44px;
@@ -14570,7 +14899,8 @@ body.resizing-column * {
     margin-block: -13px;
   }
 
-  .github-notifications-read-all {
+  .github-notifications-read-all,
+  .github-inbox-unread-toggle {
     min-height: 44px;
   }
 }

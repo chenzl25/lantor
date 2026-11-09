@@ -19,7 +19,7 @@ import { formatRelativeTime, formatTime } from "../ui-utils";
 import { GithubReferenceLink, GithubStatusIcon, useGithubReferenceItem } from "./GithubReferenceLink";
 
 function SubjectIcon({ type }: { type: string }) {
-  const props = { size: 18, "aria-hidden": true } as const;
+  const props = { size: 16, "aria-hidden": true } as const;
   if (type === "PullRequest") return <GitPullRequest {...props} />;
   if (type === "Issue") return <CircleDot {...props} />;
   if (type === "Release") return <Tag {...props} />;
@@ -64,31 +64,37 @@ export function GithubInboxRow({
   const status = reference ? githubReferenceStatus(reference) : null;
   const threadRootId = item.thread_root_id;
   const showChannel = Boolean(channelName && onOpenChannel);
+  const reason = githubInboxReasonLabel(item.reason);
+  const updated = (
+    <time dateTime={item.updated_at} title={formatTime(item.updated_at)}>
+      {formatRelativeTime(item.updated_at)}
+    </time>
+  );
   return (
     <article
-      className={["activity-feed-row", "github-inbox-row", item.unread ? "unread" : "", highlighted ? "highlighted" : ""]
+      className={["github-inbox-row", item.unread ? "unread" : "", highlighted ? "highlighted" : ""]
         .filter(Boolean).join(" ")}
       data-thread-id={item.thread_id}
       onClick={() => onOpen(item)}
     >
-      <span className="activity-feed-row-avatar github-inbox-type" data-status={status ?? undefined} aria-hidden="true">
+      <span className="github-inbox-type" data-status={status ?? undefined} aria-hidden="true">
         {item.unread && <span className="github-inbox-unread-dot" />}
         {reference && status
-          ? <GithubStatusIcon kind={reference.kind} status={status} size={18} className="github-inbox-type-icon" />
+          ? <GithubStatusIcon kind={reference.kind} status={status} size={16} className="github-inbox-type-icon" />
           : <SubjectIcon type={item.subject_type} />}
       </span>
       <div
-        className="activity-feed-row-main"
+        className="github-inbox-row-main"
         role="button"
         tabIndex={0}
-        aria-label={`Open ${item.title} on GitHub`}
+        aria-label={`${item.unread ? "Unread: " : ""}Open ${item.title} on GitHub`}
         onKeyDown={(event) => {
           if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
           event.preventDefault();
           onOpen(item);
         }}
       >
-        <div className="activity-feed-row-meta">
+        <div className="github-inbox-row-meta">
           {link ? (
             <GithubReferenceLink
               href={item.url}
@@ -103,12 +109,13 @@ export function GithubInboxRow({
               }}
             />
           ) : (
-            <strong>{item.repository}</strong>
+            <span className="github-inbox-row-repository">{item.repository}</span>
           )}
-          <time dateTime={item.updated_at} title={formatTime(item.updated_at)}>
-            {formatRelativeTime(item.updated_at)}
-          </time>
-          <em>{githubInboxReasonLabel(item.reason)}</em>
+          {/* Phones have no reason and time columns; they follow the reference. */}
+          <span className="github-inbox-row-inline">
+            <em>{reason}</em>
+            {updated}
+          </span>
         </div>
         <h3>
           <span>{item.title}</span>
@@ -157,7 +164,10 @@ export function GithubInboxRow({
           </div>
         )}
       </div>
-      <div className="activity-feed-row-actions">
+      <span className="github-inbox-row-reason">{reason}</span>
+      {/* As on GitHub, the row's action takes the time's place under the pointer. */}
+      <div className="github-inbox-row-end">
+        {updated}
         <button
           type="button"
           className="github-inbox-done"
@@ -168,7 +178,7 @@ export function GithubInboxRow({
             onDone(item);
           }}
         >
-          <Check size={18} />
+          <Check size={16} />
         </button>
       </div>
     </article>

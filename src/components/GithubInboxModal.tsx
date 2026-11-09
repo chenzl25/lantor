@@ -1,4 +1,4 @@
-import { ExternalLink, Github, RefreshCw } from "lucide-react";
+import { AtSign, Eye, ExternalLink, Github, type LucideIcon, MessagesSquare, RefreshCw, UserCheck, Users } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   GITHUB_INBOX_FILTERS,
@@ -9,7 +9,7 @@ import {
 } from "../github-inbox";
 import { getGithubReferenceIndex, subscribeGithubReferences } from "../github-references";
 import { useGithubInboxMarks } from "../hooks/useGithubInboxMarks";
-import { useGithubInboxOrder } from "../hooks/useGithubInboxOrder";
+import { useGithubInboxUnreadOnly } from "../hooks/useGithubInboxUnreadOnly";
 import type { Agent, Channel, GithubInbox, GithubInboxItem } from "../types";
 import { formatTime } from "../ui-utils";
 import { DialogHeader } from "./DialogHeader";
@@ -20,6 +20,13 @@ import { GithubReviewDialog, type GithubReviewTarget } from "./GithubReviewDialo
 /** Opening the inbox syncs it when the last sync is older than this. */
 const STALE_AFTER_MS = 30_000;
 const GITHUB_NOTIFICATIONS_URL = "https://github.com/notifications";
+const FILTER_ICONS: Record<GithubInboxFilter, LucideIcon> = {
+  participating: MessagesSquare,
+  review_requested: Eye,
+  assign: UserCheck,
+  mention: AtSign,
+  team_mention: Users,
+};
 
 type GithubInboxModalProps = {
   open: boolean;
@@ -57,6 +64,7 @@ export function GithubInboxModal({
 }: GithubInboxModalProps) {
   const [filter, setFilter] = useState<GithubInboxFilter>("participating");
   const [repository, setRepository] = useState("");
+  const [unreadOnly, setUnreadOnly] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [review, setReview] = useState<{ channelId: string; target: GithubReviewTarget } | null>(null);
   const refreshingRef = useRef(false);
@@ -73,8 +81,8 @@ export function GithubInboxModal({
     () => repositoryItems.filter((item) => matchesGithubInboxFilter(item, filter)),
     [repositoryItems, filter],
   );
-  // Each opening of the panel orders unread threads first again.
-  const visibleItems = useGithubInboxOrder(filteredItems, open);
+  // Newest first, as GitHub lists them; read threads keep their place.
+  const visibleItems = useGithubInboxUnreadOnly(filteredItems, unreadOnly, open);
 
   async function refresh() {
     if (refreshingRef.current) return;
@@ -160,86 +168,140 @@ export function GithubInboxModal({
         </>}
       />
 
-      <div className="activity-feed-filters github-inbox-filters" role="tablist" aria-label="Notification filters">
-        {GITHUB_INBOX_FILTERS.map(({ id, label }) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            aria-selected={filter === id}
-            className={filter === id ? "active" : ""}
-            onClick={() => setFilter(id)}
+      <div className="github-inbox-layout">
+        {/* As on github.com/notifications: filters and repositories beside the list. */}
+        <aside className="github-inbox-rail">
+          <h3 className="github-inbox-rail-heading">Filters</h3>
+          <div
+            className="github-inbox-filters"
+            role="tablist"
+            aria-label="Notification filters"
+            aria-orientation="vertical"
           >
-            {label}
-            {counts[id] > 0 && <span className="github-inbox-filter-count">{counts[id]}</span>}
-          </button>
-        ))}
-        {repositories.length > 1 && (
-          <select
-            className="github-inbox-repository"
-            aria-label="Repository"
-            value={repository}
-            onChange={(event) => setRepository(event.target.value)}
-          >
-            <option value="">All repositories</option>
-            {repositories.map((entry) => (
-              <option key={entry.repository} value={entry.repository}>
-                {entry.repository}{entry.unread > 0 ? ` (${entry.unread})` : ""}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
-
-      {error && (
-        <div className="github-inbox-error" role="alert">
-          <span>{error}</span>
-          {!actionError && inbox?.error && <small>Lantor reads notifications with the GitHub CLI; check <code>gh auth status</code>.</small>}
-        </div>
-      )}
-
-      <div className="activity-feed-body">
-        {visibleItems.length === 0 && (
-          <div className="search-empty">
-            <Github size={34} />
-            {!inbox?.enabled || (refreshing && items.length === 0) ? (
-              <>
-                <h3>{refreshing ? "Loading notifications" : "GitHub notifications"}</h3>
-                <p>Review requests, mentions and threads you take part in, from every repository.</p>
-              </>
-            ) : (
-              <>
-                <h3>Nothing here</h3>
-                <p>{filter === "participating" ? "No notifications you take part in." : "No notifications for this filter."}</p>
-              </>
-            )}
+            {GITHUB_INBOX_FILTERS.map(({ id, label }) => {
+              const Icon = FILTER_ICONS[id];
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={filter === id}
+                  className={filter === id ? "active" : ""}
+                  onClick={() => setFilter(id)}
+                >
+                  <Icon size={15} aria-hidden="true" />
+                  <span className="github-inbox-filter-label">{label}</span>
+                  {counts[id] > 0 && <span className="github-inbox-filter-count">{counts[id]}</span>}
+                </button>
+              );
+            })}
           </div>
-        )}
+          {repositories.length > 1 && (
+            <>
+              <h3 className="github-inbox-rail-heading github-inbox-repositories-heading">Repositories</h3>
+              <div className="github-inbox-repositories" role="group" aria-label="Repositories">
+                {repositories.map((entry) => (
+                  <button
+                    key={entry.repository}
+                    type="button"
+                    aria-pressed={repository === entry.repository}
+                    title={entry.repository}
+                    onClick={() => setRepository((current) => (current === entry.repository ? "" : entry.repository))}
+                  >
+                    <span className="github-inbox-repository-name">{entry.repository}</span>
+                    <span className="github-inbox-repository-count">{entry.total}</span>
+                  </button>
+                ))}
+              </div>
+              {/* Phones choose a repository from a menu instead. */}
+              <select
+                className="github-inbox-repository"
+                aria-label="Repository"
+                value={repository}
+                onChange={(event) => setRepository(event.target.value)}
+              >
+                <option value="">All repositories</option>
+                {repositories.map((entry) => (
+                  <option key={entry.repository} value={entry.repository}>
+                    {entry.repository}{entry.unread > 0 ? ` (${entry.unread})` : ""}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+        </aside>
 
-        {visibleItems.map((item) => {
-          // The channel's GitHub tab lists pull requests and issues, not releases or advisories.
-          const listedInChannel = item.number !== null
-            && (item.subject_type === "PullRequest" || item.subject_type === "Issue");
-          const channelName = item.channel_id && listedInChannel ? channelNames.get(item.channel_id) ?? null : null;
-          const reviewable = item.subject_type === "PullRequest" && item.number !== null && channelName !== null
-            && !item.thread_root_id && reviewAgents(item.channel_id!).length > 0;
-          return (
-            <GithubInboxRow
-              key={item.thread_id}
-              item={item}
-              references={references}
-              channelName={channelName}
-              onOpen={openItem}
-              onDone={(target) => void mark(target, "done")}
-              onOpenThread={(target, threadRootId) => {
-                if (target.unread) void mark(target, "read");
-                onOpenThread(threadRootId);
-              }}
-              onOpenChannel={onOpenChannel}
-              onReview={reviewable ? startReview : undefined}
-            />
-          );
-        })}
+        <div className="github-inbox-main">
+          {error && (
+            <div className="github-inbox-error" role="alert">
+              <span>{error}</span>
+              {!actionError && inbox?.error && <small>Lantor reads notifications with the GitHub CLI; check <code>gh auth status</code>.</small>}
+            </div>
+          )}
+
+          <div className="github-inbox-toolbar">
+            <span>
+              {visibleItems.length} {visibleItems.length === 1 ? "notification" : "notifications"}
+            </span>
+            <button
+              type="button"
+              className="github-inbox-unread-toggle"
+              aria-pressed={unreadOnly}
+              onClick={() => setUnreadOnly((current) => !current)}
+            >
+              <span className="github-inbox-unread-toggle-dot" aria-hidden="true" />
+              Unread only
+            </button>
+          </div>
+
+          {visibleItems.length === 0 ? (
+            <div className="search-empty">
+              <Github size={34} />
+              {!inbox?.enabled || (refreshing && items.length === 0) ? (
+                <>
+                  <h3>{refreshing ? "Loading notifications" : "GitHub notifications"}</h3>
+                  <p>Review requests, mentions and threads you take part in, from every repository.</p>
+                </>
+              ) : (
+                <>
+                  <h3>Nothing here</h3>
+                  <p>
+                    {unreadOnly
+                      ? "No unread notifications here."
+                      : filter === "participating" ? "No notifications you take part in." : "No notifications for this filter."}
+                  </p>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="github-inbox-list">
+              {visibleItems.map((item) => {
+                // The channel's GitHub tab lists pull requests and issues, not releases or advisories.
+                const listedInChannel = item.number !== null
+                  && (item.subject_type === "PullRequest" || item.subject_type === "Issue");
+                const channelName = item.channel_id && listedInChannel ? channelNames.get(item.channel_id) ?? null : null;
+                const reviewable = item.subject_type === "PullRequest" && item.number !== null && channelName !== null
+                  && !item.thread_root_id && reviewAgents(item.channel_id!).length > 0;
+                return (
+                  <GithubInboxRow
+                    key={item.thread_id}
+                    item={item}
+                    references={references}
+                    channelName={channelName}
+                    onOpen={openItem}
+                    onDone={(target) => void mark(target, "done")}
+                    onOpenThread={(target, threadRootId) => {
+                      if (target.unread) void mark(target, "read");
+                      onOpenThread(threadRootId);
+                    }}
+                    onOpenChannel={onOpenChannel}
+                    onReview={reviewable ? startReview : undefined}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
       {mobileNavigation}
       <GithubReviewDialog
