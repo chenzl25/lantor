@@ -74,6 +74,12 @@ pub(crate) struct GithubInboxThreadRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct GithubInboxRepositoryRequest {
+    pub(crate) repository: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct SetGithubReferenceAliasRequest {
     pub(crate) channel_id: Uuid,
     pub(crate) alias: String,
@@ -129,6 +135,13 @@ pub(crate) async fn mark_github_inbox_done(
     request: GithubInboxThreadRequest,
 ) -> CommandResult<crate::github::GithubInbox> {
     crate::github::mark_github_inbox_done(pool, &request.thread_id).await
+}
+
+pub(crate) async fn mark_github_inbox_repository_read(
+    pool: &SqlitePool,
+    request: GithubInboxRepositoryRequest,
+) -> CommandResult<crate::github::GithubInbox> {
+    crate::github::mark_github_inbox_repository_read(pool, &request.repository).await
 }
 
 pub(crate) async fn load_github_review_queue(

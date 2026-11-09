@@ -34,8 +34,9 @@ pub(crate) use comparisons::{
     load_github_commits_ahead, load_github_review_comparisons, GithubReviewComparisons,
 };
 pub(crate) use inbox::{
-    load_github_inbox, mark_github_inbox_done, mark_github_inbox_read, refresh_github_inbox,
-    spawn_github_inbox_poller, GithubInbox,
+    load_github_inbox, mark_github_inbox_done, mark_github_inbox_read,
+    mark_github_inbox_repository_read, refresh_github_inbox, spawn_github_inbox_poller,
+    GithubInbox,
 };
 
 const GITHUB_CLI_TIMEOUT: Duration = Duration::from_secs(30);

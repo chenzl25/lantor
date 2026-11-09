@@ -19,8 +19,11 @@ export function scopesForRefresh(reason?: string): UiStateScope[] | null {
   if (reason === "inbox_read" || reason === "inbox_archived") return ["agents"];
   // These only touch the tasks table; thread_activities is a full-history aggregate.
   if (reason === "task_status_updated" || reason === "task_title_updated" || reason === "task_claimed" || reason === "task_ready_for_review") return ["tasks"];
-  if (reason.startsWith("task_") || /^github_(issue|review)_task_/.test(reason)) return ["tasks", "channels", "thread_activities"];
-  if (reason === "github_inbox_updated") return ["github_inbox"];
+  if (reason.startsWith("task_")) return ["tasks", "channels", "thread_activities"];
+  // A review or issue task links its pull request or issue in the GitHub inbox.
+  if (/^github_(issue|review)_task_/.test(reason)) return ["tasks", "channels", "thread_activities", "github_inbox"];
+  // Bound channels count the inbox's unread threads; inbox threads name their channel.
+  if (reason === "github_inbox_updated" || reason === "github_repository_bound") return ["github_inbox", "channels"];
   if (reason.startsWith("github_")) return ["channels"];
   if (reason.startsWith("reminder_")) return ["reminders"];
   if (reason.startsWith("decision_")) return ["decisions"];

@@ -5862,13 +5862,22 @@ a.code-block-title:hover {
   width: fit-content;
   max-width: 100%;
   padding: 3px;
+  /* Three tabs outgrow a phone; the row scrolls instead of the panel. */
+  overflow-x: auto;
+  scrollbar-width: none;
   border: 1px solid var(--line);
   border-radius: 13px;
   background: var(--bg-control-flat);
 }
 
+.github-resource-tabs::-webkit-scrollbar {
+  display: none;
+}
+
 .github-resource-tabs button {
   display: inline-flex;
+  flex: none;
+  white-space: nowrap;
   min-height: 36px;
   align-items: center;
   gap: 7px;
@@ -5908,6 +5917,64 @@ a.code-block-title:hover {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+/* Notifications: the bound repository's threads from the GitHub inbox. */
+.github-notifications-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--type-size-meta);
+}
+
+.github-notifications-read-all {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--bg-control-flat);
+  color: var(--ink);
+  font-size: var(--type-size-meta);
+  font-weight: var(--type-weight-semibold);
+}
+
+.github-notifications-read-all:hover:not(:disabled) {
+  border-color: var(--control-border);
+  background: var(--bg-control-hover);
+}
+
+.github-notifications-read-all:disabled {
+  color: var(--ink-disabled);
+  cursor: default;
+}
+
+.github-notification-list {
+  display: grid;
+  gap: 8px;
+}
+
+.github-resource-tabs button.has-unread mark {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.github-pull-eyebrow mark.notification,
+.github-issue-eyebrow mark.notification {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.github-pull-card.unread,
+.github-issue-card.unread {
+  border-color: var(--accent-soft-border);
+}
+
+.github-pull-card.unread .github-card-title-text,
+.github-issue-card.unread .github-card-title-text {
+  font-weight: var(--type-weight-bold);
 }
 
 .github-issue-filters {
@@ -14328,11 +14395,20 @@ body.resizing-column * {
   font-weight: var(--type-weight-medium);
 }
 
-.github-inbox-thread {
+.github-inbox-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin-top: 6px;
+}
+
+.github-inbox-thread,
+.github-inbox-channel,
+.github-inbox-review {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin-top: 6px;
   padding: 0;
   border: 0;
   background: none;
@@ -14341,9 +14417,23 @@ body.resizing-column * {
   font-weight: var(--type-weight-semibold);
 }
 
-.github-inbox-thread:hover {
+.github-inbox-review {
+  color: var(--accent);
+}
+
+.github-inbox-thread:hover,
+.github-inbox-channel:hover,
+.github-inbox-review:hover {
   color: var(--ink-primary);
   text-decoration: underline;
+}
+
+/* A thread opened from the GitHub inbox, in its channel's GitHub tab. */
+.github-inbox-row.highlighted,
+.github-inbox-row.highlighted:hover {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-soft-border);
+  transition: background 600ms ease-out, box-shadow 600ms ease-out;
 }
 
 .github-inbox-done:hover {

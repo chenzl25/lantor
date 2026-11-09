@@ -45,14 +45,48 @@ again, as on GitHub.
 ## Lantor threads
 
 A pull request or issue with a review or issue task in a channel bound to its
-repository (`github_resource_threads`) shows **Open Lantor thread**.
+repository (`github_resource_threads`) shows **Open Lantor thread**. A pull
+request without one, in a bound repository, shows **Review with agent**: it
+starts the same review task as the channel's GitHub tab, in that channel.
+
+## Channels
+
+A thread in a repository bound to a channel names that channel (`channel_id`;
+with several, the one that reviews as the inbox's account, then the oldest).
+The channel chip opens the channel's GitHub tab at the thread.
+
+Once the inbox is on for the account a channel reviews as
+(`github_unread_from_inbox`), the inbox is that channel's GitHub unread state:
+
+- The GitHub tab's badge counts the unread pull request and issue threads of
+  the bound repository (`github_unread_count` in `channels.rs`). Opening the
+  tab no longer clears it; reading a thread on either side does, on GitHub
+  too. Until then, and for a channel that reviews as another login, the badge
+  counts review requests not seen yet and clears when the tab opens.
+- The tab's **Notifications** view lists those threads with the inbox's row,
+  read and Done, and **Mark all read**, which writes each unread one to GitHub
+  in turn (`mark_github_inbox_repository_read`). A thread GitHub took stays
+  read when a later one fails.
+- Pull request and issue cards with an unread thread show its reason; opening
+  one marks the thread read.
+
+A sync reports the repositories whose pull request or issue threads are new or
+updated. Each channel bound to one refreshes that queue in the background
+(pull requests, issues, or both), at most every five minutes per queue: a full
+pull request refresh of a busy repository costs about a hundred GraphQL points.
+Each refresh publishes `github_channel_queue_refreshed`, and an open tab
+reloads when the channel's `github_review_synced_at` or
+`github_issue_synced_at` changes.
 
 ## Data path
 
-`github_inbox` is a bootstrap collection and a `load_ui_state` scope; the
-`github_inbox_updated` refresh reloads only that scope. The panel's actions
-return the stored inbox, so the panel updates without waiting for the event.
+`github_inbox` is a bootstrap collection and a `load_ui_state` scope. The
+`github_inbox_updated` refresh reloads it and `channels`, whose GitHub badges
+count it; `github_repository_bound` does the same, and a new review or issue
+task also reloads the inbox for its thread link. The panel's actions return the
+stored inbox, so the panel updates without waiting for the event.
 
-`npm run test:github-inbox` checks the panel in Chromium, WebKit and an iPhone
-viewport against a synthetic API; `cargo test github::inbox` covers sync,
-marks, failures and account changes with a fake `gh`.
+`npm run test:github-inbox` checks the panel, and a bound channel's GitHub
+tab, in Chromium, WebKit and an iPhone viewport against a synthetic API;
+`cargo test github::inbox` covers sync, marks, channel counts, background
+refresh planning, failures and account changes with a fake `gh`.

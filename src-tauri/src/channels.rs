@@ -113,6 +113,18 @@ pub(crate) async fn load_channels(pool: &SqlitePool) -> CommandResult<Vec<Channe
                    min(case when thread_root_id is null then seq end) as first_unread_root_seq
             from unread_messages
             group by channel_id
+        ), github_sources as (
+            -- Once the GitHub inbox is on for the account a channel reviews
+            -- as, its notifications are the channel's GitHub unread state.
+            select b.channel_id, b.name_with_owner, b.review_attention_synced_at,
+                   b.issue_queue_synced_at,
+                   coalesce((
+                       select s.enabled and s.account_login <> ''
+                              and lower(s.account_login) = lower(b.review_login)
+                       from github_inbox_state s
+                       where s.id = 1
+                   ), 0) as from_inbox
+            from channel_github_repositories b
         )
         select
             c.id,
@@ -124,20 +136,28 @@ pub(crate) async fn load_channels(pool: &SqlitePool) -> CommandResult<Vec<Channe
             coalesce(unread_counts.unread_count, 0) as unread_count,
             coalesce(unread_counts.agent_unread_count, 0) as agent_unread_count,
             unread_counts.first_unread_root_seq,
-            cast((
-                select count(*)
-                from github_review_request_cache review_attention
-                where review_attention.channel_id = c.id
-                  and review_attention.is_review_requested
-                  and review_attention.attention_unread
-            ) as integer) as github_unread_count,
-            (
-                select review_attention_synced_at
-                from channel_github_repositories github_binding
-                where github_binding.channel_id = c.id
-            ) as github_review_synced_at
+            cast(case
+                when github_sources.from_inbox then (
+                    select count(*)
+                    from github_inbox_threads notification
+                    where lower(notification.repository) = lower(github_sources.name_with_owner)
+                      and notification.unread
+                      and notification.subject_type in ('PullRequest', 'Issue')
+                )
+                else (
+                    select count(*)
+                    from github_review_request_cache review_attention
+                    where review_attention.channel_id = c.id
+                      and review_attention.is_review_requested
+                      and review_attention.attention_unread
+                )
+            end as integer) as github_unread_count,
+            coalesce(github_sources.from_inbox, 0) as github_unread_from_inbox,
+            github_sources.review_attention_synced_at as github_review_synced_at,
+            github_sources.issue_queue_synced_at as github_issue_synced_at
         from channels c
         left join unread_counts on unread_counts.channel_id = c.id
+        left join github_sources on github_sources.channel_id = c.id
         order by
           case
             when c.kind = 'channel' and c.name = 'lantor' then 0
@@ -163,7 +183,9 @@ pub(crate) async fn load_channels(pool: &SqlitePool) -> CommandResult<Vec<Channe
             agent_unread_count: row.get("agent_unread_count"),
             first_unread_root_seq: row.get("first_unread_root_seq"),
             github_unread_count: row.get("github_unread_count"),
+            github_unread_from_inbox: row.get("github_unread_from_inbox"),
             github_review_synced_at: row.get("github_review_synced_at"),
+            github_issue_synced_at: row.get("github_issue_synced_at"),
             latest_message_at: row.get("latest_message_at"),
         })
         .collect())

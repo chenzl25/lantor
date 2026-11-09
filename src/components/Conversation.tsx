@@ -37,7 +37,7 @@ import { ActivityProgressDock, activeProgressByAgent, indexProgress, type Active
 import { AgentAvatar, AgentAvatarWithProfile } from "./AgentAvatar";
 import { ComposerReferenceTextarea } from "./ComposerReferenceTextarea";
 import { DraftAttachmentsPreview } from "./DraftAttachmentsPreview";
-import { GithubPanel } from "./GithubPanel";
+import { GithubPanel, type GithubPanelInboxProps } from "./GithubPanel";
 import { WikiPanel } from "./WikiPanel";
 import { MessageActionMenu } from "./MessageActionMenu";
 import { MessageRow, type MessageRowActions, type MessageRowAction } from "./MessageRow";
@@ -87,6 +87,7 @@ type ConversationProps = {
   openTask: (task: Task) => void;
   createGithubReviewTask: (pullNumber: number, agentId: string) => Promise<GithubReviewTaskResult>;
   createGithubIssueTask: (issueNumber: number, agentId: string) => Promise<GithubIssueTaskResult>;
+  githubInbox: GithubPanelInboxProps;
   setDraft: (value: string) => void;
   addDraftAttachments: (files: FileList | File[]) => void;
   removeDraftAttachment: (id: string) => void;
@@ -162,6 +163,7 @@ export function Conversation({
   openTask,
   createGithubReviewTask,
   createGithubIssueTask,
+  githubInbox,
   setDraft,
   addDraftAttachments,
   removeDraftAttachment,
@@ -623,6 +625,7 @@ export function Conversation({
         channel ? <WikiPanel channel={channel} /> : null
       ) : channel ? (
         <GithubPanel
+          {...githubInbox}
           channel={channel}
           agents={taskAssigneeOptions}
           onCreateReviewTask={createGithubReviewTask}

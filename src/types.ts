@@ -109,8 +109,15 @@ export type Channel = {
   agent_unread_count?: number;
   /** Seq of the first unread top-level message; thread replies do not count. */
   first_unread_root_seq?: number | null;
+  /**
+   * Unread pull request and issue notifications of the bound repository when
+   * `github_unread_from_inbox`, else review requests not seen yet.
+   */
   github_unread_count: number;
+  /** The GitHub inbox is on for the account the channel reviews as. */
+  github_unread_from_inbox: boolean;
   github_review_synced_at: string | null;
+  github_issue_synced_at: string | null;
   latest_message_at?: string | null;
 };
 
@@ -416,6 +423,8 @@ export type GithubInboxItem = {
   updated_at: string;
   /** The Lantor thread of a review or issue task for this PR or issue. */
   thread_root_id: string | null;
+  /** The channel bound to the repository. */
+  channel_id: string | null;
 };
 
 export type GithubInbox = {

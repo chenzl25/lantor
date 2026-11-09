@@ -9,7 +9,7 @@
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
-    sync::LazyLock,
+    sync::{LazyLock, Mutex as StdMutex},
     time::Duration,
 };
 
@@ -19,10 +19,12 @@ use sqlx::{Row, SqlitePool};
 use tokio::{sync::Mutex, time::sleep};
 use uuid::Uuid;
 
-use super::{parse_json, run_github_cli};
+use super::{
+    parse_json, refresh_github_channel_overview, refresh_github_issue_overview, run_github_cli,
+};
 use crate::{
     app::{to_string, CommandResult},
-    ui_notifications::{enqueue_ui_event_in_tx, UiEvent},
+    ui_notifications::{enqueue_ui_event, enqueue_ui_event_in_tx, UiEvent},
 };
 
 /// GitHub asks clients to poll notifications at most once a minute.
@@ -35,9 +37,17 @@ const RECENT_THREAD_LIMIT: usize = 50;
 const UNREAD_PAGE_SIZE: usize = 100;
 const UNREAD_PAGE_LIMIT: usize = 5;
 const UPDATED_REASON: &str = "github_inbox_updated";
+const CHANNEL_QUEUE_REFRESHED_REASON: &str = "github_channel_queue_refreshed";
+/// Least time between two background refreshes of one channel queue. A full
+/// pull request refresh of a busy repository costs about a hundred GraphQL
+/// points, so a refresh per minute could use up the account's hourly budget.
+const CHANNEL_QUEUE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// One sync at a time, so the poller and a manual refresh do not both call GitHub.
 static SYNC_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+/// Channel queues being refreshed in the background.
+static REFRESHING_QUEUES: LazyLock<StdMutex<HashSet<(Uuid, ChannelQueue)>>> =
+    LazyLock::new(StdMutex::default);
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct GithubInboxItem {
@@ -55,6 +65,9 @@ pub(crate) struct GithubInboxItem {
     pub(crate) updated_at: String,
     /// The Lantor thread of a review or issue task for this PR or issue.
     pub(crate) thread_root_id: Option<Uuid>,
+    /// The channel bound to the repository, preferring one that reviews as the
+    /// inbox's account.
+    pub(crate) channel_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -256,7 +269,18 @@ const VISIBLE_THREADS: &str = r#"
                 end
             order by t.updated_at desc
             limit 1
-        ) as thread_root_id
+        ) as thread_root_id,
+        (
+            select b.channel_id
+            from channel_github_repositories b
+            where lower(b.name_with_owner) = lower(n.repository)
+            order by lower(b.review_login) = lower(coalesce(
+                    (select s.account_login from github_inbox_state s where s.id = 1),
+                    ''
+                )) desc,
+                b.created_at, b.channel_id
+            limit 1
+        ) as channel_id
     from github_inbox_threads n
     where n.done_updated_at is null or n.github_updated_at > n.done_updated_at
     order by n.github_updated_at desc, n.thread_id desc
@@ -283,6 +307,7 @@ where
             unread: row.get("unread"),
             updated_at: row.get("github_updated_at"),
             thread_root_id: row.get("thread_root_id"),
+            channel_id: row.get("channel_id"),
         })
         .collect())
 }
@@ -301,11 +326,26 @@ pub(crate) async fn load_github_inbox(pool: &SqlitePool) -> CommandResult<Github
 /// Reads the owner's notifications from GitHub and stores them. Also turns the
 /// inbox on, so the poller keeps it current from then on.
 pub(crate) async fn refresh_github_inbox(pool: &SqlitePool) -> CommandResult<GithubInbox> {
-    sync_with(pool, Utc::now(), run_github_cli).await?;
+    let activity = sync_with(pool, Utc::now(), run_github_cli).await?;
+    spawn_channel_queue_refreshes(pool.clone(), activity);
     load_github_inbox(pool).await
 }
 
-async fn sync_with<F, Fut>(pool: &SqlitePool, now: DateTime<Utc>, run: F) -> CommandResult<()>
+/// Repositories whose pull requests or issues have new activity since the
+/// previous sync, by lowercase `owner/repo`.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct RepositoryActivity {
+    pull_requests: bool,
+    issues: bool,
+}
+
+type InboxActivity = HashMap<String, RepositoryActivity>;
+
+async fn sync_with<F, Fut>(
+    pool: &SqlitePool,
+    now: DateTime<Utc>,
+    run: F,
+) -> CommandResult<InboxActivity>
 where
     F: Fn(Vec<String>) -> Fut,
     Fut: Future<Output = CommandResult<Vec<u8>>>,
@@ -394,7 +434,8 @@ where
     })
 }
 
-struct LocalMarks {
+struct StoredThread {
+    github_updated_at: String,
     read_updated_at: Option<String>,
     done_updated_at: Option<String>,
 }
@@ -403,7 +444,7 @@ async fn apply_snapshot(
     pool: &SqlitePool,
     snapshot: Snapshot,
     synced_at: &str,
-) -> CommandResult<()> {
+) -> CommandResult<InboxActivity> {
     let mut transaction = pool
         .begin_with("BEGIN IMMEDIATE")
         .await
@@ -426,27 +467,44 @@ async fn apply_snapshot(
             .map_err(to_string)?;
     }
 
-    let marks: HashMap<String, LocalMarks> =
-        sqlx::query("select thread_id, read_updated_at, done_updated_at from github_inbox_threads")
-            .fetch_all(&mut *transaction)
-            .await
-            .map_err(to_string)?
-            .into_iter()
-            .map(|row| {
-                (
-                    row.get("thread_id"),
-                    LocalMarks {
-                        read_updated_at: row.get("read_updated_at"),
-                        done_updated_at: row.get("done_updated_at"),
-                    },
-                )
-            })
-            .collect();
+    let marks: HashMap<String, StoredThread> = sqlx::query(
+        "select thread_id, github_updated_at, read_updated_at, done_updated_at \
+         from github_inbox_threads",
+    )
+    .fetch_all(&mut *transaction)
+    .await
+    .map_err(to_string)?
+    .into_iter()
+    .map(|row| {
+        (
+            row.get("thread_id"),
+            StoredThread {
+                github_updated_at: row.get("github_updated_at"),
+                read_updated_at: row.get("read_updated_at"),
+                done_updated_at: row.get("done_updated_at"),
+            },
+        )
+    })
+    .collect();
 
+    let mut activity = InboxActivity::new();
     let mut kept = HashSet::new();
     for thread in &snapshot.threads {
         kept.insert(thread.thread_id.as_str());
         let local = marks.get(&thread.thread_id);
+        let is_new_activity = local
+            .is_none_or(|stored| thread.updated_at.as_str() > stored.github_updated_at.as_str());
+        if is_new_activity {
+            let pull_request = thread.subject_type == "PullRequest";
+            let issue = thread.subject_type == "Issue";
+            if pull_request || issue {
+                let entry = activity
+                    .entry(thread.repository.to_lowercase())
+                    .or_default();
+                entry.pull_requests |= pull_request;
+                entry.issues |= issue;
+            }
+        }
         // Read in Lantor since its last activity, though this sync may have
         // started before GitHub took the write.
         let read_locally = local
@@ -521,7 +579,8 @@ async fn apply_snapshot(
         )
         .await?;
     }
-    transaction.commit().await.map_err(to_string)
+    transaction.commit().await.map_err(to_string)?;
+    Ok(activity)
 }
 
 async fn record_error(pool: &SqlitePool, error: &str) -> CommandResult<()> {
@@ -636,6 +695,191 @@ where
     transaction.commit().await.map_err(to_string)
 }
 
+/// Marks every unread pull request and issue thread of a repository read, on
+/// GitHub and then in Lantor: what a channel bound to it counts as unread.
+pub(crate) async fn mark_github_inbox_repository_read(
+    pool: &SqlitePool,
+    repository: &str,
+) -> CommandResult<GithubInbox> {
+    mark_repository_read_with(pool, repository, run_github_cli).await?;
+    load_github_inbox(pool).await
+}
+
+async fn mark_repository_read_with<F, Fut>(
+    pool: &SqlitePool,
+    repository: &str,
+    run: F,
+) -> CommandResult<()>
+where
+    F: Fn(Vec<String>) -> Fut,
+    Fut: Future<Output = CommandResult<Vec<u8>>>,
+{
+    let repository = repository.trim();
+    if repository.is_empty() {
+        return Err("repository is required".to_owned());
+    }
+    let thread_ids: Vec<String> = sqlx::query_scalar(
+        r#"
+        select thread_id from github_inbox_threads
+        where lower(repository) = lower($1)
+          and unread
+          and subject_type in ('PullRequest', 'Issue')
+        order by github_updated_at desc, thread_id desc
+        "#,
+    )
+    .bind(repository)
+    .fetch_all(pool)
+    .await
+    .map_err(to_string)?;
+
+    // GitHub asks for writes one at a time. Threads GitHub took stay read
+    // here even when a later one fails.
+    let mut marked = Vec::with_capacity(thread_ids.len());
+    let mut failure = None;
+    for thread_id in thread_ids.iter().filter(|id| is_thread_id(id)) {
+        match run(vec![
+            "api".to_owned(),
+            "--method".to_owned(),
+            "PATCH".to_owned(),
+            format!("notifications/threads/{thread_id}"),
+        ])
+        .await
+        {
+            Ok(_) => marked.push(thread_id),
+            Err(error) => {
+                failure = Some(error);
+                break;
+            }
+        }
+    }
+
+    if !marked.is_empty() {
+        let mut transaction = pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(to_string)?;
+        for thread_id in marked {
+            sqlx::query(
+                "update github_inbox_threads set unread = 0, read_updated_at = github_updated_at \
+                 where thread_id = $1",
+            )
+            .bind(thread_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(to_string)?;
+        }
+        enqueue_ui_event_in_tx(
+            &mut transaction,
+            &UiEvent::Refresh {
+                reason: UPDATED_REASON,
+            },
+        )
+        .await?;
+        transaction.commit().await.map_err(to_string)?;
+    }
+    failure.map_or(Ok(()), Err)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ChannelQueue {
+    PullRequests,
+    Issues,
+}
+
+/// The channel queues to refresh for new inbox activity: those of channels
+/// bound to an active repository, unless synced in the last five minutes.
+async fn channel_queues_due(
+    pool: &SqlitePool,
+    activity: &InboxActivity,
+    now: DateTime<Utc>,
+) -> CommandResult<Vec<(Uuid, ChannelQueue)>> {
+    if activity.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query(
+        r#"
+        select channel_id, name_with_owner, review_queue_synced_at, issue_queue_synced_at
+        from channel_github_repositories
+        order by created_at, channel_id
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(to_string)?;
+    let due = |synced_at: Option<String>| {
+        duration_since(now, synced_at.as_deref())
+            .is_none_or(|elapsed| elapsed >= CHANNEL_QUEUE_REFRESH_INTERVAL)
+    };
+    let mut queues = Vec::new();
+    for row in rows {
+        let repository: String = row.get("name_with_owner");
+        let Some(active) = activity.get(&repository.to_lowercase()) else {
+            continue;
+        };
+        let channel_id: Uuid = row.get("channel_id");
+        if active.pull_requests && due(row.get("review_queue_synced_at")) {
+            queues.push((channel_id, ChannelQueue::PullRequests));
+        }
+        if active.issues && due(row.get("issue_queue_synced_at")) {
+            queues.push((channel_id, ChannelQueue::Issues));
+        }
+    }
+    Ok(queues)
+}
+
+/// Refreshes, in the background, the cached queues of channels whose
+/// repository had new activity, and tells clients so an open GitHub tab
+/// reloads. A queue already being refreshed is skipped.
+fn spawn_channel_queue_refreshes(pool: SqlitePool, activity: InboxActivity) {
+    if activity.is_empty() {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        let queues = match channel_queues_due(&pool, &activity, Utc::now()).await {
+            Ok(queues) => queues,
+            Err(err) => {
+                eprintln!("Lantor GitHub inbox could not plan channel refreshes: {err}");
+                return;
+            }
+        };
+        for queue in queues {
+            if !REFRESHING_QUEUES
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(queue)
+            {
+                continue;
+            }
+            let (channel_id, kind) = queue;
+            let result = match kind {
+                ChannelQueue::PullRequests => {
+                    refresh_github_channel_overview(&pool, channel_id).await
+                }
+                ChannelQueue::Issues => refresh_github_issue_overview(&pool, channel_id).await,
+            };
+            REFRESHING_QUEUES
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(&queue);
+            let published = match result {
+                Ok(_) => {
+                    enqueue_ui_event(
+                        &pool,
+                        &UiEvent::Refresh {
+                            reason: CHANNEL_QUEUE_REFRESHED_REASON,
+                        },
+                    )
+                    .await
+                }
+                Err(err) => Err(err),
+            };
+            if let Err(err) = published {
+                eprintln!("Lantor GitHub inbox could not refresh channel {channel_id}: {err}");
+            }
+        }
+    });
+}
+
 /// Whether the poller should sync now: the inbox is on, and the last attempt
 /// is a minute old, or five minutes after a failure.
 async fn poll_due(pool: &SqlitePool, now: DateTime<Utc>) -> CommandResult<bool> {
@@ -659,7 +903,9 @@ pub(crate) fn spawn_github_inbox_poller(pool: SqlitePool) {
             match poll_due(&pool, Utc::now()).await {
                 Ok(true) => {
                     // Failures are stored on the inbox and shown there.
-                    let _ = sync_with(&pool, Utc::now(), run_github_cli).await;
+                    if let Ok(activity) = sync_with(&pool, Utc::now(), run_github_cli).await {
+                        spawn_channel_queue_refreshes(pool.clone(), activity);
+                    }
                 }
                 Ok(false) => {}
                 Err(err) => eprintln!("Lantor GitHub inbox poller failed: {err}"),

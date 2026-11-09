@@ -100,8 +100,13 @@ pub(crate) struct Channel {
     pub(crate) unread_count: i32,
     pub(crate) agent_unread_count: i32,
     pub(crate) first_unread_root_seq: Option<i64>,
+    /// Unread pull request and issue notifications of the bound repository
+    /// when `github_unread_from_inbox`, else review requests not seen yet.
     pub(crate) github_unread_count: i32,
+    /// The GitHub inbox is on for the account the channel reviews as.
+    pub(crate) github_unread_from_inbox: bool,
     pub(crate) github_review_synced_at: Option<String>,
+    pub(crate) github_issue_synced_at: Option<String>,
     pub(crate) latest_message_at: Option<String>,
 }
 

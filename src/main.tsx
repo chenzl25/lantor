@@ -116,6 +116,7 @@ import {
   RuntimeCheck,
   SavedMessage,
   GithubInbox,
+  GithubInboxItem,
   SearchResult,
   SearchScope,
   SearchTimeRange,
@@ -860,6 +861,11 @@ function App() {
   const showSavedModal = activeAppModal === "saved";
   const showNeedsYouModal = activeAppModal === "needs";
   const showGithubInboxModal = activeAppModal === "github";
+  /** A GitHub inbox thread to show in its channel's GitHub tab. */
+  const [githubPanelFocus, setGithubPanelFocus] = useState<
+    { channelId: string; threadId: string; nonce: number } | null
+  >(null);
+  const githubPanelFocusNonceRef = useRef(0);
   /** Closes `modal` if it is the open panel. */
   function dismissAppModal(modal: AppModal) {
     dispatchNavigation({ type: "closePanel", modal });
@@ -3364,7 +3370,10 @@ function App() {
   }, [data?.channels, activeChannelId]);
   const activeGithubUnreadCount = useMemo(() => {
     if (!activeChannelId) return 0;
-    return data?.channels.find((item) => item.id === activeChannelId)?.github_unread_count ?? 0;
+    const activeChannel = data?.channels.find((item) => item.id === activeChannelId);
+    // Notification counts clear as threads are read, not when the tab opens.
+    if (!activeChannel || activeChannel.github_unread_from_inbox) return 0;
+    return activeChannel.github_unread_count;
   }, [data?.channels, activeChannelId]);
 
   const activeRunFor = useCallback((agentId: string) => {
@@ -3715,7 +3724,9 @@ function App() {
         dm_agent_id: null,
         unread_count: 0,
         github_unread_count: 0,
+        github_unread_from_inbox: false,
         github_review_synced_at: null,
+        github_issue_synced_at: null,
       };
       // Track it so any in-flight/subsequent `refresh()` re-merges the channel
       // instead of clobbering it back to the old list (and fallback-navigating
@@ -4187,6 +4198,43 @@ function App() {
 
   async function markGithubInboxDone(threadId: string) {
     applyGithubInbox(await apiInvoke("mark_github_inbox_done", { threadId }));
+  }
+
+  async function markGithubInboxRepositoryRead(repository: string) {
+    applyGithubInbox(await apiInvoke("mark_github_inbox_repository_read", { repository }));
+  }
+
+  /** Agents that can take a task in a channel: its members, else everyone. */
+  function channelTaskAgents(channelId: string) {
+    if (!data) return [];
+    const memberIds = new Set(data.channel_members
+      .filter((member) => member.channel_id === channelId)
+      .map((member) => member.agent_id));
+    const members = data.agents.filter((agent) => memberIds.has(agent.id));
+    return members.length > 0 ? members : data.agents;
+  }
+
+  /** Shows a GitHub inbox thread in its channel's GitHub tab. */
+  function openGithubInboxChannel(item: GithubInboxItem) {
+    if (!item.channel_id) return;
+    dismissAppModal("github");
+    selectChannel(item.channel_id);
+    dispatchNavigation({ type: "switchTab", tab: "github" });
+    githubPanelFocusNonceRef.current += 1;
+    setGithubPanelFocus({
+      channelId: item.channel_id,
+      threadId: item.thread_id,
+      nonce: githubPanelFocusNonceRef.current,
+    });
+  }
+
+  async function createGithubInboxReviewTask(channelId: string, pullNumber: number, agentId: string) {
+    const result = await mutate("create_github_review_task", { channelId, pullNumber, agentId });
+    dismissAppModal("github");
+    dispatchNavigation({ type: "goToChannel", channelId, tab: "chat" });
+    revealThread(result.thread_root_id, channelId);
+    setFocusedMessageId(result.thread_root_id);
+    return result;
   }
 
   function openGithubUrl(url: string) {
@@ -5379,11 +5427,15 @@ function App() {
         open={showGithubInboxModal}
         mobileNavigation={mobileBottomNavigation}
         inbox={data.github_inbox}
+        channels={data.channels}
+        reviewAgents={channelTaskAgents}
         onRefresh={refreshGithubInbox}
         onMarkRead={markGithubInboxRead}
         onMarkDone={markGithubInboxDone}
         onOpenUrl={openGithubUrl}
         onOpenThread={openGithubInboxThread}
+        onOpenChannel={openGithubInboxChannel}
+        onCreateReviewTask={createGithubInboxReviewTask}
         onClose={() => closeAppModal("github", () => dismissAppModal("github"))}
       />
 
@@ -5467,6 +5519,17 @@ function App() {
         openTask={openTask}
         createGithubReviewTask={createGithubReviewTask}
         createGithubIssueTask={createGithubIssueTask}
+        githubInbox={{
+          inbox: data.github_inbox,
+          focusThread: githubPanelFocus && githubPanelFocus.channelId === channel?.id
+            ? { threadId: githubPanelFocus.threadId, nonce: githubPanelFocus.nonce }
+            : null,
+          onFocusThreadShown: () => setGithubPanelFocus(null),
+          onRefreshInbox: refreshGithubInbox,
+          onMarkInboxRead: markGithubInboxRead,
+          onMarkInboxDone: markGithubInboxDone,
+          onMarkRepositoryRead: markGithubInboxRepositoryRead,
+        }}
         setDraft={setDraft}
         addDraftAttachments={(files) => appendDraftAttachments(files, "root")}
         removeDraftAttachment={(id) => updateRootComposerDraft(activeChannelId, (current) => ({
