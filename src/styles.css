@@ -12523,7 +12523,7 @@ body.resizing-column * {
     left: 10px;
     z-index: 80;
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 3px;
     padding: 4px 6px;
     border: 1px solid var(--border-subtle);
@@ -12547,6 +12547,9 @@ body.resizing-column * {
     place-items: center;
     align-content: center;
     gap: 2px;
+    /* Five tabs leave about 55px each on a 320px phone; "Needs you" needs 53. */
+    padding-inline: 0;
+    white-space: nowrap;
     border-radius: 16px;
     background: transparent;
     color: var(--ink-muted);
@@ -14468,5 +14471,19 @@ body.resizing-column * {
      and opening a thread marks it read. */
   .github-inbox-row .activity-feed-dismiss.github-inbox-done {
     display: grid;
+  }
+
+  /* A missed tap lands on the row, which opens GitHub and marks the thread
+     read, so the links under the title take a 44px tall tap area without
+     moving: the negative margins keep the row's height. */
+  .github-inbox-thread,
+  .github-inbox-channel,
+  .github-inbox-review {
+    min-height: 44px;
+    margin-block: -13px;
+  }
+
+  .github-notifications-read-all {
+    min-height: 44px;
   }
 }
