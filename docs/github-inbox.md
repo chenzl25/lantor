@@ -1,11 +1,12 @@
 # GitHub inbox
 
-The **GitHub** panel (sidebar, or the menu on Home on phones) lists the owner's
+The **GitHub** panel (sidebar, or the bottom bar on phones) lists the owner's
 GitHub notifications from every repository, not only the ones bound to
 channels. It mirrors github.com/notifications: the filters are Participating,
 Review requested, Assigned, Mentioned and Team mentioned, and each filter's
 count is its number of unread threads, the same number GitHub shows. The
-sidebar badge counts unread participating threads.
+badge on the sidebar row and on the phone's bottom-bar tab counts unread
+participating threads.
 
 ## Sync
 

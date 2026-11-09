@@ -21,7 +21,7 @@ import {
   useState,
 } from "react";
 import { createRoot } from "react-dom/client";
-import { Hand, Home, Inbox, Search } from "lucide-react";
+import { Github, Hand, Home, Inbox, Search } from "lucide-react";
 import {
   apiInvoke,
   apiInvokeMeasured,
@@ -5297,6 +5297,13 @@ function App() {
           {needsYou.count > 0 && <UnreadBadge value={needsYou.count} />}
         </span>
         <span>Needs you</span>
+      </button>
+      <button type="button" className={`${showGithubInboxModal ? "active" : ""} ${githubInboxUnread ? "has-unread" : ""}`} onClick={openGithubInboxModal}>
+        <span className="mobile-bottom-nav-icon">
+          <Github size={20} />
+          {githubInboxUnread > 0 && <UnreadBadge value={githubInboxUnread} />}
+        </span>
+        <span>GitHub</span>
       </button>
       <button type="button" className={showSearchModal ? "active" : ""} onClick={openSearchModal}>
         <Search size={20} />

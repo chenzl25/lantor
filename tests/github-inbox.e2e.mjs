@@ -174,21 +174,16 @@ async function run(engine, name, contextOptions) {
     });
     const mobile = Boolean(contextOptions.isMobile);
     await page.goto(origin);
-    // The sidebar counts unread threads before the panel opens; phones list
-    // GitHub in the menu on Home, next to Saved.
-    let entry;
-    if (mobile) {
-      await page.getByRole("navigation", { name: "Primary mobile navigation" }).getByRole("button", { name: "Home" }).click();
-      await page.getByRole("button", { name: "Your menu" }).click();
-      entry = page.getByRole("menuitem", { name: /GitHub/ });
-      await entry.filter({ hasText: "GitHub (4 unread)" }).waitFor();
-    } else {
-      entry = page.locator(".quick-actions").getByRole("button", { name: /GitHub/ });
-      await entry.filter({ hasText: "4" }).waitFor();
-    }
+    // The sidebar, or the bottom bar on phones, counts unread threads before
+    // the panel opens.
+    const entry = mobile
+      ? page.getByRole("navigation", { name: "Primary mobile navigation" }).getByRole("button", { name: /GitHub/ })
+      : page.locator(".quick-actions").getByRole("button", { name: /GitHub/ });
+    await entry.filter({ hasText: "4" }).waitFor();
     await entry.click();
     const panel = page.getByRole("dialog", { name: "GitHub notifications" });
     await panel.waitFor();
+    if (mobile) await page.locator(".mobile-bottom-nav button.active", { hasText: "GitHub" }).waitFor();
     const rows = panel.locator(".github-inbox-row");
     const visibleIds = () => rows.evaluateAll(nodes => nodes.map(node => node.dataset.threadId));
     // Cached threads show at once, newest first; the stale cache is checked again.
@@ -216,7 +211,7 @@ async function run(engine, name, contextOptions) {
     assert.deepEqual(await page.evaluate(() => window.__opened), ["https://github.com/org/repo/pull/101#issuecomment-5"], name);
     assert.deepEqual(calls("/api/mark_github_inbox_read"), [{ threadId: "101" }], name);
     await panel.getByText("@octo · 4 unread").waitFor();
-    if (!mobile) await entry.filter({ hasText: "4" }).waitFor({ state: "attached" });
+    await entry.filter({ hasText: "4" }).waitFor({ state: "attached" });
 
     // Done hides a thread; a refused write brings it back with the error.
     await panel.locator('.github-inbox-row[data-thread-id="102"]').getByRole("button", { name: "Done" }).click();
@@ -250,15 +245,22 @@ async function run(engine, name, contextOptions) {
 
 async function openInbox(page, mobile) {
   if (mobile) {
-    await page.getByRole("navigation", { name: "Primary mobile navigation" }).getByRole("button", { name: "Home" }).click();
-    await page.getByRole("button", { name: "Your menu" }).click();
-    await page.getByRole("menuitem", { name: /GitHub/ }).click();
+    await page.getByRole("navigation", { name: "Primary mobile navigation" }).getByRole("button", { name: /GitHub/ }).click();
   } else {
     await page.locator(".quick-actions").getByRole("button", { name: /GitHub/ }).click();
   }
   const panel = page.getByRole("dialog", { name: "GitHub notifications" });
   await panel.waitFor();
   return panel;
+}
+
+/** Whether taps 20px above, at and below the link's middle land on it. */
+async function tapArea(link) {
+  return link.evaluate(node => {
+    node.scrollIntoView({ block: "center" });
+    const box = node.getBoundingClientRect(), x = box.left + box.width / 2, y = box.top + box.height / 2;
+    return [y - 20, y, y + 20].map(at => node.contains(document.elementFromPoint(x, at)));
+  });
 }
 
 // The channel bound to org/repo: its GitHub tab counts the inbox's unread
@@ -286,6 +288,14 @@ async function runLinked(engine, name, contextOptions) {
     assert.equal(await inboxRow("104").locator(".github-inbox-channel").count(), 0, `${name}: the tab lists no advisories`);
     assert.equal(await inboxRow("101").getByRole("button", { name: "Review with agent" }).count(), 0, `${name}: reviewed already`);
     await inboxRow("105").getByRole("button", { name: "Review with agent" }).waitFor();
+    if (mobile) {
+      // A tap just above or below a link still hits it, not the row that
+      // would open GitHub and mark the thread read.
+      for (const link of [inboxRow("105").getByRole("button", { name: "Review with agent" }),
+        inboxRow("101").getByRole("button", { name: "Open Lantor thread" }), inboxRow("106").getByRole("button", { name: "repo" })]) {
+        assert.ok((await tapArea(link)).every(Boolean), `${name}: a 44px tall tap area`);
+      }
+    }
 
     // The channel chip opens the channel's GitHub tab at that thread.
     await inboxRow("106").getByRole("button", { name: "repo" }).click();
@@ -313,6 +323,10 @@ async function runLinked(engine, name, contextOptions) {
 
     // Mark all read reads the rest of the repository's threads.
     await notificationsTab.click();
+    if (mobile) {
+      const box = await page.getByRole("button", { name: "Mark all read" }).boundingBox();
+      assert.ok(box.height >= 44, `${name}: Mark all read is ${box.height}px tall`);
+    }
     await page.getByRole("button", { name: "Mark all read" }).click();
     await githubTab.locator(".tab-unread-badge").waitFor({ state: "detached" });
     assert.equal(await list.locator(".github-inbox-row.unread").count(), 0, name);

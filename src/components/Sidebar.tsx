@@ -236,20 +236,6 @@ export function Sidebar({
                 role="menuitem"
                 onClick={() => {
                   setShowMobileOwnerMenu(false);
-                  openGithub();
-                }}
-              >
-                <Github size={18} />
-                <span>
-                  <strong>GitHub{githubUnreadCount > 0 ? ` (${githubUnreadCount} unread)` : ""}</strong>
-                  <small>Your notifications from every repository</small>
-                </span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setShowMobileOwnerMenu(false);
                   openOwnerProfileModal();
                 }}
               >
