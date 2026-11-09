@@ -42,7 +42,6 @@ import {
   subscribeGithubReferences,
 } from "../github-references";
 import { useGithubInboxMarks } from "../hooks/useGithubInboxMarks";
-import { useGithubInboxOrder } from "../hooks/useGithubInboxOrder";
 import type {
   Agent,
   Channel,
@@ -287,8 +286,6 @@ export function GithubPanel({
     [notifications],
   );
   const unreadNotificationCount = notifications.filter((item) => item.unread).length;
-  // Showing the Notifications view again orders unread threads first again.
-  const orderedNotifications = useGithubInboxOrder(notifications, `${channel.id}:${activeResource}`);
 
   const enrichOverview = useCallback((next: GithubChannelOverview, requestEpoch: number) => {
     const requestKey = githubComparisonRequestKey(next);
@@ -844,8 +841,8 @@ export function GithubPanel({
                   <p>Review requests, mentions and replies on {binding.name_with_owner} show up here.</p>
                 </div>
               ) : (
-                <div className="github-notification-list">
-                  {orderedNotifications.map((item) => {
+                <div className="github-notification-list github-inbox-list">
+                  {notifications.map((item) => {
                     const reviewable = item.subject_type === "PullRequest" && item.number !== null
                       && !item.thread_root_id && agents.length > 0;
                     return (

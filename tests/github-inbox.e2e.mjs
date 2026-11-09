@@ -135,6 +135,8 @@ const api = createServer(async (req, res) => {
       // Slow enough that the panel shows its cached threads first.
       await new Promise(done => setTimeout(done, 150));
       if (!state.github_inbox.items.some(entry => entry.thread_id === teamMention.thread_id)) state.github_inbox.items.push(teamMention);
+      // As the backend lists them: newest first.
+      state.github_inbox.items.sort((left, right) => right.updated_at.localeCompare(left.updated_at));
       state.github_inbox.synced_at = new Date().toISOString();
       result = inboxResponse();
       break;
@@ -186,11 +188,11 @@ async function run(engine, name, contextOptions) {
     if (mobile) await page.locator(".mobile-bottom-nav button.active", { hasText: "GitHub" }).waitFor();
     const rows = panel.locator(".github-inbox-row");
     const visibleIds = () => rows.evaluateAll(nodes => nodes.map(node => node.dataset.threadId));
-    // Cached threads show at once, unread first, then newest first; the stale
+    // Cached threads show at once, newest first as on GitHub; the stale
     // cache is checked again.
-    assert.deepEqual(await visibleIds(), ["101", "102", "104", "105", "103"], `${name}: cached threads, unread first`);
+    assert.deepEqual(await visibleIds(), ["101", "102", "103", "104", "105"], `${name}: cached threads, newest first`);
     await panel.locator('.github-inbox-row[data-thread-id="100"]').waitFor();
-    assert.deepEqual(await visibleIds(), ["100", "101", "102", "104", "105", "103"], `${name}: a new unread thread on top`);
+    assert.deepEqual(await visibleIds(), ["100", "101", "102", "103", "104", "105"], `${name}: a new thread on top`);
     assert.equal(calls("/api/refresh_github_inbox").length, 1, `${name}: opening a stale inbox checks GitHub once`);
     await panel.getByText("@octo · 5 unread").waitFor();
 
@@ -203,9 +205,13 @@ async function run(engine, name, contextOptions) {
     // The pull request shows its state from the reference lookup.
     await panel.locator('.github-inbox-row[data-thread-id="101"] .github-reference[data-status="open"]').waitFor();
     await tab("Participating").click();
-    await panel.getByRole("combobox", { name: "Repository" }).selectOption("org/docs");
+    // One repository: the rail lists them beside the list; phones use a menu.
+    const repositories = panel.getByRole("group", { name: "Repositories" });
+    if (mobile) await panel.getByRole("combobox", { name: "Repository" }).selectOption("org/docs");
+    else await repositories.getByRole("button", { name: /^org\/docs/ }).click();
     assert.deepEqual(await visibleIds(), ["102"], `${name}: one repository`);
-    await panel.getByRole("combobox", { name: "Repository" }).selectOption("");
+    if (mobile) await panel.getByRole("combobox", { name: "Repository" }).selectOption("");
+    else await repositories.getByRole("button", { name: /^org\/docs/ }).click();
 
     // Opening a thread opens GitHub at the latest comment and marks it read
     // there; it keeps its place until the panel opens again.
@@ -215,7 +221,7 @@ async function run(engine, name, contextOptions) {
     assert.deepEqual(calls("/api/mark_github_inbox_read"), [{ threadId: "101" }], name);
     await panel.getByText("@octo · 4 unread").waitFor();
     await entry.filter({ hasText: "4" }).waitFor({ state: "attached" });
-    assert.deepEqual(await visibleIds(), ["100", "101", "102", "104", "105", "103"], `${name}: a read row stays put`);
+    assert.deepEqual(await visibleIds(), ["100", "101", "102", "103", "104", "105"], `${name}: a read row stays put`);
     // One action per row: Done. Opening a thread is what marks it read.
     assert.equal(await rows.getByRole("button", { name: "Mark as read" }).count(), 0, name);
 
@@ -229,12 +235,24 @@ async function run(engine, name, contextOptions) {
     assert.deepEqual(calls("/api/mark_github_inbox_done"), [{ threadId: "102" }, { threadId: "105" }], name);
 
 
-    // Opened again, read threads move below the unread ones.
+    // Opened again, read threads are still in place until they are done.
     await page.keyboard.press("Escape");
     await panel.waitFor({ state: "detached" });
     await entry.click();
     await panel.waitFor();
-    assert.deepEqual(await visibleIds(), ["100", "104", "105", "101", "103"], `${name}: reopened, unread first`);
+    assert.deepEqual(await visibleIds(), ["100", "101", "103", "104", "105"], `${name}: reopened, newest first`);
+
+    // Unread only; a thread read meanwhile stays until the view is turned off.
+    const unreadOnly = panel.getByRole("button", { name: "Unread only" });
+    await unreadOnly.click();
+    assert.deepEqual(await visibleIds(), ["100", "104", "105"], `${name}: unread only`);
+    await panel.locator('.github-inbox-row[data-thread-id="104"] h3').click();
+    await panel.locator('.github-inbox-row[data-thread-id="104"]:not(.unread)').waitFor();
+    assert.deepEqual(await visibleIds(), ["100", "104", "105"], `${name}: a row read here stays`);
+    await unreadOnly.click();
+    await unreadOnly.click();
+    assert.deepEqual(await visibleIds(), ["100", "105"], `${name}: unread only again`);
+    await unreadOnly.click();
 
     // A pull request with a Lantor review thread opens it.
     await panel.locator('.github-inbox-row[data-thread-id="101"]').getByRole("button", { name: "Open Lantor thread" }).click();
@@ -312,7 +330,7 @@ async function runLinked(engine, name, contextOptions) {
     await list.locator('.github-inbox-row.highlighted[data-thread-id="106"]').waitFor();
     // Pull requests and issues of org/repo; not its advisory, not org/docs.
     assert.deepEqual(await list.locator(".github-inbox-row").evaluateAll(nodes => nodes.map(node => node.dataset.threadId)),
-      ["101", "105", "106", "103"], `${name}: unread first`);
+      ["101", "103", "105", "106"], `${name}: newest first`);
 
     // A pull request card shows its unread notification; opening it reads it on GitHub.
     await page.getByRole("tab", { name: /^Pull requests/ }).click();

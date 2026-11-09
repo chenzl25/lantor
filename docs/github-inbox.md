@@ -32,20 +32,27 @@ cached threads and shows the error in the panel.
 
 ## List
 
-Unread threads come first, then read ones, each newest first. A thread read
-while the list is open keeps its place until the list is shown again (the
-panel reopens, or the channel tab comes back to Notifications), so reading a
-row does not move the rows around it (`useGithubInboxOrder`). An unread thread
-has a dot left of its type icon. Once the pull request or issue state is known
-(`useGithubReferenceItem`), the type icon shows it in GitHub's colors.
+The panel follows github.com/notifications: the filters, each with its unread
+count, and the repositories, each with its thread count, sit beside one list;
+phones fold them into a row of filter pills and a repository menu. The list is
+newest first, as GitHub lists it, so a thread keeps its place when it is read
+and stays listed until it is done.
+
+A row shows the thread's state icon (in GitHub's colors once the pull request
+or issue state is known, `useGithubReferenceItem`), its reference and title,
+its reason and its time. Unread rows are brighter, with a blue dot and a bold
+title. **Unread only** narrows the list to unread threads; a thread read while
+it is on stays until it is turned off or the panel opens again
+(`useGithubInboxUnreadOnly`), so opening a row does not pull it away.
 
 ## Read and done
 
 Opening a thread opens its GitHub page, at its latest comment when GitHub names
 one, and marks it read. **Done**, the row's only button, marks it done; with a
-mouse it shows on the row under the pointer, as on GitHub. Both write to GitHub
-first (`PATCH` / `DELETE notifications/threads/{id}`) and change nothing
-locally when that fails. GitHub has no API to mark a thread unread.
+mouse it takes the time's place on the row under the pointer, as on GitHub.
+Both write to GitHub first (`PATCH` / `DELETE notifications/threads/{id}`) and
+change nothing locally when that fails. GitHub has no API to mark a thread
+unread.
 
 Locally the mark keeps the thread's GitHub `updated_at` (`read_updated_at`,
 `done_updated_at`). A sync that started before GitHub took the write still
