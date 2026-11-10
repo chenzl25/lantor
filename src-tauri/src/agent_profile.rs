@@ -11,6 +11,7 @@ use crate::{
     events::activity::record_agent_activity,
     models::{Agent, AgentSubscriptionStatus, AgentSubscriptionWindow, OwnerProfile},
     prompts::ensure_agent_workspace,
+    runtime::warm::request_restart_in_tx,
 };
 
 pub(crate) const DEFAULT_OWNER_DISPLAY_NAME: &str = "Me";
@@ -171,6 +172,21 @@ fn normalize_reasoning_effort(
     Ok(String::new())
 }
 
+/// Claude Code reads `--model` and `--effort` only when its warm process starts,
+/// so changing either needs a fresh process; the restart resumes the stored
+/// session. Codex sends both with every turn and needs none.
+fn claude_launch_flags_changed(
+    stored: &sqlx::sqlite::SqliteRow,
+    runtime: &str,
+    model: &str,
+    reasoning_effort: &str,
+) -> bool {
+    runtime == "claude"
+        && stored.get::<String, _>("runtime") == "claude"
+        && (stored.get::<String, _>("model") != model
+            || stored.get::<String, _>("reasoning_effort") != reasoning_effort)
+}
+
 fn normalize_service_tier(runtime: &str, value: Option<&str>) -> CommandResult<String> {
     if !runtime.eq_ignore_ascii_case("codex") {
         return Ok(String::new());
@@ -245,16 +261,20 @@ pub(crate) async fn create_agent_in_pool(
     let service_tier = normalize_service_tier(runtime, service_tier.as_deref())?;
     let environment_variables =
         normalize_agent_environment_variables(environment_variables.as_deref())?;
-    let existing_subscription_scope =
-        sqlx::query("select runtime, environment_variables from agents where handle = $1")
-            .bind(normalized_handle)
-            .fetch_optional(pool)
-            .await
-            .map_err(to_string)?;
-    let subscription_scope_changed = existing_subscription_scope.is_some_and(|row| {
+    let stored = sqlx::query(
+        "select runtime, model, reasoning_effort, environment_variables from agents where handle = $1",
+    )
+    .bind(normalized_handle)
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)?;
+    let subscription_scope_changed = stored.as_ref().is_some_and(|row| {
         row.get::<String, _>("runtime") != runtime
             || row.get::<String, _>("environment_variables") != environment_variables
     });
+    let restart_needed = stored
+        .as_ref()
+        .is_some_and(|row| claude_launch_flags_changed(row, runtime, model, &reasoning_effort));
 
     let mut transaction = pool.begin().await.map_err(to_string)?;
     let agent_id: Uuid = sqlx::query_scalar(
@@ -303,6 +323,9 @@ pub(crate) async fn create_agent_in_pool(
             .execute(&mut *transaction)
             .await
             .map_err(to_string)?;
+    }
+    if restart_needed {
+        request_restart_in_tx(&mut transaction, agent_id).await?;
     }
     enqueue_ui_event_in_tx(
         &mut transaction,
@@ -382,16 +405,20 @@ pub(crate) async fn update_agent_in_pool(
     let service_tier = normalize_service_tier(runtime, service_tier.as_deref())?;
     let environment_variables =
         normalize_agent_environment_variables(environment_variables.as_deref())?;
-    let existing_subscription_scope =
-        sqlx::query("select runtime, environment_variables from agents where id = $1")
-            .bind(agent_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(to_string)?;
-    let subscription_scope_changed = existing_subscription_scope.is_some_and(|row| {
+    let stored = sqlx::query(
+        "select runtime, model, reasoning_effort, environment_variables from agents where id = $1",
+    )
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(to_string)?;
+    let subscription_scope_changed = stored.as_ref().is_some_and(|row| {
         row.get::<String, _>("runtime") != runtime
             || row.get::<String, _>("environment_variables") != environment_variables
     });
+    let restart_needed = stored
+        .as_ref()
+        .is_some_and(|row| claude_launch_flags_changed(row, runtime, model, &reasoning_effort));
 
     let mut transaction = pool.begin().await.map_err(to_string)?;
     sqlx::query(
@@ -436,6 +463,9 @@ pub(crate) async fn update_agent_in_pool(
             .execute(&mut *transaction)
             .await
             .map_err(to_string)?;
+    }
+    if restart_needed {
+        request_restart_in_tx(&mut transaction, agent_id).await?;
     }
     enqueue_ui_event_in_tx(
         &mut transaction,
@@ -688,7 +718,7 @@ async fn load_agents_with_details(
 
 #[cfg(test)]
 mod tests {
-    use super::{delete_agent_in_pool, normalize_reasoning_effort};
+    use super::{delete_agent_in_pool, normalize_reasoning_effort, update_agent_in_pool};
     use crate::attachments::write_attachment_file;
     use crate::db::{db_connect_with_url, migrate};
     use sqlx::{Row, SqlitePool};
@@ -904,6 +934,81 @@ mod tests {
             assert_eq!(message.get::<String, _>("sender_name"), "delete-me");
             assert_eq!(message.get::<String, _>("body"), "channel message");
             assert!(!std::path::Path::new(&attachment_path).exists());
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    async fn save_agent(
+        pool: &SqlitePool,
+        agent_id: Uuid,
+        runtime: &str,
+        model: &str,
+        reasoning_effort: &str,
+        description: &str,
+    ) -> Result<(), String> {
+        update_agent_in_pool(
+            pool,
+            agent_id,
+            "launch-flags".to_owned(),
+            String::new(),
+            None,
+            runtime.to_owned(),
+            model.to_owned(),
+            Some(reasoning_effort.to_owned()),
+            None,
+            None,
+            description.to_owned(),
+            String::new(),
+            None,
+            String::new(),
+            None,
+        )
+        .await
+    }
+
+    /// Reads and clears the agent's pending runtime restart request.
+    async fn take_restart_request(pool: &SqlitePool, agent_id: Uuid) -> Result<bool, String> {
+        let requested_at: Option<String> =
+            sqlx::query_scalar("select runtime_restart_requested_at from agents where id = $1")
+                .bind(agent_id)
+                .fetch_one(pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        sqlx::query("update agents set runtime_restart_requested_at = null where id = $1")
+            .bind(agent_id)
+            .execute(pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        Ok(requested_at.is_some())
+    }
+
+    #[tokio::test]
+    async fn changing_claude_model_or_effort_requests_a_fresh_process() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let agent_id = insert_test_agent(&pool, "launch-flags").await?;
+
+            // Codex takes model and effort with every turn.
+            save_agent(&pool, agent_id, "codex", "gpt-6-sol", "high", "test agent").await?;
+            assert!(!take_restart_request(&pool, agent_id).await?);
+
+            // Switching runtime starts the other provider's process anyway.
+            save_agent(&pool, agent_id, "claude", "opus", "xhigh", "test agent").await?;
+            assert!(!take_restart_request(&pool, agent_id).await?);
+
+            save_agent(&pool, agent_id, "claude", "opus", "xhigh", "renamed").await?;
+            assert!(!take_restart_request(&pool, agent_id).await?);
+
+            save_agent(&pool, agent_id, "claude", "fable", "xhigh", "renamed").await?;
+            assert!(take_restart_request(&pool, agent_id).await?);
+
+            save_agent(&pool, agent_id, "claude", "fable", "max", "renamed").await?;
+            assert!(take_restart_request(&pool, agent_id).await?);
             Ok(())
         }
         .await;
