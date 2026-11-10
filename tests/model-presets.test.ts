@@ -52,8 +52,11 @@ test("Claude picker exposes only rolling aliases; opus tracks the latest Opus re
   assert.equal(modelLabel("opus"), "Claude Opus (latest)");
 });
 
-test("Claude Fable preset targets the current 5.1 model", () => {
-  assert.ok(modelOptionsForRuntime("claude").includes("fable"));
-  assert.equal(modelLabel("fable"), "Claude Fable 5.1");
+test("Claude Fable preset tracks the latest Fable release", () => {
+  const models = modelOptionsForRuntime("claude");
+  assert.ok(models.includes("fable"));
+  assert.ok(!models.some((model) => model.startsWith("claude-fable-")));
+  assert.equal(modelLabel("fable"), "Claude Fable (latest)");
+  assert.equal(modelLabel("claude-fable-5-2"), "Claude Fable 5.2");
   assert.equal(modelLabel("claude-fable-5-1"), "Claude Fable 5.1");
 });

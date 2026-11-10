@@ -798,7 +798,8 @@ export const RUNTIME_PRESETS: Record<string, { label: string; defaultModel: stri
 };
 
 const MODEL_LABELS: Record<string, string> = {
-  fable: "Claude Fable 5.1",
+  fable: "Claude Fable (latest)",
+  "claude-fable-5-2": "Claude Fable 5.2",
   "claude-fable-5-1": "Claude Fable 5.1",
   opus: "Claude Opus (latest)",
   sonnet: "Claude Sonnet (latest)",
