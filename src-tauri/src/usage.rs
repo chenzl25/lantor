@@ -86,8 +86,17 @@ fn model_cost_micros(runtime: &str, model: &str, input_tokens: i64, output_token
             (4_000_000_i64, 20_000_000_i64)
         } else if model.contains("opus") {
             (5_000_000_i64, 25_000_000_i64)
+        } else if model.contains("haiku-5-5") || model == "haiku" {
+            // Claude Haiku 5.5 at its rate for prompts up to 100K tokens; the bare `haiku` alias
+            // resolves to it in current Claude Code. Per-run token totals cannot tell when a
+            // single prompt crossed into the higher tier.
+            (100_000_i64, 500_000_i64)
         } else if model.contains("haiku") {
             (1_000_000_i64, 5_000_000_i64)
+        } else if model.contains("sonnet-5") || model == "sonnet" {
+            // Claude Sonnet 5 and 5.5; the bare `sonnet` alias resolves to Sonnet 5.5 in current
+            // Claude Code.
+            (2_000_000_i64, 10_000_000_i64)
         } else {
             (3_000_000_i64, 15_000_000_i64)
         }
@@ -347,10 +356,34 @@ mod tests {
         );
         assert_eq!(
             model_cost_micros("claude", "sonnet", 1_000_000, 1_000_000),
-            18_000_000
+            12_000_000
         );
         assert_eq!(
             model_cost_micros("claude", "haiku", 1_000_000, 1_000_000),
+            600_000
+        );
+    }
+
+    #[test]
+    fn claude_sonnet_and_haiku_usage_follow_their_release() {
+        assert_eq!(
+            model_cost_micros("claude", "claude-sonnet-5-5", 1_000_000, 1_000_000),
+            12_000_000
+        );
+        assert_eq!(
+            model_cost_micros("claude", "claude-sonnet-5", 1_000_000, 1_000_000),
+            12_000_000
+        );
+        assert_eq!(
+            model_cost_micros("claude", "claude-sonnet-4-6", 1_000_000, 1_000_000),
+            18_000_000
+        );
+        assert_eq!(
+            model_cost_micros("claude", "claude-haiku-5-5", 1_000_000, 1_000_000),
+            600_000
+        );
+        assert_eq!(
+            model_cost_micros("claude", "claude-haiku-4-5", 1_000_000, 1_000_000),
             6_000_000
         );
     }
