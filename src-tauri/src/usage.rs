@@ -104,6 +104,8 @@ fn model_cost_micros(runtime: &str, model: &str, input_tokens: i64, output_token
         (10_000_000_i64, 50_000_000_i64)
     } else if runtime == "codex" && matches!(model.as_str(), "gpt-6.1-sol" | "gpt-6-sol") {
         (2_000_000_i64, 10_000_000_i64)
+    } else if runtime == "codex" && model == "gpt-6.1-terra" {
+        (1_000_000_i64, 5_000_000_i64)
     } else if runtime == "codex" && model == "gpt-6-luna" {
         (100_000_i64, 500_000_i64)
     } else if model.contains("mini") {

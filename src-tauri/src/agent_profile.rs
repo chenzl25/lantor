@@ -136,17 +136,20 @@ fn normalize_reasoning_effort(
             .unwrap_or("medium")
             .to_ascii_lowercase();
         let model = model.trim().to_ascii_lowercase();
+        let generation = model
+            .strip_prefix("gpt-")
+            .and_then(|name| name.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|major| major.parse::<u32>().ok());
+        if generation.is_some_and(|major| major < 6) {
+            return Err(format!(
+                "Codex model {model} is retired in Lantor; choose a GPT-6 or newer model"
+            ));
+        }
         let supports_ultra = matches!(
             model.as_str(),
-            "gpt-6-astra"
-                | "gpt-6.1-sol"
-                | "gpt-6-sol"
-                | "gpt-5.6"
-                | "gpt-5.6-sol"
-                | "gpt-5.6-terra"
+            "gpt-6-astra" | "gpt-6.1-sol" | "gpt-6.1-terra" | "gpt-6-sol"
         );
-        let supports_max =
-            supports_ultra || matches!(model.as_str(), "gpt-6-luna" | "gpt-5.6-luna");
+        let supports_max = supports_ultra || model == "gpt-6-luna";
         return match effort.as_str() {
             "low" | "medium" | "high" | "xhigh" => Ok(effort),
             "max" if supports_max => Ok(effort),
@@ -732,15 +735,12 @@ mod tests {
             ("gpt-6-astra", "ultra"),
             ("gpt-6.1-sol", "max"),
             ("gpt-6.1-sol", "ultra"),
+            ("gpt-6.1-terra", "max"),
+            ("gpt-6.1-terra", "ultra"),
             ("gpt-6-sol", "max"),
             ("gpt-6-sol", "ultra"),
             ("gpt-6-luna", "max"),
-            ("gpt-5.6", "ultra"),
-            ("gpt-5.6-sol", "max"),
-            ("gpt-5.6-sol", "ultra"),
-            ("gpt-5.6-terra", "ultra"),
-            ("gpt-5.6-luna", "max"),
-            ("gpt-5.5", "xhigh"),
+            ("gpt-7", "medium"),
         ] {
             assert_eq!(
                 normalize_reasoning_effort("codex", model, Some(effort)),
@@ -749,13 +749,7 @@ mod tests {
             );
         }
 
-        for (model, effort) in [
-            ("gpt-6-luna", "ultra"),
-            ("gpt-5.6-luna", "ultra"),
-            ("gpt-5.5", "max"),
-            ("gpt-5.5", "ultra"),
-            ("gpt-5.6-sol-custom", "ultra"),
-        ] {
+        for (model, effort) in [("gpt-6-luna", "ultra"), ("gpt-6-sol-custom", "ultra")] {
             assert!(
                 normalize_reasoning_effort("codex", model, Some(effort)).is_err(),
                 "{model} should reject {effort}"
@@ -763,14 +757,32 @@ mod tests {
         }
 
         assert_eq!(
-            normalize_reasoning_effort("codex", " GPT-5.6-SOL ", Some(" ULTRA ")),
+            normalize_reasoning_effort("codex", " GPT-6.1-TERRA ", Some(" ULTRA ")),
             Ok("ultra".to_owned())
         );
         assert_eq!(
-            normalize_reasoning_effort("codex", "gpt-5.6-sol", None),
+            normalize_reasoning_effort("codex", "gpt-6.1-terra", None),
             Ok("medium".to_owned())
         );
-        assert!(normalize_reasoning_effort("codex", "gpt-5.6-sol", Some("impossible")).is_err());
+        assert!(normalize_reasoning_effort("codex", "gpt-6.1-terra", Some("impossible")).is_err());
+    }
+
+    #[test]
+    fn codex_profiles_reject_gpt_models_older_than_six() {
+        for model in [
+            "gpt-4o",
+            "gpt-5.3-codex",
+            "gpt-5.4-mini",
+            "gpt-5.5",
+            "gpt-5.6",
+            "gpt-5.6-sol",
+            " GPT-5.6-TERRA ",
+            "gpt-5.6-luna",
+        ] {
+            let error = normalize_reasoning_effort("codex", model, Some("medium"))
+                .expect_err("retired models must be rejected even at a supported effort");
+            assert!(error.contains("choose a GPT-6 or newer model"), "{error}");
+        }
     }
 
     async fn test_pool() -> Option<(SqlitePool, String)> {

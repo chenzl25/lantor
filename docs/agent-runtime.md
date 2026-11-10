@@ -7,6 +7,15 @@ desktop app starts the same binary in
 `--supervisor` mode; the supervisor owns process launch, stop commands, run
 logs, event ingestion, and work-item scheduling.
 
+Codex model presets cover GPT-6 and newer: GPT-6 Astra, GPT-6.1 Sol,
+GPT-6.1 Terra, GPT-6 Sol and GPT-6 Luna. The default is GPT-6 Sol. The Codex
+app-server catalog exposes reasoning efforts through `ultra` for Astra, Sol
+and Terra, and through `max` for Luna. These are the CLI's ranges, which can
+differ from the direct API's. GPT models older than GPT-6 cannot be saved in
+a Codex profile. An existing older model remains visible as a disabled,
+retired option until the owner selects a replacement; changing the presets
+does not rewrite existing profiles or run history.
+
 ## Dispatch
 
 Dispatch is work-item based:

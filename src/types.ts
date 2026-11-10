@@ -781,12 +781,9 @@ export const RUNTIME_PRESETS: Record<string, { label: string; defaultModel: stri
     models: [
       "gpt-6-astra",
       "gpt-6.1-sol",
+      "gpt-6.1-terra",
       "gpt-6-sol",
       "gpt-6-luna",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.5",
     ],
   },
   claude: {
@@ -806,16 +803,9 @@ const MODEL_LABELS: Record<string, string> = {
   haiku: "Claude Haiku (latest)",
   "gpt-6-astra": "GPT-6 Astra",
   "gpt-6.1-sol": "GPT-6.1 Sol",
+  "gpt-6.1-terra": "GPT-6.1 Terra",
   "gpt-6-sol": "GPT-6 Sol",
   "gpt-6-luna": "GPT-6 Luna",
-  "gpt-5.6-sol": "GPT-5.6 Sol",
-  "gpt-5.6-terra": "GPT-5.6 Terra",
-  "gpt-5.6-luna": "GPT-5.6 Luna",
-  "gpt-5.5": "GPT-5.5",
-  "gpt-5.4": "GPT-5.4",
-  "gpt-5.4-mini": "GPT-5.4 Mini",
-  "gpt-5.3-codex": "GPT-5.3 Codex",
-  "gpt-5.3-codex-spark": "GPT-5.3 Codex Spark",
 };
 
 export const CODEX_REASONING_EFFORTS = [
@@ -832,14 +822,12 @@ function maxCodexReasoningEffort(model: string) {
   if (
     normalizedModel === "gpt-6-astra" ||
     normalizedModel === "gpt-6.1-sol" ||
-    normalizedModel === "gpt-6-sol" ||
-    normalizedModel === "gpt-5.6" ||
-    normalizedModel === "gpt-5.6-sol" ||
-    normalizedModel === "gpt-5.6-terra"
+    normalizedModel === "gpt-6.1-terra" ||
+    normalizedModel === "gpt-6-sol"
   ) {
     return "ultra";
   }
-  if (normalizedModel === "gpt-6-luna" || normalizedModel === "gpt-5.6-luna") {
+  if (normalizedModel === "gpt-6-luna") {
     return "max";
   }
   return "xhigh";
@@ -888,7 +876,8 @@ export function modelOptionsForRuntime(runtime: string, currentModel = "") {
 }
 
 export function isRetiredCodexModel(model: string) {
-  return /^gpt-5\.[34](?:-|$)/i.test(model.trim());
+  const generation = /^gpt-(\d+)/i.exec(model.trim());
+  return generation !== null && Number(generation[1]) < 6;
 }
 
 export function modelLabel(model: string) {

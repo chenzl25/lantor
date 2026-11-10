@@ -82,9 +82,8 @@ export function AgentFormModal({
     role: form.role,
     avatar: form.avatar,
   };
-  const canSubmit = createMode
-    ? Boolean(form.displayName.trim() || form.handle.trim())
-    : Boolean(form.handle.trim() || form.displayName.trim());
+  const retiredModel = isCodex && isRetiredCodexModel(form.model);
+  const canSubmit = !retiredModel && Boolean(form.displayName.trim() || form.handle.trim());
   const runtimeSelect = (
     <label className="agent-select-field">
       <span>Runs on</span>
@@ -125,6 +124,7 @@ export function AgentFormModal({
         </select>
         <ChevronDown size={16} aria-hidden="true" />
       </div>
+      {retiredModel && <small>Choose a GPT-6 or newer model to save this agent.</small>}
     </label>
   );
   const codexControls = isCodex && (

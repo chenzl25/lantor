@@ -8,7 +8,7 @@ import { chromium, webkit } from "playwright";
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const now = new Date().toISOString(), channelId = id(1000), dmId = id(1001);
 const agent = { id: id(800), handle: "Hancock", display_name: "Hancock", role: "agent", status: "idle", runtime: "codex",
-  model: "", reasoning_effort: "", service_tier: "", avatar: "H", description: "", launch_command: "", environment_variables: "",
+  model: "gpt-5.6-sol", reasoning_effort: "ultra", service_tier: "", avatar: "H", description: "", launch_command: "", environment_variables: "",
   working_directory: "", workspace_exists: false, workspace_memory_path: "", workspace_memory_exists: false,
   workspace_entries: [], details_loaded: true, daily_budget_micros: 0, subscription_status: null };
 const message = (n, extra = {}) => ({ id: id(n), seq: n, channel_id: channelId, thread_root_id: null, sender_agent_id: null,
@@ -43,7 +43,13 @@ const api = createServer(async (req, res) => {
   if (url.pathname === "/api/events") {
     res.writeHead(200, { "content-type": "text/event-stream" }); res.write(": ready\n\n"); clients.add(res); res.on("close", () => clients.delete(res)); return;
   }
-  let raw = ""; for await (const chunk of req) raw += chunk;
+  let raw = "";
+  try { for await (const chunk of req) raw += chunk; }
+  catch (error) {
+    // Closing a panel or browser can cancel an in-flight profile read.
+    if (req.aborted && error.code === "ECONNRESET") return;
+    throw error;
+  }
   const args = raw ? JSON.parse(raw) : {}; requests.push({ path: url.pathname, args });
   // A slow commit proves the Needs you row hides before the server answers.
   if (url.pathname === "/api/update_task_status" && args.taskId === id(901)) await new Promise(done => setTimeout(done, 600));
@@ -75,6 +81,33 @@ try {
     await page.goto(`http://127.0.0.1:${api.address().port}`, { waitUntil: "domcontentloaded" });
     const row = page.locator(`.conversation [data-message-id="${root.id}"]`);
     await row.waitFor(); assert.equal(await page.locator(".thread").count(), 0, "initial channel has no empty thread column");
+    // New profiles expose only current GPT models; older saved profiles require a replacement.
+    const currentModels = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"];
+    await page.locator('.sidebar button[title="New agent"]').click();
+    const newAgent = page.getByRole("dialog", { name: "New agent", exact: true });
+    await newAgent.waitFor();
+    const newModel = newAgent.getByRole("combobox", { name: /^Model/ });
+    assert.equal(await newModel.inputValue(), "gpt-6-sol");
+    assert.deepEqual(await newModel.locator("option").evaluateAll(options => options.map(option => option.value)), currentModels);
+    await newAgent.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.getByRole("button", { name: "@Hancock’s profile", exact: true }).click();
+    await page.getByRole("button", { name: "Edit @Hancock", exact: true }).click();
+    const editAgent = page.getByRole("dialog", { name: "Edit agent", exact: true });
+    await editAgent.waitFor();
+    const editModel = editAgent.getByRole("combobox", { name: /^Model/ });
+    assert.equal(await editModel.inputValue(), "gpt-5.6-sol");
+    assert.equal(await editModel.locator('option[value="gpt-5.6-sol"]').evaluate(option => option.disabled), true);
+    assert.equal(await editAgent.getByRole("button", { name: "Save", exact: true }).isDisabled(), true);
+    await editAgent.getByText("Choose a GPT-6 or newer model to save this agent.", { exact: true }).waitFor();
+    await editModel.selectOption("gpt-6.1-terra");
+    assert.equal(await editAgent.getByRole("button", { name: "Save", exact: true }).isEnabled(), true);
+    const thinking = editAgent.getByRole("combobox", { name: /^Thinking/ });
+    await thinking.selectOption("ultra");
+    await editModel.selectOption("gpt-6-luna");
+    assert.equal(await thinking.inputValue(), "max", "switching from Terra to Luna clamps Ultra to Max");
+    assert.equal(await thinking.locator('option[value="ultra"]').count(), 0);
+    await editAgent.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.locator(".agent-close").click();
     const openThread = async () => {
       if (page.viewportSize().width <= 760) await row.locator(".markdown-body").click();
       else { await row.hover(); await row.getByRole("button", { name: "View replies", exact: true }).click(); }
