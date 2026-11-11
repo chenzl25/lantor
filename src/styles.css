@@ -11927,12 +11927,6 @@ body.resizing-column * {
     min-height: 100dvh;
   }
 
-  .app input:not([type="checkbox"]):not([type="radio"]),
-  .app textarea,
-  .app select {
-    font-size: 16px;
-  }
-
   .app,
   .app.thread-hidden {
     grid-template-columns: 100vw 100vw;
@@ -12301,6 +12295,36 @@ body.resizing-column * {
     display: none;
   }
 
+  /* A phone has no hover, so a tapped thread message lists its actions. */
+  .message-tap-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .message-tap-actions button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 1px solid var(--border-default);
+    border-radius: 12px;
+    background: var(--surface-control);
+    color: var(--ink-secondary);
+    font-size: var(--type-size-body);
+    font-weight: var(--type-weight-semibold);
+  }
+
+  .message-tap-actions button.saved {
+    color: var(--accent);
+  }
+
+  .message-tap-actions button.saved svg {
+    fill: currentColor;
+  }
+
   .mobile-message-save-tag {
     display: inline-grid;
     flex: 0 0 auto;
@@ -12628,10 +12652,18 @@ body.resizing-column * {
     height: 17px;
   }
 
+  /* The sidebar's 30px pill would cover the 17px icon; this one sits on its
+     top right corner and grows to the right with the number. */
   .mobile-bottom-nav .unread-badge {
     position: absolute;
-    top: -6px;
-    right: -11px;
+    top: -8px;
+    right: auto;
+    left: calc(100% - 5px);
+    width: auto;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    font-size: 10px;
   }
 
   .thread header,
@@ -14943,5 +14975,19 @@ body.resizing-column * {
   .github-notifications-read-all,
   .github-inbox-unread-toggle {
     min-height: 44px;
+  }
+}
+
+/* iOS zooms the page when a form control under 16px takes focus, and leaves it
+   zoomed. Dialogs are portalled outside .app, so they are named too. Keep this
+   rule last: a component rule of the same specificity would otherwise win. */
+@media (max-width: 760px) {
+  .app input:not([type="checkbox"]):not([type="radio"]),
+  .app textarea,
+  .app select,
+  [data-dialog-layer] input:not([type="checkbox"]):not([type="radio"]),
+  [data-dialog-layer] textarea,
+  [data-dialog-layer] select {
+    font-size: 16px;
   }
 }

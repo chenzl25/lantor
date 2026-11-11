@@ -236,6 +236,7 @@ export function ThreadPanel({
   const [showMobileThreadActions, setShowMobileThreadActions] = useState(false);
   const [messageMenu, setMessageMenu] = useState<MessageMenuState>(null);
   const [tapFocusedMessageId, setTapFocusedMessageId] = useState<string | null>(null);
+  const phoneLayout = useMobileViewport();
   const [expandedThreadMessageStateByThread, setExpandedThreadMessageStateByThread] = useState<Map<string, ThreadMessageExpansionState>>(() => new Map());
   const [pendingCollapsedThreadMessageId, setPendingCollapsedThreadMessageId] = useState<string | null>(null);
   const threadPanelRef = useRef<HTMLElement | null>(null);
@@ -338,7 +339,9 @@ export function ThreadPanel({
     switch (action) {
       case "reference": insertMessageReference(message, "message"); break;
       case "save": onToggleMessageSaved(message, !savedMessageIds.has(message.id)); break;
-      case "focus": setTapFocusedMessageId(message.id); break;
+      // On a phone a tap also shows the message's actions, so a second tap puts them away.
+      case "focus": setTapFocusedMessageId((current) => phoneLayout && current === message.id ? null : message.id); break;
+      case "copy-link": void copyMessageReference(message, "thread"); break;
       case "expand": toggleThreadMessageExpanded(message.id); break;
     }
   });
@@ -660,9 +663,11 @@ export function ThreadPanel({
     if (!root || !content) return;
     return observeScrollGeometry(root, content, (geometry, viewportOnly) => {
       threadGeometryRef.current = geometry;
-      if (viewportOnly) return;
+      // A viewport that only changed height (the reply box grew, the mention
+      // list opened) leaves a reader's place alone, but a followed thread
+      // stays on its latest reply. WebKit does not keep it there by itself.
       if (shouldFollowThreadRef.current) scrollThreadToBottom();
-      else restoreThreadScrollAnchor(false);
+      else if (!viewportOnly) restoreThreadScrollAnchor(false);
     });
   }, [activeRoot?.id]);
 
@@ -1002,6 +1007,7 @@ export function ThreadPanel({
               key={activeRoot.id} data={rows[activeRoot.id]} actions={rowActions} variant="thread-root" dateDivider
               saved={savedMessageIds.has(activeRoot.id)} expanded={expandedThreadMessageIds.has(activeRoot.id)}
               jumpFocused={focusedMessageId === activeRoot.id} tapFocused={tapFocusedMessageId === activeRoot.id}
+              tapActions={phoneLayout && tapFocusedMessageId === activeRoot.id}
               showImageThumbnails={showImageThumbnails}
             />}
 
@@ -1129,6 +1135,7 @@ export function ThreadPanel({
               dateDivider={index === 0 || !isSameCalendarDay(reply.created_at, replies[index - 1]?.created_at ?? "")}
               saved={savedMessageIds.has(reply.id)} expanded={expandedThreadMessageIds.has(reply.id)}
               jumpFocused={focusedMessageId === reply.id} tapFocused={tapFocusedMessageId === reply.id}
+              tapActions={phoneLayout && tapFocusedMessageId === reply.id}
               showImageThumbnails={showImageThumbnails}
             />)}
           </section>

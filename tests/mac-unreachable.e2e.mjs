@@ -103,7 +103,7 @@ async function run(browserType, name) {
     await channelRow.waitFor({ timeout: 12000 });
     await outOfReach.waitFor({ state: "detached", timeout: 8000 });
 
-    // Phones save from the long-press menu; only saved messages carry the tag.
+    // Phones save from a tapped thread message's actions; only saved messages carry the tag.
     await channelRow.click();
     await page.locator(".conversation").getByText("Plain message").waitFor();
     if (name === "webkit") {
