@@ -1,5 +1,5 @@
-import { Bookmark, CheckCircle2, MessageSquare, Quote } from "lucide-react";
-import { memo, useCallback } from "react";
+import { Bookmark, CheckCircle2, Link2, MessageSquare, Quote } from "lucide-react";
+import { memo, useCallback, useEffect, useState, type MouseEvent } from "react";
 import { useAgentReplyMode } from "../hooks/useAgentReplyMode";
 import { useStreamingMessage } from "../hooks/useStreamingMessage";
 import type { MessageRowData } from "../hooks/useMessageRows";
@@ -18,7 +18,7 @@ import { useMessageDecision } from "../decisions";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { MessageReplySummary } from "./MessageReplySummary";
 
-export type MessageRowAction = "reference" | "save" | "thread" | "expand" | "focus";
+export type MessageRowAction = "reference" | "save" | "thread" | "expand" | "focus" | "copy-link";
 export type MessageRowActions = {
   referenceStore: MessageReferenceStore;
   onAction: (message: Message, action: MessageRowAction) => void;
@@ -42,6 +42,8 @@ type MessageRowProps = {
   focused?: boolean;
   jumpFocused: boolean;
   tapFocused?: boolean;
+  /** Phones: show this thread message's actions below it. */
+  tapActions?: boolean;
   showImageThumbnails: boolean;
   replyCount?: number;
   unreadReplyCount?: number;
@@ -49,11 +51,34 @@ type MessageRowProps = {
   taskStatus?: string;
 };
 
+/** A phone has no hover and keeps long-press for text selection, so a tapped thread message lists its actions. */
+function MessageTapActions({ saved, onAction }: { saved: boolean; onAction: (action: MessageRowAction) => void }) {
+  const [linkCopied, setLinkCopied] = useState(false);
+  useEffect(() => {
+    if (!linkCopied) return;
+    const timer = window.setTimeout(() => setLinkCopied(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [linkCopied]);
+  // The row toggles its actions on click, so a press on one must not reach it.
+  const press = (action: MessageRowAction) => (event: MouseEvent) => {
+    event.stopPropagation();
+    onAction(action);
+    if (action === "copy-link") setLinkCopied(true);
+  };
+  return <div className="message-tap-actions" role="group" aria-label="Message actions">
+    <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={press("reference")}><Quote size={16} />Quote</button>
+    <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={press("copy-link")} title="Copy thread link">
+      <Link2 size={16} />{linkCopied ? "Copied" : "Copy link"}</button>
+    <button type="button" className={saved ? "saved" : ""} aria-pressed={saved}
+      onPointerDown={(event) => event.stopPropagation()} onClick={press("save")}><Bookmark size={16} />{saved ? "Saved" : "Save"}</button>
+  </div>;
+}
+
 const INTERACTIVE_TARGETS = "a,button,input,select,textarea,summary,[contenteditable='true'],[role='button'],[role='link'],.message-artifacts,.message-attachments,.decision-card";
 
 export const MessageRow = memo(function MessageRow({
   data, actions, variant, compact = false, dateDivider = false, unreadDivider = false, saved, expanded,
-  focused = false, jumpFocused, tapFocused = false, showImageThumbnails,
+  focused = false, jumpFocused, tapFocused = false, tapActions = false, showImageThumbnails,
   replyCount = 0, unreadReplyCount = 0, taskNumber, taskStatus,
 }: MessageRowProps) {
   const { agent, deletedAgent, ownerAvatar, references, reply } = data;
@@ -94,7 +119,7 @@ export const MessageRow = memo(function MessageRow({
         <strong>{message.sender_name}</strong><span>{message.sender_role}</span><time>{formatTime(message.created_at)}</time>
         {wasEdited(message) && <span className="edited-indicator">edited</span>}
         {taskNumber !== undefined && <mark><CheckCircle2 size={14} /> #{taskNumber} · {taskStatus?.replace("_", " ")}</mark>}
-        {/* Phones save from the long-press menu; the tag only marks saved messages. */}
+        {/* Phones save from the actions of a tapped thread message; the tag only marks saved messages. */}
         {saved && <button type="button" className="message-save-button mobile-message-save-tag saved"
           title={saveLabel} aria-label={saveLabel} aria-pressed={saved}
           onPointerDown={(event) => event.stopPropagation()}
@@ -123,6 +148,7 @@ export const MessageRow = memo(function MessageRow({
       {message.delivery_state === "streaming" && !message.body.trim() && <div className="message-stream-state" role="status">{finalOnly ? "Finishing up…" : "Writing…"}</div>}
       {message.delivery_state === "sending" && <div className="message-stream-state sending">Sending…</div>}
       {message.delivery_state === "error" && <div className="message-stream-state error">Reply stopped</div>}
+      {tapActions && <MessageTapActions saved={saved} onAction={act} />}
       {channel && reply && <MessageReplySummary reply={reply} replyCount={replyCount} unreadReplyCount={unreadReplyCount} onOpenThread={() => act("thread")} />}
     </div>
   </>;
