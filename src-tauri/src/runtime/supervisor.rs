@@ -1,7 +1,7 @@
 use std::{
     future::Future,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use chrono::{DateTime, Utc};
@@ -21,6 +21,7 @@ use super::{
     process::{
         effective_launch_command, start_process_agent, terminate_process_group, ProcessAgentLaunch,
     },
+    self_update::SelfUpdate,
     streaming::settle_orphaned_streaming_messages,
     surface::{append_surface_context, same_codex_surface, CodexActiveTurnScheduleState},
 };
@@ -38,7 +39,7 @@ use crate::{
         prepend_memory_context,
     },
     provider_auth::{provider_needs_login, start_due_provider_probes},
-    ui_notifications::reconcile_work_item_change,
+    ui_notifications::{enqueue_ui_event, reconcile_work_item_change, UiEvent},
     usage::agent_budget_exhausted,
 };
 
@@ -50,11 +51,15 @@ const SUPERVISOR_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(30);
 /// A run younger than this may still be starting its process; the orphan
 /// sweep leaves it alone.
 const ORPHAN_RUN_GRACE_SECS: i64 = 120;
+/// How long a supervisor about to replace itself waits for its stopped warm
+/// processes to exit. Their SIGKILL escalation comes after 10 seconds.
+const SELF_UPDATE_PROCESS_EXIT_WAIT: Duration = Duration::from_secs(15);
 
 pub(crate) async fn load_supervisor_status(pool: &SqlitePool) -> CommandResult<SupervisorStatus> {
     let row = sqlx::query(
         r#"
-        select pid, status, updated_at
+        select pid, status, updated_at, started_at, build_modified_at,
+               update_build_modified_at, update_waiting_since, update_error
         from supervisor_state
         where id = 1
         "#,
@@ -68,6 +73,11 @@ pub(crate) async fn load_supervisor_status(pool: &SqlitePool) -> CommandResult<S
             pid: None,
             status: "offline".to_owned(),
             updated_at: None,
+            started_at: None,
+            build_modified_at: None,
+            update_build_modified_at: None,
+            update_waiting_since: None,
+            update_error: String::new(),
         });
     };
 
@@ -82,6 +92,11 @@ pub(crate) async fn load_supervisor_status(pool: &SqlitePool) -> CommandResult<S
         pid: row.get("pid"),
         status,
         updated_at: Some(updated_at),
+        started_at: row.get("started_at"),
+        build_modified_at: row.get("build_modified_at"),
+        update_build_modified_at: row.get("update_build_modified_at"),
+        update_waiting_since: row.get("update_waiting_since"),
+        update_error: row.get("update_error"),
     })
 }
 
@@ -246,6 +261,92 @@ pub(crate) async fn write_supervisor_heartbeat(pool: &SqlitePool) -> CommandResu
     Ok(())
 }
 
+fn timestamp(time: SystemTime) -> DateTime<Utc> {
+    DateTime::<Utc>::from(time)
+}
+
+/// Records which build this supervisor runs, clearing what an earlier one
+/// left about newer builds.
+async fn record_supervisor_start(
+    pool: &SqlitePool,
+    self_update: Option<&SelfUpdate>,
+) -> CommandResult<()> {
+    write_supervisor_heartbeat(pool).await?;
+    sqlx::query(
+        r#"
+        update supervisor_state
+        set started_at = strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),
+            build_modified_at = $1,
+            update_build_modified_at = null,
+            update_waiting_since = null,
+            update_error = ''
+        where id = 1
+        "#,
+    )
+    .bind(self_update.map(|update| timestamp(update.running().modified())))
+    .execute(pool)
+    .await
+    .map_err(to_string)?;
+    enqueue_ui_event(
+        pool,
+        &UiEvent::Refresh {
+            reason: "supervisor_update",
+        },
+    )
+    .await
+}
+
+/// Records the newer build that waits to take over, or that none does.
+async fn record_pending_update(pool: &SqlitePool, self_update: &SelfUpdate) -> CommandResult<()> {
+    let pending = self_update.pending().map(|file| timestamp(file.modified()));
+    sqlx::query(
+        r#"
+        update supervisor_state
+        set update_build_modified_at = $1,
+            update_waiting_since = case
+                when $1 is null then null
+                else strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+            end
+        where id = 1
+        "#,
+    )
+    .bind(pending)
+    .execute(pool)
+    .await
+    .map_err(to_string)?;
+    enqueue_ui_event(
+        pool,
+        &UiEvent::Refresh {
+            reason: "supervisor_update",
+        },
+    )
+    .await
+}
+
+async fn record_failed_update(pool: &SqlitePool, error: &str) -> CommandResult<()> {
+    sqlx::query(
+        r#"
+        update supervisor_state
+        set status = 'running',
+            update_build_modified_at = null,
+            update_waiting_since = null,
+            update_error = $1
+        where id = 1
+        "#,
+    )
+    .bind(error)
+    .execute(pool)
+    .await
+    .map_err(to_string)?;
+    enqueue_ui_event(
+        pool,
+        &UiEvent::Refresh {
+            reason: "supervisor_update",
+        },
+    )
+    .await
+}
+
 pub(crate) async fn claim_next_supervisor_command(
     pool: &SqlitePool,
 ) -> CommandResult<Option<SupervisorCommand>> {
@@ -356,6 +457,8 @@ pub(crate) async fn run_supervisor() -> CommandResult<()> {
     close_runs_left_by_restart(&pool).await?;
     settle_orphaned_streaming_messages(&pool).await?;
     recover_supervisor_commands_at_startup(&pool).await?;
+    let mut self_update = SelfUpdate::for_current_executable();
+    record_supervisor_start(&pool, self_update.as_ref()).await?;
     let codex_registry = WarmCodexRegistry::default();
     let claude_registry = WarmClaudeRegistry::default();
     let command_semaphore = Arc::new(Semaphore::new(SUPERVISOR_COMMAND_CONCURRENCY));
@@ -369,15 +472,33 @@ pub(crate) async fn run_supervisor() -> CommandResult<()> {
             &codex_registry,
             &claude_registry,
             &command_semaphore,
+            self_update.as_mut(),
             &mut last_command_cleanup,
             &mut last_maintenance,
         )
         .await
         {
-            Ok(processed_command) => {
+            Ok(SupervisorIteration::ClaimedCommands) => {
                 error_backoff = SUPERVISOR_ERROR_BACKOFF_INITIAL;
-                if processed_command {
-                    continue;
+            }
+            Ok(SupervisorIteration::Waiting) => {
+                error_backoff = SUPERVISOR_ERROR_BACKOFF_INITIAL;
+                sleep(SUPERVISOR_IDLE_SLEEP).await;
+            }
+            Ok(SupervisorIteration::NewerBuildCanTakeOver) => {
+                error_backoff = SUPERVISOR_ERROR_BACKOFF_INITIAL;
+                if let Some(self_update) = self_update.as_mut() {
+                    if let Err(err) = hand_over_to_newer_build(
+                        &pool,
+                        &codex_registry,
+                        &claude_registry,
+                        &command_semaphore,
+                        self_update,
+                    )
+                    .await
+                    {
+                        eprintln!("Lantor supervisor could not hand over to a newer build: {err}");
+                    }
                 }
                 sleep(SUPERVISOR_IDLE_SLEEP).await;
             }
@@ -395,14 +516,25 @@ pub(crate) async fn run_supervisor() -> CommandResult<()> {
     }
 }
 
+enum SupervisorIteration {
+    /// Commands were claimed; look for more right away.
+    ClaimedCommands,
+    /// Nothing more to start until the next pass.
+    Waiting,
+    /// Nothing is working and a newer build waits to take over. No work was
+    /// scheduled in this pass.
+    NewerBuildCanTakeOver,
+}
+
 async fn run_supervisor_iteration(
     pool: &SqlitePool,
     codex_registry: &WarmCodexRegistry,
     claude_registry: &WarmClaudeRegistry,
     command_semaphore: &Arc<Semaphore>,
+    mut self_update: Option<&mut SelfUpdate>,
     last_command_cleanup: &mut Instant,
     last_maintenance: &mut Instant,
-) -> CommandResult<bool> {
+) -> CommandResult<SupervisorIteration> {
     write_supervisor_heartbeat(pool).await?;
     if last_command_cleanup.elapsed() >= Duration::from_secs(3600) {
         cleanup_supervisor_commands(pool).await?;
@@ -413,6 +545,20 @@ async fn run_supervisor_iteration(
         start_due_provider_probes(pool).await?;
         close_orphaned_agent_runs(pool, codex_registry, claude_registry).await?;
         settle_orphaned_streaming_messages(pool).await?;
+        if let Some(self_update) = self_update.as_deref_mut() {
+            if self_update.check() {
+                record_pending_update(pool, self_update).await?;
+            }
+        }
+    }
+    // Checked before scheduling, so that nothing starts between the check and
+    // the handover: only this loop starts work.
+    if self_update
+        .as_deref()
+        .is_some_and(|self_update| self_update.pending().is_some())
+        && supervisor_is_idle(pool, codex_registry, claude_registry, command_semaphore).await?
+    {
+        return Ok(SupervisorIteration::NewerBuildCanTakeOver);
     }
     schedule_queued_work_items(pool, codex_registry, claude_registry).await?;
     let mut processed_command = false;
@@ -434,7 +580,88 @@ async fn run_supervisor_iteration(
         });
     }
 
-    Ok(processed_command)
+    Ok(if processed_command {
+        SupervisorIteration::ClaimedCommands
+    } else {
+        SupervisorIteration::Waiting
+    })
+}
+
+/// Whether nothing is working: no run or request in progress, no command
+/// being carried out, and no warm process in a turn. Queued requests do not
+/// count; the next supervisor starts them.
+async fn supervisor_is_idle(
+    pool: &SqlitePool,
+    codex_registry: &WarmCodexRegistry,
+    claude_registry: &WarmClaudeRegistry,
+    command_semaphore: &Semaphore,
+) -> CommandResult<bool> {
+    if command_semaphore.available_permits() < SUPERVISOR_COMMAND_CONCURRENCY
+        || codex_registry.any_busy().await
+        || claude_registry.any_busy().await
+    {
+        return Ok(false);
+    }
+    let working: bool = sqlx::query_scalar(
+        r#"
+        select exists (
+                   select 1 from agent_work_items where status in ('running', 'cancelling')
+               )
+            or exists (
+                   select 1 from supervisor_commands where status = 'running'
+               )
+            or exists (
+                   select 1 from agent_runs
+                   where stopped_at is null and status in ('starting', 'running', 'stopping')
+               )
+        "#,
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(to_string)?;
+    Ok(!working)
+}
+
+/// Replaces this process with the newer build of its executable, which then
+/// starts as a new supervisor with the same process id. Warm processes are
+/// stopped first, as the idle reaper would; their next turn resumes the same
+/// session in a new process. Returns only when the handover did not happen:
+/// something started working, the file changed again, or the exec failed.
+async fn hand_over_to_newer_build(
+    pool: &SqlitePool,
+    codex_registry: &WarmCodexRegistry,
+    claude_registry: &WarmClaudeRegistry,
+    command_semaphore: &Semaphore,
+    self_update: &mut SelfUpdate,
+) -> CommandResult<()> {
+    if !self_update.pending_is_current() {
+        if self_update.check() {
+            record_pending_update(pool, self_update).await?;
+        }
+        return Ok(());
+    }
+    sqlx::query("update supervisor_state set status = 'restarting' where id = 1")
+        .execute(pool)
+        .await
+        .map_err(to_string)?;
+    codex_registry
+        .stop_idle_processes(pool, "stopped for a newer Lantor build")
+        .await;
+    claude_registry
+        .stop_idle_processes(pool, "stopped for a newer Lantor build")
+        .await;
+    let deadline = Instant::now() + SELF_UPDATE_PROCESS_EXIT_WAIT;
+    while !(codex_registry.is_empty().await && claude_registry.is_empty().await)
+        && Instant::now() < deadline
+    {
+        sleep(Duration::from_millis(100)).await;
+    }
+    // The next heartbeat sets the status back if this stops here.
+    if !supervisor_is_idle(pool, codex_registry, claude_registry, command_semaphore).await? {
+        return Ok(());
+    }
+    let error = self_update.exec_pending();
+    record_failed_update(pool, &error.to_string()).await
 }
 
 /// Runs a claimed command and records how it ended.
@@ -1090,6 +1317,10 @@ async fn load_channel_agent_roster(
         })
         .collect())
 }
+
+#[cfg(test)]
+#[path = "../tests/supervisor_self_update.rs"]
+mod self_update_tests;
 
 #[cfg(test)]
 mod tests {

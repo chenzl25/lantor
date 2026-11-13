@@ -3,6 +3,7 @@ pub(crate) mod codex;
 pub(crate) mod lifecycle;
 pub(crate) mod network_retry;
 pub(crate) mod process;
+pub(crate) mod self_update;
 pub(crate) mod streaming;
 pub(crate) mod supervisor;
 pub(crate) mod surface;

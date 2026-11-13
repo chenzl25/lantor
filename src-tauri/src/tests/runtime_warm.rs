@@ -188,3 +188,35 @@ async fn restart_without_a_process_is_served_by_the_next_spawn() {
     drop_test_schema(pool, schema).await;
     result.unwrap();
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stopping_idle_processes_leaves_a_process_in_a_turn_running() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let registry = WarmRegistry::<FakeProvider>::default();
+        assert!(!registry.any_busy().await);
+        let idle_agent = insert_test_agent(&pool, "update-idle").await?;
+        let busy_agent = insert_test_agent(&pool, "update-busy").await?;
+        let (idle, mut idle_child) = register_process(&registry, idle_agent, false).await?;
+        let (busy, mut busy_child) = register_process(&registry, busy_agent, true).await?;
+        assert!(registry.any_busy().await);
+
+        registry
+            .stop_idle_processes(&pool, "stopped for a newer Lantor build")
+            .await;
+        assert!(exits_soon(&mut idle_child).await, "the idle process stops");
+        assert!(!idle.state.lock().await.alive);
+        assert!(busy.state.lock().await.alive);
+        assert!(busy_child
+            .try_wait()
+            .map_err(|err| err.to_string())?
+            .is_none());
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    result.unwrap();
+}

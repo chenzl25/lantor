@@ -598,6 +598,14 @@ export type SupervisorStatus = {
   pid: number | null;
   status: string;
   updated_at: string | null;
+  started_at?: string | null;
+  /** Modification time of the executable the supervisor runs. */
+  build_modified_at?: string | null;
+  /** A newer build, waiting until no agent is working. */
+  update_build_modified_at?: string | null;
+  update_waiting_since?: string | null;
+  /** Why the last newer build could not start. */
+  update_error?: string;
 };
 
 export type LaunchAgentStatus = {
