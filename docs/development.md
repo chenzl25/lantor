@@ -123,9 +123,9 @@ installed. Each suite has an npm script, for example:
   command) in the agent drawer's Reminders tab and the Stop confirmation.
 - `npm run test:agent-tools` checks lazy tool discovery, partial failures,
   plugin and skill disclosures, tool search and Restart on desktop and phones.
-- `npm run test:cli-updates` checks the CLI version row in the agent profile:
-  the update offer, the running state, success, a failure's output and the
-  request it sends to the agent (see
+- `npm run test:cli-updates` checks the CLI version row in the agent profile
+  and the avatar hover card: the update offer, the request it sends to the
+  agent's DM, and the version read again afterwards (see
   [`agent-runtime.md`](agent-runtime.md#cli-updates)).
 - `npm run test:composer-drafts` checks that unsent channel and thread text
   comes back after a reload, that sending clears it, and that two tabs keep

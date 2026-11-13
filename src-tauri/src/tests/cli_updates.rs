@@ -1,25 +1,14 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::path::PathBuf;
 
 use uuid::Uuid;
 
-use super::{clean_output, is_newer, parse_version, CliSpec, CliUpdates, CliVersionStatus};
+use super::{clean_output, is_newer, parse_version, CliSpec, CliVersions};
 
-/// A fake CLI that keeps its version in a file next to it. `update` follows
-/// the `mode` file: upgrade copies `next` over `version`, fail exits 1, noop
-/// changes nothing, and wait blocks until a `release` file exists.
+/// A fake CLI that prints the version kept in a file next to it.
 const FAKE_CLI: &str = r#"#!/bin/sh
 dir=$(dirname "$0")
 case "$1" in
   --version) printf '%s (Fake CLI)\n' "$(cat "$dir/version")" ;;
-  update)
-    echo run >> "$dir/runs"
-    printf 'Current version: %s\n' "$(cat "$dir/version")"
-    case "$(cat "$dir/mode")" in
-      upgrade) cp "$dir/next" "$dir/version"; printf '\033[32mUpdated to %s\033[0m\n' "$(cat "$dir/version")" ;;
-      fail) echo 'npm ERR! EACCES: permission denied' >&2; exit 1 ;;
-      noop) echo 'Already up to date' ;;
-      wait) while [ ! -f "$dir/release" ]; do sleep 0.02; done; echo 'Updated' ;;
-    esac ;;
 esac
 "#;
 
@@ -64,12 +53,6 @@ impl FakeCli {
         );
     }
 
-    fn runs(&self) -> usize {
-        std::fs::read_to_string(self.dir.join("runs"))
-            .map(|runs| runs.lines().count())
-            .unwrap_or(0)
-    }
-
     fn path(&self, name: &str) -> PathBuf {
         self.dir.join(name)
     }
@@ -79,17 +62,6 @@ impl Drop for FakeCli {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
     }
-}
-
-async fn wait_until_idle(updates: &CliUpdates, spec: &CliSpec) -> CliVersionStatus {
-    for _ in 0..500 {
-        let status = updates.status(spec).await;
-        if !status.updating {
-            return status;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!("update did not finish");
 }
 
 #[test]
@@ -125,7 +97,7 @@ fn only_a_later_release_counts_as_newer() {
 }
 
 #[test]
-fn update_output_drops_colors_and_spinner_frames() {
+fn cli_output_drops_colors_and_spinner_frames() {
     let raw = "Current version: 1.0.0\n\u{1b}[32mChecking\u{1b}[0m |\rChecking /\rChecking done\n\u{1b}[1mUpdated\u{1b}[22m  \n";
     assert_eq!(
         clean_output(raw),
@@ -136,19 +108,17 @@ fn update_output_drops_colors_and_spinner_frames() {
 #[tokio::test]
 async fn status_offers_an_update_when_the_registry_has_a_later_release() {
     let fake = FakeCli::new("1.2.3", "1.2.10");
-    let updates = CliUpdates::default();
-    let status = updates.status(&fake.spec).await;
+    let versions = CliVersions::default();
+    let status = versions.status(&fake.spec).await;
     assert_eq!(status.installed.as_deref(), Some("1.2.3"));
     assert_eq!(status.latest.as_deref(), Some("1.2.10"));
     assert!(status.update_available);
-    assert!(!status.updating);
     assert_eq!(status.problem, None);
-    assert_eq!(status.last_update, None);
 
     // The latest release is cached; the installed version is read each time.
     fake.publish("1.2.11");
     fake.write("version", "1.2.10");
-    let status = updates.status(&fake.spec).await;
+    let status = versions.status(&fake.spec).await;
     assert_eq!(status.latest.as_deref(), Some("1.2.10"));
     assert_eq!(status.installed.as_deref(), Some("1.2.10"));
     assert!(!status.update_available);
@@ -161,7 +131,7 @@ async fn status_explains_a_missing_cli_or_an_unreachable_registry() {
         program: fake.path("missing-cli").to_string_lossy().into_owned(),
         ..fake.spec.clone()
     };
-    let status = CliUpdates::default().status(&missing).await;
+    let status = CliVersions::default().status(&missing).await;
     assert_eq!(status.installed, None);
     assert!(!status.update_available);
     assert!(
@@ -173,7 +143,7 @@ async fn status_explains_a_missing_cli_or_an_unreachable_registry() {
     );
 
     std::fs::remove_file(fake.path("latest.json")).unwrap();
-    let status = CliUpdates::default().status(&fake.spec).await;
+    let status = CliVersions::default().status(&fake.spec).await;
     assert_eq!(status.installed.as_deref(), Some("1.2.3"));
     assert_eq!(status.latest, None);
     assert!(!status.update_available);
@@ -184,90 +154,4 @@ async fn status_explains_a_missing_cli_or_an_unreachable_registry() {
             .is_some_and(|problem| problem.starts_with("Couldn't reach")),
         "{status:?}"
     );
-}
-
-#[tokio::test]
-async fn a_successful_update_reports_the_new_version() {
-    let fake = FakeCli::new("1.2.3", "1.2.10");
-    fake.write("mode", "upgrade");
-    fake.write("next", "1.2.10");
-    let updates = Arc::new(CliUpdates::default());
-    let started = updates.clone().start_update(fake.spec.clone()).await;
-    assert!(started.updating);
-    let status = wait_until_idle(&updates, &fake.spec).await;
-    assert_eq!(status.installed.as_deref(), Some("1.2.10"));
-    assert!(!status.update_available);
-    let outcome = status.last_update.expect("update outcome");
-    assert!(outcome.ok, "{outcome:?}");
-    assert_eq!(outcome.from.as_deref(), Some("1.2.3"));
-    assert_eq!(outcome.to.as_deref(), Some("1.2.10"));
-    assert!(outcome.command.ends_with("fake-cli update"));
-    assert_eq!(outcome.output, "Current version: 1.2.3\nUpdated to 1.2.10");
-}
-
-#[tokio::test]
-async fn a_failed_update_keeps_the_error_for_the_agent() {
-    let fake = FakeCli::new("1.2.3", "1.2.10");
-    fake.write("mode", "fail");
-    let updates = Arc::new(CliUpdates::default());
-    updates.clone().start_update(fake.spec.clone()).await;
-    let status = wait_until_idle(&updates, &fake.spec).await;
-    assert!(status.update_available);
-    let outcome = status.last_update.expect("update outcome");
-    assert!(!outcome.ok);
-    assert_eq!(outcome.to.as_deref(), Some("1.2.3"));
-    assert!(
-        outcome.output.contains("EACCES: permission denied"),
-        "{outcome:?}"
-    );
-}
-
-#[tokio::test]
-async fn an_update_that_leaves_the_old_version_is_a_failure() {
-    let fake = FakeCli::new("1.2.3", "1.2.10");
-    fake.write("mode", "noop");
-    let updates = Arc::new(CliUpdates::default());
-    updates.clone().start_update(fake.spec.clone()).await;
-    let outcome = wait_until_idle(&updates, &fake.spec)
-        .await
-        .last_update
-        .expect("update outcome");
-    assert!(!outcome.ok);
-    assert!(
-        outcome
-            .output
-            .ends_with("is still 1.2.3; the latest release is 1.2.10."),
-        "{outcome:?}"
-    );
-}
-
-#[tokio::test]
-async fn a_second_tap_while_updating_does_not_start_another_update() {
-    let fake = FakeCli::new("1.2.3", "1.2.10");
-    fake.write("mode", "wait");
-    let updates = Arc::new(CliUpdates::default());
-    assert!(
-        updates
-            .clone()
-            .start_update(fake.spec.clone())
-            .await
-            .updating
-    );
-    for _ in 0..500 {
-        if fake.runs() == 1 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert_eq!(fake.runs(), 1);
-    assert!(
-        updates
-            .clone()
-            .start_update(fake.spec.clone())
-            .await
-            .updating
-    );
-    fake.write("release", "");
-    wait_until_idle(&updates, &fake.spec).await;
-    assert_eq!(fake.runs(), 1);
 }

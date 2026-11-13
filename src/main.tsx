@@ -3323,11 +3323,10 @@ function App() {
   if (!cliVersionStoreRef.current) {
     cliVersionStoreRef.current = new CliVersionStore({
       load: (runtime) => apiInvoke("load_cli_version", { runtime }),
-      update: (runtime) => apiInvoke("update_cli", { runtime }),
     });
   }
   const cliVersionStore = cliVersionStoreRef.current;
-  cliVersionStore.askAgentToFix = askAgentToFixCli;
+  cliVersionStore.askAgent = sendOwnerMessageToAgent;
 
   const needsYou = useMemo(
     () => deriveNeedsYou(data?.decisions, data?.tasks ?? [], data?.thread_activities ?? [], Date.now()),
@@ -4764,7 +4763,7 @@ function App() {
   }
 
   /** Opens the agent's DM and sends the owner's request there. */
-  async function askAgentToFixCli(agentId: string, body: string) {
+  async function sendOwnerMessageToAgent(agentId: string, body: string) {
     let channelId: string;
     try {
       channelId = await apiInvoke("open_dm_with_agent", { agentId });
