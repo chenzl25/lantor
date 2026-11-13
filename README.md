@@ -199,7 +199,8 @@ caches.
 Lantor is a native macOS app with a local supervisor. The desktop process
 starts the same binary in supervisor mode; that supervisor owns agent process
 launch, stop commands, queued work scheduling, run logs, and structured event
-ingestion.
+ingestion. When the binary is rebuilt, the supervisor switches to the new build
+once no agent is working.
 
 Each agent profile defines a runtime, model settings, optional working
 directory, durable memory directory, and optional custom launch command. When

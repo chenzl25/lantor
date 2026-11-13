@@ -5084,7 +5084,8 @@ a.code-block-title:hover {
 :root[data-theme="dark"] .settings-section-head h4,
 :root[data-theme="dark"] .theme-choice-grid strong,
 :root[data-theme="dark"] .chat-text-size-grid strong,
-:root[data-theme="dark"] .settings-toggle-copy strong {
+:root[data-theme="dark"] .settings-toggle-copy strong,
+:root[data-theme="dark"] .settings-status strong {
   color: var(--ink-primary);
 }
 
@@ -8360,6 +8361,28 @@ body.resizing-column * {
   color: var(--ink);
   font-size: var(--type-size-body);
   font-weight: var(--type-weight-semibold);
+}
+
+.settings-status {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--panel-strong);
+  color: var(--muted);
+  font-size: var(--type-size-body);
+}
+
+.settings-status strong {
+  color: var(--ink);
+  font-weight: var(--type-weight-semibold);
+}
+
+.settings-status p {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .settings-toggle-row input {

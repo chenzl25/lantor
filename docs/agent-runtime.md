@@ -225,6 +225,41 @@ caller picks the outcome and does what follows the commit: task status,
 reconciliation, and the activity log. A new transition is a new function in
 that module.
 
+## Supervisor Updates
+
+The supervisor runs the app's own executable. When that file is rebuilt or
+replaced, as `tauri dev` does after a Rust change, the supervisor switches to
+the new build by itself once no agent is working
+(`src-tauri/src/runtime/self_update.rs`):
+
+- Every 30 seconds it compares the file with the one it started from: device,
+  inode, size and modification time. A different file that is unchanged on the
+  next check is a newer build. A file still being written changes between
+  checks.
+- While a newer build waits, every pass of the supervisor loop first checks
+  that nothing is working: no run or request in progress, no command being
+  carried out, no warm process in a turn. Queued requests do not count. The
+  check comes before scheduling, and only this loop starts work, so nothing
+  starts in between. Until then the loop works as usual.
+- It then stops its idle Claude and Codex processes, as the ten-minute idle
+  stop does, and executes the new file in place: same process id, arguments
+  and environment. The supervisor lock is close-on-exec, so the new build
+  takes it as it starts. It runs the migrations and starts the queued
+  requests; each agent's next turn resumes its session in a new process.
+- A build that cannot be executed is not tried again until the file changes.
+  The error is kept for Settings.
+
+Settings shows under Status since when the supervisor runs, whether a newer
+build is waiting, and the last error. The state is in `supervisor_state`:
+`started_at`, `build_modified_at`, `update_build_modified_at`,
+`update_waiting_since` and `update_error`. A supervisor started before this
+behavior existed has to be restarted once by hand.
+
+`npm run test:supervisor-update` builds the app, runs a copy of it as a
+supervisor on a fresh database, replaces the copy while a request runs, and
+checks that the same process starts the newer build once the request is done.
+It takes about 70 seconds.
+
 ## Context Tools
 
 The supervisor injects `LANTOR_CONTEXT_TOOL` for context access and narrow

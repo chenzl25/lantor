@@ -25,7 +25,7 @@ const state = { db_url: "synthetic://ui-panels", web_base_url: null, owner_profi
   channel_message_history: channels.map(c => ({ channel_id: c.id, before_seq: null, has_more: false })),
   agents: [agent], tasks: structuredClone(initialTasks), channel_members: [{ channel_id: channelId, agent_id: agent.id }],
   thread_activities: [], saved_messages: [], dismissed_inbox_items: {}, read_inbox_items: {}, artifacts: [], reminders: [],
-  agent_runs: [], agent_work_items: [], agent_activities: [], supervisor: { pid: null, status: "stopped", updated_at: null },
+  agent_runs: [], agent_work_items: [], agent_activities: [], supervisor: { pid: 42, status: "running", updated_at: now, started_at: now, update_waiting_since: now, update_error: "" },
   launch_agent: { label: "", plist_path: "", installed: false, loaded: false }, ui_event_cursor: 0 };
 let cursor = 0;
 const clients = new Set(), requests = [];
@@ -205,6 +205,13 @@ try {
     await page.getByRole("button", { name: "Open settings", exact: true }).focus();
     await page.keyboard.press("Enter");
     const settings = page.getByRole("dialog", { name: "Settings", exact: true }); await settings.waitFor();
+    await settings.getByText("A newer build is ready. It takes over when no agent is working.", { exact: true }).waitFor();
+    const waitingSupervisor = state.supervisor;
+    state.supervisor = { ...waitingSupervisor, update_waiting_since: null };
+    publish({ type: "refresh", reason: "supervisor_update" });
+    await settings.getByText("A newer build is ready", { exact: false }).waitFor({ state: "detached" });
+    assert.match(await settings.locator(".settings-status").innerText(), /^Running since /, "the supervisor line follows its refresh event");
+    state.supervisor = waitingSupervisor;
     await settings.getByRole("button", { name: "Dark", exact: true }).click();
     await page.evaluate(() => window.dispatchEvent(new CustomEvent("lantor-ui-error", { detail: "Could not open attachment: permission denied" })));
     await page.getByRole("alert").filter({ hasText: "Could not open attachment" }).waitFor();

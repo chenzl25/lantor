@@ -1075,6 +1075,21 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         r#"text not null default '["Notion","Slack","Gmail"]'"#,
     )
     .await?;
+    for column in [
+        "started_at",
+        "build_modified_at",
+        "update_build_modified_at",
+        "update_waiting_since",
+    ] {
+        ensure_text_column(pool, "supervisor_state", column, "text").await?;
+    }
+    ensure_text_column(
+        pool,
+        "supervisor_state",
+        "update_error",
+        "text not null default ''",
+    )
+    .await?;
     backfill_reminder_recurrence_anchors(pool).await?;
 
     sqlx::query(

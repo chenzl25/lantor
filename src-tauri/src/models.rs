@@ -422,6 +422,14 @@ pub(crate) struct SupervisorStatus {
     pub(crate) pid: Option<i32>,
     pub(crate) status: String,
     pub(crate) updated_at: Option<DateTime<Utc>>,
+    pub(crate) started_at: Option<DateTime<Utc>>,
+    /// Modification time of the executable the supervisor runs.
+    pub(crate) build_modified_at: Option<DateTime<Utc>>,
+    /// A newer build of the executable, waiting until no agent is working.
+    pub(crate) update_build_modified_at: Option<DateTime<Utc>>,
+    pub(crate) update_waiting_since: Option<DateTime<Utc>>,
+    /// Why the last newer build could not start, if it could not.
+    pub(crate) update_error: String,
 }
 
 #[derive(Debug, Serialize)]

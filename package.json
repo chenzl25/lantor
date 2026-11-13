@@ -18,6 +18,7 @@
     "test:streaming": "node tests/streaming.e2e.mjs",
     "test:attachments": "cargo test --manifest-path src-tauri/Cargo.toml web::attachment_tests::browser_cache_range_and_upload_memory -- --ignored --nocapture",
     "test:sse-push": "cargo test --manifest-path src-tauri/Cargo.toml web::sse_push_tests::browser_cross_process_delivery_and_query_scaling -- --ignored --nocapture",
+    "test:supervisor-update": "cargo build --manifest-path src-tauri/Cargo.toml && cargo test --manifest-path src-tauri/Cargo.toml runtime::supervisor::self_update_tests::a_newer_build_takes_over_once_nothing_is_working -- --ignored --nocapture",
     "test:web-sync": "node tests/web-sync.e2e.mjs",
     "test:message-state-races": "node tests/message-state-races.e2e.mjs",
     "test:web-math": "node tests/web-math.e2e.mjs",

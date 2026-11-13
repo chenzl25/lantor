@@ -33,6 +33,7 @@ export function scopesForRefresh(reason?: string): UiStateScope[] | null {
   if (reason.startsWith("channel_") || reason === "dm_opened") return ["channels", "channel_members"];
   if (reason === "agent_queued" || reason === "supervisor_command") return ["agents", "supervisor"];
   if (reason.startsWith("supervisor_service_")) return ["launch_agent", "supervisor"];
+  if (reason === "supervisor_update") return ["supervisor"];
   if (reason === "held_outputs_expired") return ["agent_work_items"];
   return null;
 }

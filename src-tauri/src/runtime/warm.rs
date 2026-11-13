@@ -127,6 +127,47 @@ impl<P: WarmProvider> WarmRegistry<P> {
             None => false,
         }
     }
+
+    fn snapshot(runtimes: &HashMap<Uuid, Arc<WarmRuntime<P>>>) -> Vec<(Uuid, Arc<WarmRuntime<P>>)> {
+        runtimes
+            .iter()
+            .map(|(agent_id, runtime)| (*agent_id, runtime.clone()))
+            .collect()
+    }
+
+    /// Whether any process is in a turn.
+    pub(crate) async fn any_busy(&self) -> bool {
+        let runtimes = Self::snapshot(&*self.runtimes.lock().await);
+        for (_, runtime) in runtimes {
+            if runtime.state.lock().await.is_busy() {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub(crate) async fn is_empty(&self) -> bool {
+        self.runtimes.lock().await.is_empty()
+    }
+
+    /// Stops every process that is not in a turn, as the idle reaper does. A
+    /// stopped process leaves the registry once it has exited.
+    pub(crate) async fn stop_idle_processes(&self, pool: &SqlitePool, reason: &str) {
+        let runtimes = Self::snapshot(&*self.runtimes.lock().await);
+        for (agent_id, runtime) in runtimes {
+            let stop = {
+                let mut state = runtime.state.lock().await;
+                let stop = state.alive() && !state.is_busy();
+                if stop {
+                    state.set_alive(false);
+                }
+                stop
+            };
+            if stop {
+                stop_idle_process(pool, agent_id, &runtime, reason).await;
+            }
+        }
+    }
 }
 
 /// Asks for a fresh process at the agent's next start. Restart in the agent
@@ -275,12 +316,14 @@ pub(crate) async fn wait_for_warm_process<P: WarmProvider>(
     let _ = notify_supervisor_wake(&pool).await;
 }
 
-/// Stops a process its reaper found idle and already marked not alive. If
-/// the signal fails, the process is alive again and its idle time restarts.
+/// Stops a process found idle and already marked not alive; `reason` ends
+/// the activity title. If the signal fails, the process is alive again and
+/// its idle time restarts.
 pub(crate) async fn stop_idle_process<P: WarmProvider>(
     pool: &SqlitePool,
     agent_id: Uuid,
     runtime: &WarmRuntime<P>,
+    reason: &str,
 ) {
     let Some(pid) = runtime.pid else {
         return;
@@ -299,7 +342,7 @@ pub(crate) async fn stop_idle_process<P: WarmProvider>(
                 Some(agent_id),
                 None,
                 "run",
-                format!("{} idle timeout", P::PROCESS_TITLE),
+                format!("{} {reason}", P::PROCESS_TITLE),
                 format!("sent SIGTERM to process_group={pid}"),
             )
             .await;

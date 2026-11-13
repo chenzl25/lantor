@@ -34,7 +34,7 @@ pub(super) async fn claude_warm_idle_reaper(
             continue;
         }
 
-        stop_idle_process(&pool, agent_id, &runtime).await;
+        stop_idle_process(&pool, agent_id, &runtime, "idle timeout").await;
         return;
     }
 }

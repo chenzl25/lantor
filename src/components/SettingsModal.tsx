@@ -1,5 +1,7 @@
 import { Image, MessageSquare, Monitor, Moon, Sun, Type } from "lucide-react";
 import { setAgentReplyMode, useAgentReplyMode } from "../hooks/useAgentReplyMode";
+import { supervisorStatusLines } from "../supervisor-status";
+import type { SupervisorStatus } from "../types";
 import { Modal } from "./Modal";
 
 export type ThemePreference = "auto" | "light" | "dark";
@@ -12,6 +14,7 @@ type SettingsModalProps = {
   chatTextSize: ChatTextSize;
   fontPreset: FontPreset;
   showImageThumbnails: boolean;
+  supervisor?: SupervisorStatus;
   onThemePreferenceChange: (value: ThemePreference) => void;
   onChatTextSizeChange: (value: ChatTextSize) => void;
   onFontPresetChange: (value: FontPreset) => void;
@@ -53,6 +56,7 @@ export function SettingsModal({
   chatTextSize,
   fontPreset,
   showImageThumbnails,
+  supervisor,
   onThemePreferenceChange,
   onChatTextSizeChange,
   onFontPresetChange,
@@ -60,6 +64,7 @@ export function SettingsModal({
   onClose,
 }: SettingsModalProps) {
   const agentReplyMode = useAgentReplyMode();
+  const [supervisorState, ...supervisorNotes] = supervisorStatusLines(supervisor);
   return (
     <Modal open={open} title="Settings" onClose={onClose} width={560}>
       <section className="settings-panel">
@@ -145,6 +150,16 @@ export function SettingsModal({
               onChange={(event) => onShowImageThumbnailsChange(event.currentTarget.checked)}
             />
           </label>
+        </fieldset>
+        <div className="settings-section-head">
+          <h4>Status</h4>
+        </div>
+        <fieldset className="settings-fieldset">
+          <legend>Supervisor</legend>
+          <div className="settings-status">
+            <strong>{supervisorState}</strong>
+            {supervisorNotes.map((note) => <p key={note}>{note}</p>)}
+          </div>
         </fieldset>
       </section>
     </Modal>

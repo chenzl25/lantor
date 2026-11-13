@@ -192,7 +192,7 @@ pub(super) async fn codex_warm_idle_reaper(
             return;
         }
 
-        stop_idle_process(&pool, agent_id, &runtime).await;
+        stop_idle_process(&pool, agent_id, &runtime, "idle timeout").await;
         return;
     }
 }

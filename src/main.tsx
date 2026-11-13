@@ -5521,6 +5521,7 @@ function App() {
         chatTextSize={chatTextSize}
         fontPreset={fontPreset}
         showImageThumbnails={showImageThumbnails}
+        supervisor={data.supervisor}
         onThemePreferenceChange={setThemePreference}
         onChatTextSizeChange={setChatTextSize}
         onFontPresetChange={setFontPreset}
