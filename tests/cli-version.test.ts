@@ -2,55 +2,38 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { CliVersionStore } from "../src/cli-versions";
-import { cliFixRequest, cliVersionView } from "../src/components/AgentCliVersion";
+import { cliCanUpdate, cliUpdateRequest } from "../src/components/AgentCliVersion";
 import type { CliVersionStatus } from "../src/types";
 
-const failed: CliVersionStatus = {
+const behind: CliVersionStatus = {
   runtime: "codex",
   command: "codex",
   installed: "0.167.0",
   latest: "0.168.0",
   update_available: true,
-  updating: false,
   problem: null,
-  last_update: {
-    ok: false,
-    command: "codex update",
-    from: "0.167.0",
-    to: "0.167.0",
-    output: "npm ERR! code EACCES\nnpm ERR! permission denied",
-    finished_at: "2026-01-02T03:04:05.000Z",
-  },
   checked_at: "2026-01-02T03:04:06.000Z",
 };
 
-test("a failed update becomes a request the agent can act on", () => {
+test("the update request tells the agent what to update and how to report back", () => {
+  assert.ok(cliCanUpdate(behind));
   assert.equal(
-    cliFixRequest(failed),
+    cliUpdateRequest(behind),
     [
-      "`codex update` failed on this Mac. Codex is 0.167.0; the latest release is 0.168.0.",
+      "Codex 0.168.0 is out; this Mac has 0.167.0.",
       "",
-      "Please find out why, fix it, and update Codex to the latest release. Every Codex agent here uses this install. Tell me what you changed.",
+      "Please update Codex to the latest release from your shell. `codex update` usually works, since it knows how Codex was installed here. If it fails, find out why and fix it.",
       "",
-      "Output:",
-      "```text",
-      "npm ERR! code EACCES",
-      "npm ERR! permission denied",
-      "```",
+      "Every Codex agent on this Mac uses this install. Your own process keeps its current version until it next starts. When you're done, run `codex --version` and tell me the version and anything you changed.",
     ].join("\n"),
   );
 });
 
-test("output that contains a code fence gets a longer fence", () => {
-  const body = cliFixRequest({
-    ...failed,
-    runtime: "claude",
-    command: "claude",
-    installed: null,
-    last_update: { ...failed.last_update!, command: "claude update", output: "see ```log```" },
-  });
-  assert.match(body, /^`claude update` failed on this Mac\. Claude Code is not found;/);
-  assert.ok(body.endsWith("````text\nsee ```log```\n````"), body);
+test("an update is offered only when both versions are known and a later one exists", () => {
+  assert.equal(cliCanUpdate(null), false);
+  assert.equal(cliCanUpdate({ ...behind, update_available: false, installed: "0.168.0" }), false);
+  assert.equal(cliCanUpdate({ ...behind, update_available: false, installed: null, problem: "codex not found on this Mac" }), false);
+  assert.equal(cliCanUpdate({ ...behind, update_available: false, latest: null, problem: "Couldn't reach the npm registry" }), false);
 });
 
 function deferred<T>() {
@@ -63,13 +46,14 @@ function deferred<T>() {
 /** A store over a fake API whose answers the test releases one by one. */
 function fixtureStore() {
   let clock = 1_000;
-  const pending: { kind: "load" | "update"; answer: ReturnType<typeof deferred<CliVersionStatus>> }[] = [];
-  const call = (kind: "load" | "update") => {
-    const answer = deferred<CliVersionStatus>();
-    pending.push({ kind, answer });
-    return answer.promise;
-  };
-  const store = new CliVersionStore({ load: () => call("load"), update: () => call("update") }, () => clock);
+  const pending: ReturnType<typeof deferred<CliVersionStatus>>[] = [];
+  const store = new CliVersionStore({
+    load: () => {
+      const answer = deferred<CliVersionStatus>();
+      pending.push(answer);
+      return answer.promise;
+    },
+  }, () => clock);
   return {
     store,
     pending,
@@ -78,23 +62,21 @@ function fixtureStore() {
   };
 }
 
-const current: CliVersionStatus = { ...failed, update_available: true, last_update: null };
-
 test("hover cards reuse a recent status instead of reading the CLI again", async () => {
   const { store, pending, advance, settled } = fixtureStore();
   store.refresh("codex", 60_000);
   store.refresh("codex", 60_000);
   assert.equal(pending.length, 1, "a read on its way is shared");
-  pending[0].answer.resolve(current);
+  pending[0].resolve(behind);
   await settled();
-  assert.equal(store.get("codex").status, current);
+  assert.equal(store.get("codex").status, behind);
 
   advance(30_000);
   store.refresh("codex", 60_000);
   assert.equal(pending.length, 1, "a status read 30 s ago is reused");
   store.refresh("codex", 0);
   assert.equal(pending.length, 2, "the profile reads it again");
-  pending[1].answer.resolve(current);
+  pending[1].resolve(behind);
   await settled();
 
   advance(61_000);
@@ -102,21 +84,16 @@ test("hover cards reuse a recent status instead of reading the CLI again", async
   assert.equal(pending.length, 3, "an older status is read again");
 });
 
-test("a running update is always read again, and a late read cannot undo its answer", async () => {
+test("after an agent is asked to update, the next hover reads the version again", async () => {
   const { store, pending, settled } = fixtureStore();
   store.refresh("codex", 60_000);
-  const update = store.update("codex");
-  assert.equal(store.get("codex").starting, true);
-  pending[1].answer.resolve({ ...current, updating: true });
-  await update;
-  pending[0].answer.resolve(current);
+  pending[0].resolve(behind);
   await settled();
-  assert.equal(store.get("codex").status?.updating, true, "the read sent before the update is dropped");
-  assert.equal(store.get("codex").starting, false);
-
+  store.invalidate("codex");
+  assert.equal(store.get("codex").status, behind, "the card keeps showing what it knows meanwhile");
   store.refresh("codex", 60_000);
-  assert.equal(pending.length, 3, "a status that says updating is never reused");
-  pending[2].answer.resolve({ ...current, installed: "0.168.0", update_available: false });
+  assert.equal(pending.length, 2);
+  pending[1].resolve({ ...behind, installed: "0.168.0", update_available: false });
   await settled();
   assert.equal(store.get("codex").status?.installed, "0.168.0");
 });
@@ -124,18 +101,9 @@ test("a running update is always read again, and a late read cannot undo its ans
 test("a failed read is tried again on the next hover", async () => {
   const { store, pending, settled } = fixtureStore();
   store.refresh("claude", 60_000);
-  pending[0].answer.reject(new Error("offline"));
+  pending[0].reject(new Error("offline"));
   await settled();
   assert.equal(store.get("claude").loadFailed, true);
   store.refresh("claude", 60_000);
   assert.equal(pending.length, 2);
-});
-
-test("the hover card shows a line only when there is something to do or see", () => {
-  const view = (status: CliVersionStatus | null, starting = false) => cliVersionView({ status, loadFailed: false, starting });
-  assert.equal(view({ ...current, update_available: false, installed: "0.168.0" }).canUpdate, false);
-  assert.equal(view(current).canUpdate, true);
-  assert.deepEqual([view(current, true).updating, view(current, true).canUpdate], [true, false]);
-  assert.deepEqual([view(failed).failed, view(failed).canUpdate], [true, false], "Try again replaces Update after a failure");
-  assert.equal(view({ ...failed, update_available: false, installed: "0.168.0" }).failed, false, "a failure fixed elsewhere is not shown");
 });

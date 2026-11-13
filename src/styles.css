@@ -9250,22 +9250,6 @@ body.resizing-column * {
   font-size: var(--type-size-meta);
 }
 .cli-version .cli-version-action:disabled { color: var(--ink-muted); }
-.cli-version .cli-version-link { border: 0; padding: 0; background: none; color: var(--accent); font-size: var(--type-size-meta); }
-.cli-version-failure { margin-top: 8px; padding: 8px; border: 1px solid var(--status-warning-border); border-radius: 8px; background: var(--status-warning-soft); }
-.cli-version-failure p { margin: 0 0 6px; font-size: var(--type-size-meta); overflow-wrap: anywhere; }
-.cli-version-output {
-  max-height: 180px;
-  margin: 0 0 8px;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-family: var(--font-mono);
-  font-size: var(--type-size-meta);
-  color: var(--ink-primary);
-}
-.cli-version-failure-actions { display: flex; align-items: center; gap: 12px; }
-.cli-version-failure-actions .cli-version-action { margin-left: 0; }
-
 /* The avatar hover card's line about the agent's CLI (AgentCliUpdateHint). */
 .cli-update-hint {
   display: flex;
@@ -9281,7 +9265,6 @@ body.resizing-column * {
 }
 .cli-update-hint-copy { display: grid; flex: 1 1 140px; gap: 1px; min-width: 0; overflow-wrap: anywhere; }
 .cli-update-hint-detail { color: var(--agent-avatar-profile-ink-muted, var(--ink-muted)); font-size: var(--type-size-caption); }
-.cli-update-hint-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .cli-update-hint .cli-update-hint-action {
   border: 1px solid var(--border-subtle);
   border-radius: 7px;
@@ -9291,7 +9274,6 @@ body.resizing-column * {
   font-size: var(--type-size-meta);
 }
 .cli-update-hint .cli-update-hint-action:disabled { color: var(--ink-muted); }
-.cli-update-hint .cli-update-hint-link { border: 0; padding: 0; background: none; color: var(--accent); font-size: var(--type-size-meta); }
 
 .workspace-section {
   padding: 14px;

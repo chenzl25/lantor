@@ -237,7 +237,6 @@ fn api_router(state: Arc<WebState>) -> Router {
         )
         .route("/api/check_runtime", post(api_check_runtime))
         .route("/api/load_cli_version", post(api_load_cli_version))
-        .route("/api/update_cli", post(api_update_cli))
         .route("/api/report_client_crash", post(api_report_client_crash))
         .route("/api/events", get(api_events))
         .route(
@@ -552,15 +551,6 @@ async fn api_load_cli_version(
     Json(request): Json<CliRuntimeRequest>,
 ) -> Result<impl IntoResponse, Response> {
     cli_updates::load_status(request)
-        .await
-        .map(Json)
-        .map_err(api_error)
-}
-
-async fn api_update_cli(
-    Json(request): Json<CliRuntimeRequest>,
-) -> Result<impl IntoResponse, Response> {
-    cli_updates::start_update(request)
         .await
         .map(Json)
         .map_err(api_error)

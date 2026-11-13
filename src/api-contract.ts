@@ -104,10 +104,6 @@ export type ApiContract = {
     args: { runtime: string };
     result: CliVersionStatus;
   };
-  update_cli: {
-    args: { runtime: string };
-    result: CliVersionStatus;
-  };
   report_client_crash: {
     args: {
       message: string;
@@ -456,7 +452,6 @@ const API_COMMAND_NAMES = {
   replay_ui_events: true,
   check_runtime: true,
   load_cli_version: true,
-  update_cli: true,
   report_client_crash: true,
   send_message: true,
   load_older_channel_messages: true,

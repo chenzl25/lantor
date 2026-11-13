@@ -1,16 +1,15 @@
-//! Version checks and one-tap updates for the Claude Code and Codex CLIs.
+//! Version checks for the Claude Code and Codex CLIs.
 //!
 //! One install of each CLI serves every agent on that runtime, so the state
-//! here is per runtime, not per agent. The update runs the CLI's own
-//! `update` command, which knows how the CLI was installed. Running agents
-//! keep their current process; each one starts the new version when its warm
-//! process next starts (see docs/agent-runtime.md#cli-updates).
+//! here is per runtime, not per agent. Lantor does not install updates
+//! itself: the page asks an agent to update its CLI from its shell, where it
+//! can deal with whatever goes wrong (see docs/agent-runtime.md#cli-updates).
 
 use std::{
     collections::HashMap,
     path::PathBuf,
     process::Stdio,
-    sync::{Arc, OnceLock},
+    sync::OnceLock,
     time::{Duration, Instant},
 };
 
@@ -23,10 +22,8 @@ use crate::app::CommandResult;
 
 const VERSION_TIMEOUT: Duration = Duration::from_secs(20);
 const LATEST_TIMEOUT_SECS: u64 = 15;
-const UPDATE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const LATEST_TTL: Duration = Duration::from_secs(60 * 60);
 const LATEST_FAILURE_TTL: Duration = Duration::from_secs(10 * 60);
-const OUTPUT_TAIL_CHARS: usize = 3000;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,25 +38,9 @@ pub(crate) struct CliVersionStatus {
     installed: Option<String>,
     latest: Option<String>,
     update_available: bool,
-    updating: bool,
     /// Why the installed or the latest version is unknown.
     problem: Option<String>,
-    /// The last update run by this Lantor process.
-    last_update: Option<CliUpdateOutcome>,
     checked_at: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub(crate) struct CliUpdateOutcome {
-    ok: bool,
-    /// The command that ran, such as `claude update`.
-    command: String,
-    from: Option<String>,
-    to: Option<String>,
-    /// The end of the command's output, plus a note when the version did
-    /// not reach the latest release.
-    output: String,
-    finished_at: String,
 }
 
 /// How to reach one CLI. Tests point `program` at a script and `latest_url`
@@ -137,21 +118,18 @@ fn claude_release_channel() -> &'static str {
     }
 }
 
+/// A latest release, or why it could not be fetched, and when.
+type LatestFetch = (Result<String, String>, Instant);
+
+/// The latest release per runtime.
 #[derive(Default)]
-struct RuntimeState {
-    latest: Option<(Result<String, String>, Instant)>,
-    updating: bool,
-    last_update: Option<CliUpdateOutcome>,
+struct CliVersions {
+    latest: Mutex<HashMap<String, LatestFetch>>,
 }
 
-#[derive(Default)]
-struct CliUpdates {
-    states: Mutex<HashMap<String, RuntimeState>>,
-}
-
-fn shared() -> &'static Arc<CliUpdates> {
-    static UPDATES: OnceLock<Arc<CliUpdates>> = OnceLock::new();
-    UPDATES.get_or_init(Arc::default)
+fn shared() -> &'static CliVersions {
+    static UPDATES: OnceLock<CliVersions> = OnceLock::new();
+    UPDATES.get_or_init(CliVersions::default)
 }
 
 pub(crate) async fn load_status(request: CliRuntimeRequest) -> CommandResult<CliVersionStatus> {
@@ -159,59 +137,17 @@ pub(crate) async fn load_status(request: CliRuntimeRequest) -> CommandResult<Cli
     Ok(shared().status(&spec).await)
 }
 
-pub(crate) async fn start_update(request: CliRuntimeRequest) -> CommandResult<CliVersionStatus> {
-    let spec = CliSpec::for_runtime(request.runtime.trim())?;
-    Ok(shared().clone().start_update(spec).await)
-}
-
-impl CliUpdates {
+impl CliVersions {
     async fn status(&self, spec: &CliSpec) -> CliVersionStatus {
         let installed = installed_version(spec).await;
         let latest = self.latest_version(spec).await;
-        let states = self.states.lock().await;
-        let state = states.get(&spec.runtime);
-        build_status(
-            spec,
-            installed,
-            latest,
-            state.is_some_and(|state| state.updating),
-            state.and_then(|state| state.last_update.clone()),
-        )
-    }
-
-    /// Starts the CLI's own update command unless one is already running,
-    /// and returns the status right away; callers poll `status` for the end.
-    async fn start_update(self: Arc<Self>, spec: CliSpec) -> CliVersionStatus {
-        let started = {
-            let mut states = self.states.lock().await;
-            let state = states.entry(spec.runtime.clone()).or_default();
-            !std::mem::replace(&mut state.updating, true)
-        };
-        if started {
-            let updates = self.clone();
-            let job_spec = spec.clone();
-            tokio::spawn(async move { updates.run_update(&job_spec).await });
-        }
-        self.status(&spec).await
-    }
-
-    /// Runs one update to completion. The caller has marked it as updating.
-    async fn run_update(&self, spec: &CliSpec) {
-        let from = installed_version(spec).await.ok();
-        let run = run_with_timeout(spec.command(&["update"]), UPDATE_TIMEOUT).await;
-        let to = installed_version(spec).await.ok();
-        let latest = self.latest_version(spec).await.ok();
-        let outcome = update_outcome(spec, run, from, to, latest);
-        let mut states = self.states.lock().await;
-        let state = states.entry(spec.runtime.clone()).or_default();
-        state.updating = false;
-        state.last_update = Some(outcome);
+        build_status(spec, installed, latest)
     }
 
     async fn latest_version(&self, spec: &CliSpec) -> Result<String, String> {
         {
-            let states = self.states.lock().await;
-            if let Some((cached, at)) = states.get(&spec.runtime).and_then(|s| s.latest.as_ref()) {
+            let latest = self.latest.lock().await;
+            if let Some((cached, at)) = latest.get(&spec.runtime) {
                 let ttl = if cached.is_ok() {
                     LATEST_TTL
                 } else {
@@ -223,9 +159,10 @@ impl CliUpdates {
             }
         }
         let fetched = fetch_latest_version(&spec.latest_url).await;
-        let mut states = self.states.lock().await;
-        states.entry(spec.runtime.clone()).or_default().latest =
-            Some((fetched.clone(), Instant::now()));
+        self.latest
+            .lock()
+            .await
+            .insert(spec.runtime.clone(), (fetched.clone(), Instant::now()));
         fetched
     }
 }
@@ -234,8 +171,6 @@ fn build_status(
     spec: &CliSpec,
     installed: Result<String, String>,
     latest: Result<String, String>,
-    updating: bool,
-    last_update: Option<CliUpdateOutcome>,
 ) -> CliVersionStatus {
     let update_available = match (&installed, &latest) {
         (Ok(installed), Ok(latest)) => is_newer(latest, installed),
@@ -248,9 +183,7 @@ fn build_status(
         installed: installed.ok(),
         latest: latest.ok(),
         update_available,
-        updating,
         problem,
-        last_update,
         checked_at: now(),
     }
 }
@@ -332,46 +265,6 @@ async fn fetch_latest_version(url: &str) -> Result<String, String> {
         .ok_or_else(|| "The npm registry returned no version".to_owned())
 }
 
-fn update_outcome(
-    spec: &CliSpec,
-    run: Result<CommandRun, String>,
-    from: Option<String>,
-    to: Option<String>,
-    latest: Option<String>,
-) -> CliUpdateOutcome {
-    let (mut ok, mut output) = match run {
-        Ok(run) => (run.success(), run.output),
-        Err(err) => (false, err),
-    };
-    let note = match (&to, &latest) {
-        (None, _) if ok => Some(format!(
-            "The update finished, but `{} --version` no longer works.",
-            spec.program
-        )),
-        (Some(to), Some(latest)) if ok && is_newer(latest, to) => Some(format!(
-            "The update finished, but {} is still {to}; the latest release is {latest}.",
-            spec.program
-        )),
-        _ => None,
-    };
-    if let Some(note) = note {
-        ok = false;
-        output = if output.is_empty() {
-            note
-        } else {
-            format!("{output}\n{note}")
-        };
-    }
-    CliUpdateOutcome {
-        ok,
-        command: format!("{} update", spec.program),
-        from,
-        to,
-        output: tail_chars(&output, OUTPUT_TAIL_CHARS),
-        finished_at: now(),
-    }
-}
-
 /// The first dotted version in CLI output, such as `2.1.319` in
 /// `2.1.319 (Claude Code)` or `0.167.0` in `codex-cli 0.167.0`, including a
 /// pre-release suffix like `-alpha.3`.
@@ -447,15 +340,6 @@ fn first_line(text: &str) -> String {
         .chars()
         .take(200)
         .collect()
-}
-
-fn tail_chars(text: &str, limit: usize) -> String {
-    let count = text.chars().count();
-    if count <= limit {
-        return text.to_owned();
-    }
-    let tail: String = text.chars().skip(count - limit).collect();
-    format!("…{tail}")
 }
 
 fn now() -> String {

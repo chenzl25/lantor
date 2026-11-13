@@ -1,5 +1,5 @@
-// CLI version row and one-tap update against a synthetic API; never starts a
-// real backend, runs a CLI or reaches the npm registry.
+// CLI version row and the update request sent to the agent, against a
+// synthetic API; never starts a real backend, runs a CLI or reaches the npm registry.
 // Run npm run build first. LANTOR_UI_SCREENSHOTS saves desktop/phone and light/dark evidence.
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -22,23 +22,12 @@ const channels = [{ id: channelId, name: "cli-fixture", kind: "channel", dm_agen
   { id: dmId, name: `dm:${agent.id}`, kind: "dm", dm_agent_id: agent.id }].map(c => ({ ...c, description: "", unread_count: 0, github_unread_count: 0, github_review_synced_at: null }));
 const toolsSection = { state: "ready", message: "", observed_at: null, items: [] };
 
-const base = { runtime: "codex", command: "codex", installed: "0.167.0", latest: "0.168.0", update_available: true,
-  updating: false, problem: null, last_update: null, checked_at: now.toISOString() };
-const failedOutput = Array.from({ length: 20 }, (_, n) => `npm ERR! fixture line ${n + 1}`).join("\n");
-const outcomes = {
-  failure: { ok: false, command: "codex update", from: "0.167.0", to: "0.167.0", output: failedOutput, finished_at: iso(0) },
-  success: { ok: true, command: "codex update", from: "0.167.0", to: "0.168.0", output: "Updated", finished_at: iso(0) },
-};
-// What load_cli_version returns: before an update, while it runs (one poll), then after.
-let scenario = "failure", phase = "idle";
-function cliStatus() {
-  if (scenario === "latest") return { ...base, installed: "0.168.0", update_available: false };
-  if (phase === "idle") return base;
-  if (phase === "updating") { phase = "done"; return { ...base, updating: true }; }
-  return scenario === "success"
-    ? { ...base, installed: "0.168.0", update_available: false, last_update: outcomes.success }
-    : { ...base, last_update: outcomes.failure };
-}
+const behind = { runtime: "codex", command: "codex", installed: "0.167.0", latest: "0.168.0", update_available: true,
+  problem: null, checked_at: now.toISOString() };
+const current = { ...behind, installed: "0.168.0", update_available: false };
+const requestStart = "Codex 0.168.0 is out; this Mac has 0.167.0.";
+// What load_cli_version returns; a test flips it once the agent "updated".
+let installed = behind;
 
 let state, cursor = 0;
 const clients = new Set(), requests = [];
@@ -67,8 +56,7 @@ const api = createServer(async (req, res) => {
     case "/api/replay_ui_events": result = { cursor, replayGap: false, events: [] }; break;
     case "/api/load_agent_tools": result = { agent_id: agent.id, runtime: agent.runtime, checked_at: now.toISOString(),
       apps: toolsSection, mcp: toolsSection, plugins: toolsSection, skills: toolsSection }; break;
-    case "/api/load_cli_version": result = cliStatus(); break;
-    case "/api/update_cli": phase = "updating"; result = { ...base, updating: true }; break;
+    case "/api/load_cli_version": result = installed; break;
     case "/api/open_dm_with_agent": result = dmId; break;
     case "/api/send_message": {
       const sent = { ...message(state.messages.length + 10, args.channelId, args.body), id: args.messageId ?? id(state.messages.length + 10) };
@@ -104,91 +92,78 @@ async function shootCard(page, card, name) {
 
 const agentMessage = { ...message(2, channelId, "Fixture reply"), sender_agent_id: agent.id, sender_name: agent.display_name, sender_role: "agent" };
 const hoverState = () => ({ ...freshState(), messages: [message(1, channelId, "Fixture channel"), agentMessage] });
+const reads = () => requests.filter(r => r.path === "/api/load_cli_version").length;
+
+/** The request reached the agent's DM as an owner message, and Lantor ran nothing itself. */
+async function assertAskedAster(page) {
+  await page.locator(".message-list").getByText(requestStart, { exact: false }).first().waitFor();
+  const sent = requests.filter(r => r.path === "/api/send_message").map(r => r.args);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].channelId, dmId);
+  assert.equal(sent[0].threadRootId, null);
+  assert.ok(sent[0].body.startsWith(requestStart), sent[0].body);
+  assert.ok(sent[0].body.includes("`codex update` usually works"));
+  assert.ok(requests.every(r => r.path !== "/api/update_cli"), "Lantor no longer runs the update itself");
+}
+
+async function openProfile(page) {
+  await page.getByRole("button", { name: "@Aster’s profile", exact: true }).first().click();
+  await page.getByRole("tab", { name: /^Profile/ }).click();
+  return page.getByRole("group", { name: "Codex version" });
+}
 
 let browser;
 try {
   for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
-    for (const run of ["failure", "success"]) {
-      scenario = run; phase = "idle"; state = freshState(); requests.length = 0;
-      browser = await engine.launch();
-      const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 1440, height: 960 } });
-      const page = await context.newPage(); page.setDefaultTimeout(10000);
-      const errors = []; page.on("pageerror", error => errors.push(error.message));
-      await page.goto(`http://127.0.0.1:${api.address().port}`, { waitUntil: "domcontentloaded" });
-      await page.getByRole("button", { name: "@Aster’s profile", exact: true }).click();
-      await page.getByRole("tab", { name: /^Profile/ }).click();
-      const row = page.getByRole("group", { name: "Codex version" });
-      await row.getByText("0.167.0", { exact: true }).waitFor();
-      assert.deepEqual(requests.filter(r => r.path === "/api/load_cli_version").map(r => r.args), [{ runtime: "codex" }]);
-      await row.getByText(/Each agent switches when it next starts/).waitFor();
-
-      if (run === "failure") {
-        for (const width of [1440, 390]) {
-          await page.setViewportSize({ width, height: width === 390 ? 844 : 960 });
-          await row.scrollIntoViewIfNeeded();
-          assert.ok(await row.evaluate(e => e.scrollWidth <= e.clientWidth + 1), `${width}px version row has no horizontal overflow`);
+    installed = behind; state = freshState(); requests.length = 0;
+    browser = await engine.launch();
+    const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 1440, height: 960 } });
+    const page = await context.newPage(); page.setDefaultTimeout(10000);
+    const errors = []; page.on("pageerror", error => errors.push(error.message));
+    await page.goto(`http://127.0.0.1:${api.address().port}`, { waitUntil: "domcontentloaded" });
+    let row = await openProfile(page);
+    await row.getByText("0.167.0", { exact: true }).waitFor();
+    assert.deepEqual(requests.filter(r => r.path === "/api/load_cli_version").map(r => r.args), [{ runtime: "codex" }]);
+    await row.getByText("Update asks @Aster to install it from its shell.", { exact: false }).waitFor();
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 960 });
+      await row.scrollIntoViewIfNeeded();
+      assert.ok(await row.evaluate(e => e.scrollWidth <= e.clientWidth + 1), `${width}px version row has no horizontal overflow`);
+      if (process.env.LANTOR_UI_SCREENSHOTS) {
+        await mkdir(process.env.LANTOR_UI_SCREENSHOTS, { recursive: true });
+        for (const theme of ["light", "dark"]) {
+          await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+          await page.screenshot({ animations: "disabled", path: join(process.env.LANTOR_UI_SCREENSHOTS, `cli-update-profile-${width}-${theme}-${engineName}.png`) });
         }
-        await page.setViewportSize({ width: 1440, height: 960 });
       }
-
-      await row.getByRole("button", { name: "Update to 0.168.0" }).click();
-      await row.getByRole("status").filter({ hasText: "Updating…" }).waitFor();
-      assert.equal(await row.getByRole("button", { name: "Update to 0.168.0" }).count(), 0, "no second update while one runs");
-      assert.deepEqual(requests.filter(r => r.path === "/api/update_cli").map(r => r.args), [{ runtime: "codex" }]);
-
-      if (run === "success") {
-        await row.getByText(/Updated from 0\.167\.0 to 0\.168\.0 just now/).waitFor({ timeout: 15000 });
-        await row.getByText("Latest", { exact: true }).waitFor();
-        assert.equal(await row.getByText("0.168.0", { exact: true }).count(), 1);
-        assert.equal(await row.getByRole("button").count(), 0);
-      } else {
-        const failure = row.getByRole("alert");
-        await failure.getByText(/failed just now/).waitFor({ timeout: 15000 });
-        const shown = await failure.locator(".cli-version-output").textContent();
-        assert.ok(shown.startsWith("…\nnpm ERR! fixture line 9"), "the output shows its last lines");
-        assert.ok(shown.endsWith("npm ERR! fixture line 20"));
-        assert.equal(await row.getByRole("button", { name: "Update to 0.168.0" }).count(), 0, "Try again replaces the update button");
-        await failure.getByRole("button", { name: "Try again" }).waitFor();
-        for (const width of [1440, 390]) {
-          await page.setViewportSize({ width, height: width === 390 ? 844 : 960 });
-          await failure.scrollIntoViewIfNeeded();
-          assert.ok(await row.evaluate(e => e.scrollWidth <= e.clientWidth + 1), `${width}px failure has no horizontal overflow`);
-          if (process.env.LANTOR_UI_SCREENSHOTS) {
-            await mkdir(process.env.LANTOR_UI_SCREENSHOTS, { recursive: true });
-            for (const theme of ["light", "dark"]) {
-              await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-              await page.screenshot({ animations: "disabled", path: join(process.env.LANTOR_UI_SCREENSHOTS, `cli-update-failure-${width}-${theme}-${engineName}.png`) });
-            }
-          }
-        }
-        await page.setViewportSize({ width: 1440, height: 960 });
-        await failure.getByRole("button", { name: "Ask @Aster to fix it" }).click();
-        await page.locator(".message-list").getByText("failed on this Mac", { exact: false }).first().waitFor();
-        const sent = requests.filter(r => r.path === "/api/send_message").map(r => r.args);
-        assert.equal(sent.length, 1);
-        assert.equal(sent[0].channelId, dmId);
-        assert.equal(sent[0].threadRootId, null);
-        assert.ok(sent[0].body.startsWith("`codex update` failed on this Mac. Codex is 0.167.0; the latest release is 0.168.0."));
-        assert.ok(sent[0].body.includes("npm ERR! fixture line 1\n"), "the agent gets the whole output");
-        assert.equal(await page.getByRole("group", { name: "Codex version" }).count(), 0, "the profile closes on the DM");
-      }
-      assert.deepEqual(errors, []);
-      await browser.close(); browser = null;
-      console.log(`✓ ${engineName} ${run}`);
     }
+    await page.setViewportSize({ width: 1440, height: 960 });
+
+    await row.getByRole("button", { name: "Update to 0.168.0" }).click();
+    await assertAskedAster(page);
+    assert.equal(await page.getByRole("group", { name: "Codex version" }).count(), 0, "the profile closes on the DM");
+
+    // Once the agent has updated, the profile reads the new version.
+    installed = current;
+    row = await openProfile(page);
+    await row.getByText("Latest", { exact: true }).waitFor();
+    assert.equal(await row.getByText("0.168.0", { exact: true }).count(), 1);
+    assert.equal(await row.getByRole("button").count(), 0);
+    assert.deepEqual(errors, []);
+    await browser.close(); browser = null;
+    console.log(`✓ ${engineName} profile`);
   }
 
-  // The avatar hover card offers the same update, so it is found without opening the profile.
+  // The avatar hover card offers the same request, so it is found without opening the profile.
   for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
-    for (const run of ["latest", "success", "failure"]) {
-      scenario = run; phase = "idle"; state = hoverState(); requests.length = 0;
+    for (const run of ["latest", "behind"]) {
+      installed = run === "latest" ? current : behind; state = hoverState(); requests.length = 0;
       browser = await engine.launch();
       const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 1440, height: 960 } });
       const page = await context.newPage(); page.setDefaultTimeout(10000);
       const errors = []; page.on("pageerror", error => errors.push(error.message));
       await page.goto(`http://127.0.0.1:${api.address().port}`, { waitUntil: "domcontentloaded" });
       const avatar = page.locator(".message-list .agent-avatar-profile-anchor").first();
-      const reads = () => requests.filter(r => r.path === "/api/load_cli_version").length;
       const firstRead = page.waitForResponse(response => response.url().endsWith("/api/load_cli_version"));
       await avatar.hover();
       const card = page.getByRole("tooltip");
@@ -202,41 +177,29 @@ try {
         assert.equal(await hint.count(), 0, "an up-to-date CLI adds nothing to the card");
       } else {
         await hint.getByText("Codex 0.168.0 is available").waitFor();
-        await hint.getByText("This Mac has 0.167.0").waitFor();
+        await hint.getByText("This Mac has 0.167.0. Update asks @Aster to install it.").waitFor();
         assert.ok(await card.evaluate(e => e.scrollWidth <= e.clientWidth + 1), "the card has no horizontal overflow");
-        if (run === "success") await shootCard(page, card, `available-${engineName}`);
+        await shootCard(page, card, `available-${engineName}`);
+        // Leave and come back: the card reuses the status it just read.
+        await page.mouse.move(5, 950);
+        await card.waitFor({ state: "detached" });
+        await avatar.hover();
+        await hint.getByText("Codex 0.168.0 is available").waitFor();
+        assert.equal(reads(), 1, "a second hover within a minute does not read the CLI again");
+
         await hint.getByRole("button", { name: "Update", exact: true }).click();
-        await hint.getByText("Updating Codex to 0.168.0…").waitFor();
-        assert.deepEqual(requests.filter(r => r.path === "/api/update_cli").map(r => r.args), [{ runtime: "codex" }]);
-        if (run === "success") {
-          await hint.getByText("Codex updated to 0.168.0").waitFor({ timeout: 15000 });
-          assert.equal(await hint.getByRole("button").count(), 0);
-          // Leave and come back: the card reuses the status it just read.
-          const before = reads();
-          await page.mouse.move(5, 950);
-          await card.waitFor({ state: "detached" });
-          await avatar.hover();
-          await card.getByRole("group", { name: "Codex update" }).getByText("Codex updated to 0.168.0").waitFor();
-          assert.equal(reads(), before, "a second hover within a minute does not read the CLI again");
-          // The profile shares the status the card updated.
-          await page.getByRole("button", { name: "@Aster’s profile", exact: true }).click();
-          await page.getByRole("tab", { name: /^Profile/ }).click();
-          const row = page.getByRole("group", { name: "Codex version" });
-          await row.getByText("Latest", { exact: true }).waitFor();
-          await row.getByText(/Updated from 0\.167\.0 to 0\.168\.0 just now/).waitFor();
-        } else {
-          await hint.getByText("Codex update failed").waitFor({ timeout: 15000 });
-          assert.equal(await hint.getByRole("button", { name: "Update", exact: true }).count(), 0, "Try again replaces Update");
-          await hint.getByRole("button", { name: "Try again" }).waitFor();
-          await shootCard(page, card, `failed-${engineName}`);
-          await hint.getByRole("button", { name: "Ask @Aster to fix it" }).click();
-          await page.locator(".message-list").getByText("failed on this Mac", { exact: false }).first().waitFor();
-          const sent = requests.filter(r => r.path === "/api/send_message").map(r => r.args);
-          assert.equal(sent.length, 1);
-          assert.equal(sent[0].channelId, dmId);
-          assert.ok(sent[0].body.startsWith("`codex update` failed on this Mac. Codex is 0.167.0; the latest release is 0.168.0."));
-          assert.ok(sent[0].body.includes("npm ERR! fixture line 1\n"), "the agent gets the whole output");
-        }
+        await assertAskedAster(page);
+
+        // Back in the channel after the agent updated, the card reads the version again.
+        installed = current;
+        await page.locator(".sidebar .channel").filter({ hasText: "cli-fixture" }).click();
+        const secondRead = page.waitForResponse(response => response.url().endsWith("/api/load_cli_version"));
+        await avatar.hover();
+        await card.getByText("@Aster", { exact: true }).waitFor();
+        await secondRead;
+        assert.equal(reads(), 2, "the hover after the request reads the CLI again");
+        await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+        assert.equal(await card.getByRole("group", { name: "Codex update" }).count(), 0, "the updated CLI adds nothing to the card");
       }
       assert.deepEqual(errors, []);
       await browser.close(); browser = null;

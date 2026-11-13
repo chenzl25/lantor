@@ -622,15 +622,6 @@ export type RuntimeCheck = {
   detail: string;
 };
 
-export type CliUpdateOutcome = {
-  ok: boolean;
-  command: string;
-  from: string | null;
-  to: string | null;
-  output: string;
-  finished_at: string;
-};
-
 /** One install of a CLI serves every agent on that runtime. */
 export type CliVersionStatus = {
   runtime: string;
@@ -638,9 +629,7 @@ export type CliVersionStatus = {
   installed: string | null;
   latest: string | null;
   update_available: boolean;
-  updating: boolean;
   problem: string | null;
-  last_update: CliUpdateOutcome | null;
   checked_at: string;
 };
 
