@@ -14,6 +14,8 @@ const body = [
   "rw#27251 已经合了。",
   "",
   "@arch review rw#27626",
+  "",
+  "房源：[Sennett Residence](https://listing.example/listing/1)",
 ].join("\n");
 const message = {
   id: "00000000-0000-4000-8000-000000000002", seq: 1,
@@ -146,6 +148,23 @@ try {
   assert.equal(await time.innerText(), "10-14 03:00");
   assert.equal(await time.getAttribute("title"), "2026-10-13 19:00 UTC");
   console.log("PASS message body: GitHub references, PR state and titles, local time");
+
+  // Browsers follow message links themselves: in an iOS Home Screen web app a
+  // scripted window.open leaves a blank page when another app takes the link.
+  await context.route(/^https:\/\/(listing\.example|github\.com)\//, (route) =>
+    route.fulfill({ contentType: "text/html", body: "<title>external</title>" }));
+  await page.evaluate(() => { window.open = () => { throw new Error("window.open is unavailable"); }; });
+  for (const [link, url] of [
+    [markdown.getByRole("link", { name: "Sennett Residence" }), "https://listing.example/listing/1"],
+    [queued.first(), "https://github.com/risingwavelabs/risingwave/pull/27429"],
+  ]) {
+    const [popup] = await Promise.all([context.waitForEvent("page", { timeout: 5000 }), link.click()]);
+    await popup.waitForLoadState();
+    assert.equal(popup.url(), url, "the link opens in a new window without window.open");
+    await popup.close();
+  }
+  assert.equal(new URL(page.url()).origin, origin, "Lantor stays open");
+  console.log("PASS message links: opened by the browser");
   if (process.env.MESSAGE_TEXT_SCREENSHOT) {
     await markdown.screenshot({ path: process.env.MESSAGE_TEXT_SCREENSHOT });
     await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });

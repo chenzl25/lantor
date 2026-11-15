@@ -1,5 +1,5 @@
 import { type CSSProperties, type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { openExternalUrl } from "../apiClient";
+import { openExternalUrl, opensLinksNatively } from "../apiClient";
 import { copyText } from "../clipboard";
 import {
   CODE_BLOCK_COLLAPSE_LINES,
@@ -125,8 +125,9 @@ function CopyButton({ code, className }: { code: string; className: string }) {
 }
 
 function openHeaderLink(event: MouseEvent<HTMLAnchorElement>, href: string) {
-  event.preventDefault();
   event.stopPropagation();
+  if (opensLinksNatively()) return;
+  event.preventDefault();
   void openExternalUrl(href).catch((error) => reportUiError("Couldn’t open link", error));
 }
 

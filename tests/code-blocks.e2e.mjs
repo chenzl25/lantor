@@ -131,6 +131,16 @@ try {
 
   const diff = blocks.nth(1);
   assert.equal(await diff.locator("a.code-block-title").getAttribute("href"), "https://github.com/o/r/blob/abc1234/core/src/strategy.rs");
+  // The browser opens the header link itself, as it does message links.
+  await normal.context.route("https://github.com/**", (route) => route.fulfill({ contentType: "text/html", body: "<title>blob</title>" }));
+  await normal.page.evaluate(() => { window.open = () => { throw new Error("window.open is unavailable"); }; });
+  const [blob] = await Promise.all([
+    normal.context.waitForEvent("page", { timeout: 5000 }),
+    diff.locator("a.code-block-title").click(),
+  ]);
+  await blob.waitForLoadState();
+  assert.equal(blob.url(), "https://github.com/o/r/blob/abc1234/core/src/strategy.rs");
+  await blob.close();
   assert.deepEqual(await diff.locator(".code-line").evaluateAll((nodes) => nodes.map((node) => node.className)), [
     "code-line diff-hunk", "code-line diff-context", "code-line diff-del", "code-line diff-add", "code-line diff-context",
   ]);

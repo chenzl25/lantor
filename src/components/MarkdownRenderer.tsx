@@ -13,7 +13,7 @@ import {
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PluggableList } from "unified";
-import { attachmentAssetUrl, isTauriRuntime, openExternalUrl } from "../apiClient";
+import { attachmentAssetUrl, isTauriRuntime, openExternalUrl, opensLinksNatively } from "../apiClient";
 import { openAttachmentSheet, usesAttachmentSheet } from "../attachment-sheet";
 import {
   MESSAGE_REFERENCE_PATTERN,
@@ -208,15 +208,18 @@ function handleLinkClick(
   onLocalAgentLink: ((handle: string) => void) | undefined,
   attachment: MessageAttachment | null,
 ) {
-  event.preventDefault();
   event.stopPropagation();
+  const opensInSheet = Boolean(attachment && usesAttachmentSheet());
+  // Browsers follow the link's own target="_blank" (see opensLinksNatively).
+  if (!isLocalLink && href && event.detail <= 1 && !opensInSheet && opensLinksNatively()) return;
+  event.preventDefault();
   if (isLocalLink) {
     const agentHandle = localAgentHandleFromHref(href);
     if (agentHandle && event.detail <= 1) onLocalAgentLink?.(agentHandle);
     return;
   }
   if (!href || event.detail > 1) return;
-  if (attachment && usesAttachmentSheet()) {
+  if (attachment && opensInSheet) {
     openAttachmentSheet(attachment);
     return;
   }
