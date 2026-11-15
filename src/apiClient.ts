@@ -23,6 +23,16 @@ export function isTauriRuntime() {
   return typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 }
 
+/**
+ * Whether a click on an `<a target="_blank">` should be left to the browser.
+ * The desktop app has to open links through the system. In an iOS Home Screen
+ * web app, a scripted `window.open` leaves a blank page behind when another
+ * app (PropertyGuru, GitHub, Maps) takes the link; a followed link does not.
+ */
+export function opensLinksNatively() {
+  return !isTauriRuntime();
+}
+
 export async function openExternalUrl(url: string): Promise<void> {
   if (isTauriRuntime()) {
     await tauriInvoke("open_external_url", { url });

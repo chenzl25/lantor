@@ -22,6 +22,18 @@ Plain HTTP on a LAN/Tailscale IP cannot install a service worker. Vite developme
 and Tauri never register it. See the browser's [secure-context registration
 requirements](https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerContainer/register).
 
+## External links
+
+Links in messages and code block headers are `<a target="_blank">`. Browsers
+follow them natively; only the desktop app intercepts the click and opens the
+URL through the system (`opensLinksNatively` in `src/apiClient.ts`). Do not
+open them with `window.open` in browsers: in an iOS Home Screen web app, a
+scripted window whose URL another app takes over (a universal link such as a
+PropertyGuru listing or GitHub) stays behind as a blank page the user has to
+close ([WebKit bug 199029](https://bugs.webkit.org/show_bug.cgi?id=199029)).
+Snapshot links in a Home Screen app still open the attachment sheet
+([attachment delivery](attachment-delivery.md)).
+
 ## Cache and network behavior
 
 - Only `/` and `/index.html` navigations use the cached shell; hash links continue
