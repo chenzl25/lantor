@@ -14,6 +14,29 @@ pub(super) const CLAUDE_DISABLE_BACKGROUND_TASKS_ENV: &str = "CLAUDE_CODE_DISABL
 pub(super) const CLAUDE_DISABLE_CRON_ENV: &str = "CLAUDE_CODE_DISABLE_CRON";
 /// Tools that would start provider turns outside a Lantor request.
 pub(super) const CLAUDE_DISALLOWED_TOOLS: &str = "Monitor,ScheduleWakeup";
+/// Claude Code auto-compacts as if the model's context window were this size.
+/// Without it a 1M-context model only compacts near 1M tokens.
+pub(super) const CLAUDE_AUTO_COMPACT_WINDOW_ENV: &str = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
+const CLAUDE_AUTO_COMPACT_DEFAULT_TOKENS: i64 = 200_000;
+/// Claude Code treats any smaller window as 100k.
+const CLAUDE_AUTO_COMPACT_MIN_TOKENS: i64 = 100_000;
+pub(super) const CLAUDE_AUTO_COMPACT_LANTOR_ENV: &str = "LANTOR_CLAUDE_AUTO_COMPACT_TOKENS";
+
+fn claude_auto_compact_tokens_from_env(value: Option<&str>) -> i64 {
+    value
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|tokens| *tokens >= CLAUDE_AUTO_COMPACT_MIN_TOKENS)
+        .unwrap_or(CLAUDE_AUTO_COMPACT_DEFAULT_TOKENS)
+}
+
+/// The context size at which warm Claude sessions compact themselves.
+pub(super) fn claude_auto_compact_tokens() -> i64 {
+    claude_auto_compact_tokens_from_env(
+        std::env::var(CLAUDE_AUTO_COMPACT_LANTOR_ENV)
+            .ok()
+            .as_deref(),
+    )
+}
 
 pub(super) fn claude_stream_key(run_id: Uuid) -> String {
     format!("{run_id}:claude-assistant")
@@ -230,6 +253,26 @@ pub(super) fn claude_result_error(value: &Value) -> Option<String> {
         .or_else(|| Some("Claude stream-json result reported an error".to_owned()))
 }
 
+fn claude_compact_boundary_detail(value: &Value) -> String {
+    let tokens = |key: &str| {
+        value
+            .pointer(&format!("/compact_metadata/{key}"))
+            .and_then(Value::as_i64)
+    };
+    let mut detail = match (tokens("pre_tokens"), tokens("post_tokens")) {
+        (Some(pre), Some(post)) => format!("{pre} → {post} context tokens"),
+        (Some(pre), None) => format!("from {pre} context tokens"),
+        _ => "earlier turns summarized".to_owned(),
+    };
+    if let Some(trigger) = value
+        .pointer("/compact_metadata/trigger")
+        .and_then(Value::as_str)
+    {
+        detail.push_str(&format!(" · {trigger}"));
+    }
+    detail
+}
+
 fn claude_api_retry_detail(value: &Value) -> String {
     let attempt = value
         .get("attempt")
@@ -288,6 +331,18 @@ pub(super) fn claude_stream_event_activity(
                 "run_retry",
                 "Claude provider retrying",
                 claude_api_retry_detail(value),
+            )),
+            Some("status") if value.get("status").and_then(Value::as_str) == Some("compacting") => {
+                Some((
+                    "run",
+                    "Compacting context",
+                    "Claude Code is summarizing earlier turns".to_owned(),
+                ))
+            }
+            Some("compact_boundary") => Some((
+                "run",
+                "Context compacted",
+                claude_compact_boundary_detail(value),
             )),
             Some(_) => None,
             None => None,
@@ -439,6 +494,17 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+
+    #[test]
+    fn auto_compact_tokens_read_env_with_claude_code_floor() {
+        assert_eq!(claude_auto_compact_tokens_from_env(None), 200_000);
+        assert_eq!(
+            claude_auto_compact_tokens_from_env(Some(" 300000 ")),
+            300_000
+        );
+        assert_eq!(claude_auto_compact_tokens_from_env(Some("99999")), 200_000);
+        assert_eq!(claude_auto_compact_tokens_from_env(Some("lots")), 200_000);
+    }
 
     #[test]
     fn network_failures_are_api_errors_about_the_connection() {
@@ -606,6 +672,34 @@ mod tests {
                 "Claude provider retrying",
                 "Lantor will retry automatically; no action needed · attempt 2/3 · status 529 (overloaded) · error rate_limit"
                     .to_owned()
+            ))
+        );
+        assert_eq!(
+            claude_stream_event_activity(
+                &json!({"type": "system", "subtype": "status", "status": "compacting"})
+            ),
+            Some((
+                "run",
+                "Compacting context",
+                "Claude Code is summarizing earlier turns".to_owned()
+            ))
+        );
+        assert_eq!(
+            claude_stream_event_activity(
+                &json!({"type": "system", "subtype": "status", "status": null, "compact_result": "success"})
+            ),
+            None
+        );
+        assert_eq!(
+            claude_stream_event_activity(&json!({
+                "type": "system",
+                "subtype": "compact_boundary",
+                "compact_metadata": {"trigger": "auto", "pre_tokens": 170141, "post_tokens": 5673}
+            })),
+            Some((
+                "run",
+                "Context compacted",
+                "170141 → 5673 context tokens · auto".to_owned()
             ))
         );
         assert_eq!(

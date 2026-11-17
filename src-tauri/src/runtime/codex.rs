@@ -61,10 +61,10 @@ mod turn;
 
 use protocol::{
     apply_codex_thread_options, apply_codex_turn_options, codex_auth_failure,
-    codex_context_rotate_env, codex_context_rotate_input_tokens, codex_error_notification_detail,
-    codex_item_id, codex_item_started_activity, codex_item_type, codex_model_value,
-    codex_network_failure, codex_pending_stream_key, codex_request_error, codex_stream_key,
-    codex_thread_id_from_response, codex_tool_completion_activity, codex_turn_id_from_value,
+    codex_auto_compact_tokens, codex_error_notification_detail, codex_item_id,
+    codex_item_started_activity, codex_item_type, codex_model_value, codex_network_failure,
+    codex_pending_stream_key, codex_request_error, codex_stream_key, codex_thread_id_from_response,
+    codex_tool_completion_activity, codex_turn_id_from_value,
     codex_unattended_server_request_response, codex_write_json, effective_codex_cwd,
 };
 use reaper::codex_warm_idle_reaper;
@@ -75,6 +75,12 @@ const CODEX_TURN_START_TIMEOUT: Duration = Duration::from_secs(90);
 const CODEX_RATE_LIMIT_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(30);
 const CODEX_APP_SERVER_SHELL_COMMAND: &str =
     "exec codex app-server --listen stdio:// -c 'notify=[]' -c 'features.memories=false'";
+
+/// Codex compacts a thread itself once it holds this many tokens, so Lantor
+/// keeps resuming the same thread however long it grows.
+fn codex_app_server_shell_command(auto_compact_tokens: i64) -> String {
+    format!("{CODEX_APP_SERVER_SHELL_COMMAND} -c 'model_auto_compact_token_limit={auto_compact_tokens}'")
+}
 
 /// A `codex app-server` process as a warm runtime provider, bound to the
 /// Codex thread it was started or resumed on.
@@ -111,7 +117,6 @@ pub(crate) struct WarmCodexState {
     next_request_id: i64,
     pending_rate_limit_request_id: Option<i64>,
     last_rate_limit_request_at: Option<Instant>,
-    pending_rotation_marker: Option<String>,
     injected_memory_context: Option<String>,
     last_activity: Instant,
 }
@@ -252,54 +257,6 @@ fn track_codex_agent_message_stream(
     }
 }
 
-async fn codex_context_rotation_candidate(
-    pool: &SqlitePool,
-    agent_id: Uuid,
-    threshold: i64,
-) -> CommandResult<Option<(Uuid, i64)>> {
-    let row = sqlx::query(
-        r#"
-        select
-            id,
-            case
-                when current_input_tokens > 0 then current_input_tokens
-                else input_tokens
-            end as current_input_tokens
-        from agent_runs
-        where agent_id = $1
-          and stopped_at is not null
-        order by stopped_at desc
-        limit 1
-        "#,
-    )
-    .bind(agent_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(to_string)?;
-
-    Ok(row.and_then(|row| {
-        let input_tokens = row.get("current_input_tokens");
-        (input_tokens >= threshold).then(|| (row.get("id"), input_tokens))
-    }))
-}
-
-fn codex_rotation_marker(run_id: Uuid, input_tokens: i64, threshold: i64) -> String {
-    format!(
-        "Lantor rotated away from the previous Codex provider thread after run {run_id} reached {input_tokens} input tokens (threshold {threshold}). If continuity matters for this request, inspect the previous run on demand with:\n\"$LANTOR_CONTEXT_TOOL\" --agent-context-tool run-read --run-id {run_id}"
-    )
-}
-
-fn prepend_codex_rotation_marker(prompt: &str, marker: &str) -> String {
-    let marker = marker.trim();
-    if marker.is_empty() {
-        return prompt.to_owned();
-    }
-    if prompt.trim().is_empty() {
-        return marker.to_owned();
-    }
-    format!("{marker}\n\nCurrent Lantor request after context rotation:\n{prompt}")
-}
-
 pub(crate) async fn cleanup_failed_warm_codex_start(
     pool: &SqlitePool,
     agent_id: Uuid,
@@ -331,17 +288,7 @@ async fn get_or_spawn_warm_codex_runtime(
     working_directory: &str,
     environment_variables: &str,
 ) -> CommandResult<Arc<WarmCodexRuntime>> {
-    let context_rotate_threshold = codex_context_rotate_input_tokens();
-    let rotation_candidate =
-        codex_context_rotation_candidate(pool, agent_id, context_rotate_threshold).await?;
-    if let Some(runtime) = reusable_runtime(
-        pool,
-        registry,
-        agent_id,
-        environment_variables,
-        rotation_candidate.is_some(),
-    )
-    .await?
+    if let Some(runtime) = reusable_runtime(pool, registry, agent_id, environment_variables).await?
     {
         return Ok(runtime);
     }
@@ -355,7 +302,6 @@ async fn get_or_spawn_warm_codex_runtime(
         service_tier,
         working_directory,
         environment_variables,
-        context_rotate_threshold,
     )
     .await?;
     registry.insert(agent_id, runtime.clone()).await;
@@ -369,7 +315,9 @@ pub(super) fn app_server_command(
     environment_variables: &str,
 ) -> CommandResult<Command> {
     let mut command = Command::new("/bin/zsh");
-    command.arg("-lc").arg(CODEX_APP_SERVER_SHELL_COMMAND);
+    command
+        .arg("-lc")
+        .arg(codex_app_server_shell_command(codex_auto_compact_tokens()));
     apply_agent_environment_variables(&mut command, environment_variables)?;
     configure_agent_identity_env(&mut command, agent_id, handle);
     configure_agent_context_tool_env(&mut command);
@@ -394,7 +342,6 @@ async fn spawn_warm_codex_runtime(
     service_tier: &str,
     working_directory: &str,
     environment_variables: &str,
-    context_rotate_threshold: i64,
 ) -> CommandResult<Arc<WarmCodexRuntime>> {
     let cwd = effective_codex_cwd(working_directory)?;
     let mut command = app_server_command(agent_id, handle, &cwd, environment_variables)?;
@@ -453,40 +400,8 @@ async fn spawn_warm_codex_runtime(
     .await?;
     codex_write_json(&mut stdin, json!({ "method": "initialized" })).await?;
 
-    let rotation_candidate =
-        codex_context_rotation_candidate(pool, agent_id, context_rotate_threshold).await?;
-    let rotation_marker = if let Some((run_id, input_tokens)) = rotation_candidate {
-        Some(codex_rotation_marker(
-            run_id,
-            input_tokens,
-            context_rotate_threshold,
-        ))
-    } else {
-        None
-    };
-    let existing_thread_id = if rotation_candidate.is_some() {
-        None
-    } else {
-        load_runtime_thread_id(pool, agent_id, "codex").await?
-    };
+    let existing_thread_id = load_runtime_thread_id(pool, agent_id, "codex").await?;
     let mut attempted_resume = existing_thread_id.is_some();
-    if let Some((run_id, input_tokens)) = rotation_candidate {
-        record_agent_activity(
-            pool,
-            Some(agent_id),
-            None,
-            "run",
-            "Codex context rotated",
-            json!({
-                "previous_run_id": run_id,
-                "input_tokens": input_tokens,
-                "threshold": context_rotate_threshold,
-                "env": codex_context_rotate_env()
-            })
-            .to_string(),
-        )
-        .await?;
-    }
     if let Some(thread_id) = existing_thread_id {
         let mut params = json!({
             "threadId": thread_id.clone(),
@@ -602,7 +517,6 @@ async fn spawn_warm_codex_runtime(
             next_request_id,
             pending_rate_limit_request_id: None,
             last_rate_limit_request_at: None,
-            pending_rotation_marker: rotation_marker,
             injected_memory_context: None,
             last_activity: Instant::now(),
         }),
@@ -966,16 +880,12 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
     }
 
     let (codex_prompt, memory_update) = {
-        let mut state = runtime.state.lock().await;
-        let prompt = match state.pending_rotation_marker.take() {
-            Some(marker) => prepend_codex_rotation_marker(&codex_prompt, &marker),
-            None => codex_prompt,
-        };
+        let state = runtime.state.lock().await;
         let memory_update = memory_context_update(
             state.injected_memory_context.as_deref(),
             memory_context.as_deref(),
         );
-        (prompt, memory_update)
+        (codex_prompt, memory_update)
     };
     let (codex_turn_prompt, next_injected_memory_context) = match memory_update {
         Some((memory_prompt, next_memory_context)) => (
@@ -1641,14 +1551,21 @@ mod tests {
     };
 
     use super::{
-        codex_context_rotation_candidate, codex_rotation_marker, finish_warm_codex_active_turn,
-        prepend_codex_rotation_marker, track_codex_agent_message_stream, CodexActiveTurn,
-        CodexAppServer, WarmCodexRuntime, CODEX_APP_SERVER_SHELL_COMMAND, CODEX_TURN_START_TIMEOUT,
+        app_server_command, finish_warm_codex_active_turn, track_codex_agent_message_stream,
+        CodexActiveTurn, CodexAppServer, WarmCodexRuntime, CODEX_TURN_START_TIMEOUT,
     };
 
     #[test]
-    fn codex_app_server_disables_provider_memories() {
-        assert!(CODEX_APP_SERVER_SHELL_COMMAND.contains("-c 'features.memories=false'"));
+    fn codex_app_server_compacts_threads_and_disables_provider_memories() {
+        let command = app_server_command(uuid::Uuid::new_v4(), "Tester", "/tmp", "").unwrap();
+        let args: Vec<_> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args[0], "-lc");
+        assert!(args[1].contains("-c 'features.memories=false'"));
+        assert!(args[1].ends_with("-c 'model_auto_compact_token_limit=180000'"));
     }
 
     async fn test_runtime_with_active_turn(
@@ -1694,7 +1611,6 @@ mod tests {
                 next_request_id: 2,
                 pending_rate_limit_request_id: None,
                 last_rate_limit_request_at: None,
-                pending_rotation_marker: None,
                 injected_memory_context: None,
                 last_activity: Instant::now(),
             }),
@@ -1797,7 +1713,6 @@ mod tests {
                 next_request_id: 1,
                 pending_rate_limit_request_id: None,
                 last_rate_limit_request_at: None,
-                pending_rotation_marker: None,
                 injected_memory_context: None,
                 last_activity: Instant::now(),
             }),
@@ -1997,76 +1912,6 @@ mod tests {
             ),
             CodexActiveTurnScheduleState::StuckBeforeTurnId
         );
-    }
-
-    #[test]
-    fn codex_rotation_marker_points_to_run_read_context_tool() {
-        let run_id = uuid::Uuid::new_v4();
-        let marker = codex_rotation_marker(run_id, 190_000, 180_000);
-
-        assert!(marker.contains("Lantor rotated away"));
-        assert!(marker.contains("190000 input tokens"));
-        assert!(marker.contains("run-read"));
-        assert!(marker.contains(&run_id.to_string()));
-
-        let prompt = prepend_codex_rotation_marker("Current inbox item", &marker);
-        assert!(prompt.starts_with("Lantor rotated away"));
-        assert!(prompt.contains("Current Lantor request after context rotation"));
-        assert!(prompt.ends_with("Current inbox item"));
-    }
-
-    #[tokio::test]
-    async fn codex_rotation_uses_current_input_tokens_after_compaction() {
-        let Some((pool, schema)) = test_pool().await else {
-            return;
-        };
-        let result: Result<(), String> = async {
-            let agent_id = insert_test_agent(&pool, "codex-compaction-agent").await?;
-            let run_id: uuid::Uuid = sqlx::query_scalar(
-                r#"
-                insert into agent_runs (
-                    agent_id,
-                    command,
-                    status,
-                    input_tokens,
-                    current_input_tokens,
-                    stopped_at
-                )
-                values (
-                    $1,
-                    'codex app-server',
-                    'complete',
-                    226829,
-                    140250,
-                    strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
-                )
-                returning id
-                "#,
-            )
-            .bind(agent_id)
-            .fetch_one(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-
-            assert_eq!(
-                codex_context_rotation_candidate(&pool, agent_id, 180_000).await?,
-                None
-            );
-
-            sqlx::query("update agent_runs set current_input_tokens = 190000 where id = $1")
-                .bind(run_id)
-                .execute(&pool)
-                .await
-                .map_err(|err| err.to_string())?;
-            assert_eq!(
-                codex_context_rotation_candidate(&pool, agent_id, 180_000).await?,
-                Some((run_id, 190_000))
-            );
-            Ok(())
-        }
-        .await;
-        drop_test_schema(pool, schema).await;
-        result.unwrap();
     }
 
     #[test]

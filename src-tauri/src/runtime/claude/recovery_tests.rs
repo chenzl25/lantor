@@ -313,7 +313,7 @@ async fn missing_resume_session_requeues_request_for_a_new_session() {
     assert_eq!(session.get::<String, _>("provider_thread_id"), "");
     assert_eq!(session.get::<i64, _>("context_tokens"), 0);
     assert_eq!(
-        session::plan_claude_session_start(&f.pool, f.agent, 200_000)
+        session::plan_claude_session_start(&f.pool, f.agent)
             .await
             .unwrap(),
         session::ClaudeSessionStart::Fresh

@@ -47,6 +47,14 @@ thread. A process that is in a turn is replaced at the first start after that
 turn. Use it when something the provider reads only at startup has changed,
 such as an MCP login.
 
+A long session is compacted by the provider, not replaced by Lantor. Claude
+Code gets `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and Codex gets
+`model_auto_compact_token_limit` (defaults 200k and 180k tokens,
+[configuration](configuration.md#runtime-tuning)); without them a
+1M-context model would only compact near 1M tokens. Each compaction shows as a
+"Compacting context" activity, and a resumed session keeps its summary of
+earlier turns.
+
 A work item's prompt carries the recent messages of its channel or thread,
 read when the turn starts (`runtime/surface.rs`) for every runtime. Queued
 work stores only what woke the agent, so each message appears once, including

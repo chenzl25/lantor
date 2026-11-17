@@ -87,7 +87,6 @@ impl Fixture {
                 }),
                 session_id: Some("test-claude-session".to_owned()),
                 context_tokens: 0,
-                pending_rotation_marker: None,
                 last_surface: None,
                 injected_memory_context: None,
                 last_activity: Instant::now(),
