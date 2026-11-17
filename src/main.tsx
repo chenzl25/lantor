@@ -127,7 +127,7 @@ import {
   ThreadMessagePage,
   ThreadReplySummary,
 } from "./types";
-import { agentRequestSourceLabel, buildPresetCommand, firstLines, formatTime, visibleChannelDescription } from "./ui-utils";
+import { agentRequestSourceLabel, firstLines, formatTime, visibleChannelDescription } from "./ui-utils";
 import { markdownPreviewText } from "./markdown-preview";
 import { loadGithubReferences } from "./github-references";
 import {
@@ -4524,7 +4524,6 @@ function App() {
       ...agentDraft,
       handle,
       displayName,
-      launchCommand: buildPresetCommand({ ...agentDraft, handle, displayName }),
       workingDirectory: agentDraft.workingDirectory.trim() || defaultAgentWorkspace(handle),
     };
     await apiInvoke("create_agent", {
@@ -4631,7 +4630,6 @@ function App() {
       ...agentEdit,
       handle,
       displayName,
-      launchCommand: buildPresetCommand({ ...agentEdit, handle, displayName }),
       workingDirectory: agentEdit.workingDirectory.trim(),
     };
     await mutate("update_agent", {

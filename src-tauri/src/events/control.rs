@@ -6,7 +6,6 @@ use sha2::{Digest, Sha256};
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use crate::agent_memory::{append_agent_memory, append_run_log, compact_agent_memory};
 use crate::agent_routing::{
     create_agent_handoff, ensure_agent_channel_member, queue_mentions_as_work_items,
     resolve_agent_by_handle, resolve_agent_handle, resolve_task_for_handoff, MentionDispatchOrigin,
@@ -31,6 +30,7 @@ use crate::message_store::{
     insert_agent_attachment_message, insert_agent_handoff_message, insert_agent_message,
     insert_agent_message_with_options,
 };
+use crate::run_log::append_run_log;
 use crate::runtime::streaming::mark_run_work_item_silent;
 use crate::task_messages::create_agent_task_thread;
 use crate::ui_notifications::{enqueue_ui_event_in_tx, insert_system_message, UiEvent};
@@ -125,12 +125,6 @@ pub(crate) enum AgentEvent {
         cost_micros: Option<i64>,
         #[serde(default)]
         cost_usd: Option<f64>,
-    },
-    MemoryAppend {
-        body: String,
-    },
-    MemoryCompact {
-        body: String,
     },
     ChannelCreate {
         name: String,
@@ -1129,32 +1123,6 @@ pub(crate) async fn handle_agent_event(
             )
             .await?;
             Ok("usage accepted".to_owned())
-        }
-        AgentEvent::MemoryAppend { body } => {
-            append_agent_memory(pool, agent_id, &body).await?;
-            record_agent_activity(
-                pool,
-                Some(agent_id),
-                Some(run_id),
-                "memory",
-                "Memory updated",
-                json!({ "operation": "append" }).to_string(),
-            )
-            .await?;
-            Ok("memory appended".to_owned())
-        }
-        AgentEvent::MemoryCompact { body } => {
-            compact_agent_memory(pool, agent_id, &body).await?;
-            record_agent_activity(
-                pool,
-                Some(agent_id),
-                Some(run_id),
-                "memory",
-                "Memory compacted",
-                json!({ "operation": "compact" }).to_string(),
-            )
-            .await?;
-            Ok("memory compacted".to_owned())
         }
         AgentEvent::ChannelCreate {
             name,

@@ -22,9 +22,9 @@ use super::{
     process::{classify_agent_output_activity, terminate_process_group},
     runtime_environment_changed,
 };
-use crate::agent_memory::append_run_log;
 use crate::app::{to_string, CommandResult};
 use crate::events::activity::{record_agent_activity, record_agent_activity_throttled};
+use crate::run_log::append_run_log;
 use crate::ui_notifications::notify_supervisor_wake;
 
 /// What the shared code reads and writes in a provider's process state.

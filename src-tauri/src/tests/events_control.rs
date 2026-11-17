@@ -1198,66 +1198,16 @@ async fn usage_event_updates_run_tokens_and_cost() {
     assert!(result.is_ok(), "{:?}", result.err());
 }
 
-#[tokio::test]
-async fn memory_events_append_and_compact_memory_file() {
-    let Some((pool, schema)) = test_pool().await else {
-        return;
-    };
-    let result: Result<(), String> = async {
-        let agent_id = insert_test_agent(&pool, "memory-agent").await?;
-        let run_id: Uuid = sqlx::query_scalar(
-            r#"
-            insert into agent_runs (agent_id, command, status)
-            values ($1, 'codex app-server', 'running')
-            returning id
-            "#,
-        )
-        .bind(agent_id)
-        .fetch_one(&pool)
-        .await
-        .map_err(|err| err.to_string())?;
-        let dir = std::env::temp_dir().join(format!("lantor-memory-write-{}", Uuid::new_v4()));
-        sqlx::query("update agents set working_directory = $2 where id = $1")
-            .bind(agent_id)
-            .bind(dir.to_string_lossy().to_string())
-            .execute(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
-        handle_agent_event(
-            &pool,
-            agent_id,
-            run_id,
-            AgentEvent::MemoryAppend {
-                body: "Remember: concise replies.".to_owned(),
-            },
-        )
-        .await?;
-        let memory_path = dir.join("MEMORY.md");
-        let memory = std::fs::read_to_string(&memory_path).map_err(|err| err.to_string())?;
-        let work_log_path = dir.join("notes").join("work-log.md");
-        let work_log = std::fs::read_to_string(&work_log_path).map_err(|err| err.to_string())?;
-        assert!(memory.contains("notes/work-log.md"));
-        assert!(memory.contains("## Memory Map"));
-        assert!(!memory.contains("## Memory update"));
-        assert!(work_log.contains("## Memory update"));
-        assert!(work_log.contains("Remember: concise replies."));
-        handle_agent_event(
-            &pool,
-            agent_id,
-            run_id,
-            AgentEvent::MemoryCompact {
-                body: "# @memory-agent\n\n## Role\nCompact memory.\n".to_owned(),
-            },
-        )
-        .await?;
-        let memory = std::fs::read_to_string(&memory_path).map_err(|err| err.to_string())?;
-        assert_eq!(memory, "# @memory-agent\n\n## Role\nCompact memory.\n");
-        let _ = std::fs::remove_dir_all(dir);
-        Ok(())
+#[test]
+fn retired_memory_events_are_rejected() {
+    // Agents edit MEMORY.md directly; a leftover control line must not be
+    // mistaken for a supported event.
+    for json in [
+        r#"{"type":"memory_append","body":"Remember: concise replies."}"#,
+        r#"{"type":"memory_compact","body":"Compact memory."}"#,
+    ] {
+        assert!(parse_agent_event(json).is_err(), "{json}");
     }
-    .await;
-    drop_test_schema(pool, schema).await;
-    assert!(result.is_ok(), "{:?}", result.err());
 }
 
 #[tokio::test]

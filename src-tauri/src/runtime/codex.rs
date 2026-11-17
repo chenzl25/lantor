@@ -15,7 +15,6 @@ use tokio::{
 use uuid::Uuid;
 
 use crate::agent_environment::apply_agent_environment_variables;
-use crate::agent_memory::append_run_log;
 use crate::events::activity::{
     record_agent_activity, record_agent_activity_throttled, record_run_tool_call, RunToolCall,
 };
@@ -23,6 +22,7 @@ use crate::freshness::advance_agent_target_watermark_for_work_item;
 use crate::prompts::{
     build_codex_streaming_prompt, codex_developer_instructions, prepend_memory_context,
 };
+use crate::run_log::append_run_log;
 use crate::runtime::{
     lifecycle::{
         create_run_in_tx, fail_work_item_before_run, join_work_item_to_run,

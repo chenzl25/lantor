@@ -17,10 +17,10 @@ use super::{
     protocol::{claude_stream_key, claude_user_input_with_uuid, claude_write_input},
     ClaudeActiveTurn, ClaudeTextState, WarmClaudeRegistry, WarmClaudeRuntime,
 };
-use crate::agent_memory::append_run_log;
 use crate::app::{to_string, CommandResult};
 use crate::events::activity::record_agent_activity;
 use crate::freshness::advance_agent_target_watermark_for_work_item;
+use crate::run_log::append_run_log;
 use crate::runtime::{
     lifecycle::{
         finish_merged_follow_up, move_follow_up_status, start_follow_up_run, NewRun,

@@ -212,7 +212,7 @@ mod tests {
     fn interrupted_control_reports_discard_without_exposing_payload() {
         let mut gate = StreamControlGate::new(true);
         assert!(gate
-            .push("LANTOR_EVENT {\"type\":\"memory_append\",\"body\":\"private")
+            .push("LANTOR_EVENT {\"type\":\"activity\",\"detail\":\"private")
             .visible
             .is_empty());
         let output = gate.finish(false);

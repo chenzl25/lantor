@@ -29,7 +29,6 @@ use crate::{
     agent_inbox_wake::{
         agent_has_active_or_pending_start, agent_runtime, enqueue_agent_work_if_available,
     },
-    agent_memory::append_run_log,
     app::{to_string, CommandResult},
     db::{acquire_supervisor_lock, db_connect_with_url, db_url, migrate},
     events::activity::record_agent_activity,
@@ -39,6 +38,7 @@ use crate::{
         prepend_memory_context,
     },
     provider_auth::{provider_needs_login, start_due_provider_probes},
+    run_log::append_run_log,
     ui_notifications::{enqueue_ui_event, reconcile_work_item_change, UiEvent},
     usage::agent_budget_exhausted,
 };
