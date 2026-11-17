@@ -29,10 +29,20 @@ An installed Home Screen web app (`display: standalone`) has no browser chrome, 
 - Share calls `navigator.share({ files })` synchronously within the tap, which iOS requires, and opens the native share sheet (Save to Files, Books, Keynote, AirDrop). Browsers without file sharing get a blob download instead.
 - Close, Escape, or a back gesture returns to the conversation. Ordinary browser tabs and the desktop app keep their existing behavior.
 
+## Reports
+
+An agent's `artifact_create` report appears in the conversation as one card with its title and summary. The message that carries it has the body `Created artifact: <title>` plus the summary, for previews, notifications and search; the conversation hides that body when it says nothing else, because the card shows the same text.
+
+- One tap on the card opens `ArtifactReader`. It uses the file sheet's layout: opaque, and full screen on a phone in every browser, not only the Home Screen web app.
+- Conversations load artifacts without their content. The reader reads it with `artifact_read` and keeps the last 24 reports it read, keyed by id and `updated_at`, so a report opens at once the second time.
+- A leading `# heading` that repeats the title, or only its start, is not shown, because the reader's header shows the title.
+- Copy puts the Markdown on the clipboard. Share, Download, or the desktop app's save into Downloads hand over `<title>.md`, chosen the same way as for attachments.
+
 ## Verification
 
 - `cargo test --manifest-path src-tauri/Cargo.toml`: range bodies/validators/HEAD/active-content disposition, 64MiB boundary, never-ready body early rejection, bounded reads for a ready 100MiB stream, invalid metadata, disconnected/cancelled requests, and database rollback cleanup, plus the full existing suite.
 - `npm run test:attachments`: opt-in fresh isolated database and real Axum server, binary multipart persistence, native Chromium image rendering/CDP cache events, direct local `curl --noproxy '*' -r 0-99`, and two 100MiB upload attempts with/without Content-Length. The Node client generates 64KiB chunks and samples the server's RSS using `ps` about every 10ms. No deployed supervisor or live database is involved.
 - To collect JSON, set `LANTOR_ATTACHMENT_EVIDENCE_DIR` to an existing output directory. `LANTOR_ATTACHMENT_BASELINE=1` makes the same benchmark observational for a checkout before this change (copy the fixture module and browser script into that checkout).
 - `npm run test:attachment-sheet`: Chromium and iPhone WebKit with emulated standalone display check that the card, download, lightbox download, and snapshot link open the sheet. They also check that shared files carry the exact bytes, that close, Escape, and back work, that errors are retried, that the download fallback works, and that nothing navigates, opens a window, or downloads.
+- `npm run test:artifacts`: on a desktop Chromium and an iPhone WebKit Home Screen web app, one tap opens a report, the card replaces the announcement text, the phone reader fills the screen, copy and share/download carry the Markdown, a second open needs no server read, a failed read can be retried, and a long path in a table cell does not widen the table on a phone.
 - `npm test`, `npm run build`, `npm run test:web-sync`, and `git diff --check` cover frontend compatibility and integration.

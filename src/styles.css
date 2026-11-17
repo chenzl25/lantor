@@ -3637,37 +3637,53 @@ mark {
   margin-top: 8px;
 }
 
+/* The whole card opens the report reader. */
 .message-artifact {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 16px;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  max-width: 560px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 14px;
   background: var(--panel);
-  overflow: hidden;
+  color: var(--ink);
+  text-align: left;
 }
 
-.message-artifact summary {
+.message-artifact:hover {
+  background: var(--state-hover);
+}
+
+.message-artifact:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.message-artifact-text {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
-  padding: 10px 12px;
-  cursor: pointer;
-  list-style: none;
+  min-width: 0;
+  gap: 2px;
 }
 
-.message-artifact summary::-webkit-details-marker {
-  display: none;
-}
-
-.message-artifact summary strong {
-  display: block;
+.message-artifact-text strong,
+.message-artifact-text small {
+  display: -webkit-box;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
 }
 
-.message-artifact summary small {
-  display: block;
-  margin-top: 2px;
+.message-artifact-text small {
+  color: var(--muted);
+  font-size: var(--type-size-meta);
+  line-height: 1.45;
+}
+
+.message-artifact-chevron {
   color: var(--muted);
 }
 
@@ -3681,130 +3697,78 @@ mark {
   color: #047857;
 }
 
-.message-artifact p {
-  margin: 0;
-  padding: 0 12px 10px 56px;
-  color: var(--muted);
+/* The report reader is the file sheet with a title that wraps and a copy button. */
+@media (min-width: 761px) {
+  .modal-card.attachment-sheet.artifact-reader {
+    width: min(960px, calc(100vw - 64px));
+  }
 }
 
-.artifact-markdown-content {
-  padding: 0 12px 12px 56px;
-}
-
-.artifact-markdown-content .markdown-body {
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--panel-strong);
-  color: var(--ink);
-}
-
-.artifact-render-error {
-  margin: 0 12px 12px 56px;
-  padding: 10px 12px;
-  border: 1px solid rgba(185, 28, 28, 0.16);
-  border-radius: 12px;
-  background: rgba(254, 242, 242, 0.82);
-  color: #991b1b;
-  font-size: var(--type-size-body);
-}
-
-.artifact-actions {
-  padding: 0 12px 10px 56px;
-}
-
-.artifact-actions button {
-  height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--panel);
-  color: var(--ink);
-  font-size: var(--type-size-meta);
+.artifact-reader-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-control);
+  color: var(--ink-primary);
   font-weight: var(--type-weight-semibold);
 }
 
-.message-artifact pre {
-  max-height: 360px;
-  margin: 0;
-  padding: 12px;
-  overflow: auto;
-  border-top: 1px solid var(--line);
-  background: var(--bg-code, #10141d);
-  color: var(--ink-on-code, #eef3ff);
-  font-size: var(--type-size-meta);
-  line-height: 1.5;
-  white-space: pre-wrap;
+.artifact-reader-action:hover:not(:disabled) {
+  background: var(--surface-control-hover);
 }
 
-.artifact-viewer {
-  display: grid;
-  min-width: 0;
-  gap: 16px;
+.artifact-reader-action:disabled {
+  cursor: default;
+  color: var(--ink-disabled);
 }
 
-.artifact-viewer-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-  font-size: var(--type-size-meta);
+.artifact-reader-action:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--state-focus-ring);
 }
 
-.artifact-viewer-meta span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: var(--badge-phase-default-bg);
-}
-
-.artifact-viewer-summary {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--type-size-body);
-  line-height: 1.55;
-}
-
-.artifact-viewer-content {
+.artifact-reader-content {
   min-width: 0;
 }
 
-.artifact-viewer-content .markdown-body {
+.artifact-reader-content .markdown-body {
   color: var(--ink);
 }
 
-.artifact-viewer-status {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.artifact-reader-status {
+  display: grid;
+  justify-items: center;
+  align-content: center;
   min-height: 180px;
   gap: 9px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--panel);
   color: var(--muted);
+  text-align: center;
 }
 
-.artifact-viewer-status.error {
-  background: var(--badge-phase-error-bg);
-  color: var(--badge-phase-error-ink);
-}
-
-.artifact-viewer-plain {
-  max-height: calc(100vh - 260px);
+.artifact-reader-status p {
   margin: 0;
-  padding: 16px;
-  overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--bg-code);
-  color: var(--ink-on-code);
-  font-size: var(--type-size-meta);
-  line-height: 1.55;
-  white-space: pre-wrap;
+}
+
+.artifact-reader-status.error {
+  color: var(--status-danger);
+}
+
+@media (max-width: 760px) {
+  /* Icons only, the size of the close button, so the title keeps the width. */
+  .artifact-reader-action {
+    justify-content: center;
+    width: 36px;
+    padding: 0;
+  }
+
+  .artifact-reader-action span {
+    display: none;
+  }
 }
 
 .attachment-meta {
@@ -5010,6 +4974,14 @@ a.code-block-title:hover {
   white-space: nowrap;
 }
 
+/* On a phone a long path in a cell would set the column's width; let it wrap. */
+@media (max-width: 760px) {
+  .markdown-body td code,
+  .markdown-body th code {
+    white-space: normal;
+  }
+}
+
 :root[data-theme="dark"] .section-title button,
 :root[data-theme="dark"] .profile-settings,
 :root[data-theme="dark"] .conversation,
@@ -5108,44 +5080,17 @@ a.code-block-title:hover {
   color: var(--ink-primary);
 }
 
-:root[data-theme="dark"] .message-artifact summary strong {
-  color: var(--ink-primary);
+:root[data-theme="dark"] .message-artifact:hover {
+  background: var(--state-hover);
 }
 
-:root[data-theme="dark"] .message-artifact summary small,
-:root[data-theme="dark"] .message-artifact p {
+:root[data-theme="dark"] .message-artifact-text small {
   color: var(--ink-muted);
 }
 
 :root[data-theme="dark"] .artifact-icon {
   background: rgba(52, 199, 89, 0.14);
   color: #67d084;
-}
-
-:root[data-theme="dark"] .artifact-markdown-content .markdown-body {
-  border-color: var(--border-subtle);
-  background: var(--bg-panel);
-  color: var(--ink-primary);
-}
-
-:root[data-theme="dark"] .artifact-actions button {
-  border-color: var(--border-subtle);
-  background: var(--bg-control-flat);
-  color: var(--ink-primary);
-}
-
-:root[data-theme="dark"] .artifact-actions button:hover {
-  background: var(--bg-control-hover);
-}
-
-:root[data-theme="dark"] .artifact-render-error {
-  border-color: rgba(255, 69, 58, 0.22);
-  background: rgba(255, 69, 58, 0.12);
-  color: #ffb4ab;
-}
-
-:root[data-theme="dark"] .message-artifact pre {
-  border-color: var(--border-subtle);
 }
 
 :root[data-theme="dark"] .message-hover-actions,

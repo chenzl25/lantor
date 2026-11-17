@@ -1,13 +1,9 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Download, FileText, RotateCcw, Share } from "lucide-react";
-import { attachmentAssetUrl, downloadAttachment, revealInFileManager, saveTextDownload } from "../apiClient";
+import { attachmentAssetUrl, downloadAttachment, saveTextDownload } from "../apiClient";
 import {
   attachmentPreviewKind,
-  attachmentSheetDelivery,
   closeAttachmentSheet,
-  displaySavedPath,
-  revealActionLabel,
-  triggerBrowserDownload,
   useOpenAttachmentSheetItem,
   type AttachmentSheetDelivery,
   type AttachmentSheetItem,
@@ -16,6 +12,7 @@ import type { MessageAttachment } from "../types";
 import { formatByteSize } from "../ui-utils";
 import { DialogHeader } from "./DialogHeader";
 import { DialogSurface } from "./DialogSurface";
+import { deliveryLabel, useFileDelivery } from "./FileDelivery";
 import { MessageMarkdown } from "./MessageMarkdown";
 
 type LoadState =
@@ -23,18 +20,8 @@ type LoadState =
   | { status: "ready"; file: File; url: string; text: string | null }
   | { status: "error"; message: string };
 
-type SheetNotice = { kind: "success" | "error"; message: string; savedPath?: string };
-
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error || "Unknown error");
-}
-
-function canShareFile(file: File) {
-  try {
-    return typeof navigator.share === "function" && navigator.canShare?.({ files: [file] }) === true;
-  } catch {
-    return false;
-  }
 }
 
 function sheetFileInfo(item: AttachmentSheetItem) {
@@ -64,8 +51,6 @@ function AttachmentSheet({ item, onClose }: { item: AttachmentSheetItem; onClose
   const kind = attachmentPreviewKind({ mime_type: info.mimeType, original_name: info.name, size_bytes: info.sizeBytes });
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<LoadState>({ status: "loading" });
-  const [notice, setNotice] = useState<SheetNotice | null>(null);
-  const [saving, setSaving] = useState(false);
 
   // Share needs the bytes up front: iOS only opens the share sheet if
   // navigator.share runs synchronously within the tap.
@@ -95,64 +80,21 @@ function AttachmentSheet({ item, onClose }: { item: AttachmentSheetItem; onClose
   }, [onClose]);
 
   const ready = state.status === "ready" ? state : null;
-  const delivery = attachmentSheetDelivery({ shareable: ready ? canShareFile(ready.file) : true });
+  // Generated files are text (SVG); stored attachments are copied by path.
+  const { delivery, saving, deliver, notice } = useFileDelivery(ready, async (file) => item.kind === "stored"
+    ? downloadAttachment(item.attachment.storage_path, info.name)
+    : saveTextDownload(info.name, await file.text()));
 
-  async function saveToDownloads(file: File) {
-    setSaving(true);
-    try {
-      // Generated files are text (SVG); stored attachments are copied by path.
-      const path = item.kind === "stored"
-        ? await downloadAttachment(item.attachment.storage_path, info.name)
-        : await saveTextDownload(info.name, await file.text());
-      setNotice({ kind: "success", message: `Saved to ${displaySavedPath(path)}`, savedPath: path });
-    } catch (error) {
-      setNotice({ kind: "error", message: `Couldn’t save: ${errorMessage(error)}` });
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function revealSavedFile(path: string) {
-    try {
-      await revealInFileManager(path);
-    } catch (error) {
-      setNotice({ kind: "error", message: `Couldn’t show this file: ${errorMessage(error)}` });
-    }
-  }
-
-  function deliver() {
-    if (!ready) return;
-    setNotice(null);
-    if (delivery === "save") {
-      void saveToDownloads(ready.file);
-      return;
-    }
-    if (delivery === "download") {
-      triggerBrowserDownload(ready.url, ready.file.name);
-      return;
-    }
-    navigator.share({ files: [ready.file] }).catch((error: unknown) => {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setNotice({ kind: "error", message: `Couldn’t share: ${errorMessage(error)}` });
-    });
-  }
-
-  const savedPath = notice?.savedPath;
   return <DialogSurface label={info.name} labelledBy={titleId} className="modal-card attachment-sheet"
     onClose={onClose}>
     <DialogHeader className="attachment-sheet-head" title={info.name} titleId={titleId}
       subtitle={[info.mimeType || "file", formatByteSize(info.sizeBytes)].join(" · ")} onClose={onClose}
       actions={<button type="button" className="attachment-sheet-share" disabled={!ready || saving} onClick={deliver}>
         {delivery === "share" ? <Share size={16} /> : <Download size={16} />}
-        <span>{delivery === "share" ? "Share" : saving ? "Saving…" : "Download"}</span>
+        <span>{deliveryLabel(delivery, saving)}</span>
       </button>} />
     <div className="modal-body attachment-sheet-body">
-      {notice && <p className={notice.kind === "error" ? "attachment-sheet-error" : "attachment-sheet-notice"}
-        role={notice.kind === "error" ? "alert" : "status"}>
-        <span>{notice.message}</span>
-        {savedPath && <button type="button" className="attachment-sheet-reveal"
-          onClick={() => void revealSavedFile(savedPath)}>{revealActionLabel()}</button>}
-      </p>}
+      {notice}
       {state.status === "loading" && <p className="attachment-sheet-status" role="status">Loading…</p>}
       {state.status === "error" && <div className="attachment-sheet-status" role="alert">
         <p>Could not load this file: {state.message}</p>

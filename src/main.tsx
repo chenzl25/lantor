@@ -66,7 +66,7 @@ import { Conversation } from "./components/Conversation";
 import { CreateChannelModal } from "./components/CreateChannelModal";
 import { buildActivityFeedItems } from "./activity-feed";
 import { ActivityFeedModal } from "./components/ActivityFeedModal";
-import { ArtifactViewerModal } from "./components/ArtifactViewerModal";
+import { ArtifactReader } from "./components/ArtifactReader";
 import { OwnerProfileModal, ownerProfileToForm, type OwnerProfileForm } from "./components/OwnerProfileModal";
 import { DEFAULT_WATCHED_APPS } from "./components/AgentTools";
 import { SavedMessagesModal } from "./components/SavedMessagesModal";
@@ -322,12 +322,6 @@ type ConfirmRequest = {
   body: string;
   confirmLabel: string;
   onConfirm: () => Promise<void> | void;
-};
-
-type ArtifactViewerState = {
-  artifact: Artifact;
-  loading: boolean;
-  error: string | null;
 };
 
 type AppHistoryState = {
@@ -890,8 +884,7 @@ function App() {
     return () => window.removeEventListener(UI_ERROR_EVENT, onError);
   }, []);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
-  const [artifactViewer, setArtifactViewer] = useState<ArtifactViewerState | null>(null);
-  const artifactLoadRequestRef = useRef(0);
+  const [artifactViewer, setArtifactViewer] = useState<Artifact | null>(null);
   const referenceNavigationRequestRef = useRef(0);
   const [runtimeChecks, setRuntimeChecks] = useState<Record<string, RuntimeCheck>>({});
   const [threadPanelWidth, setThreadPanelWidth] = useState(() => {
@@ -2031,26 +2024,11 @@ function App() {
     ephemeralRunBufferRef.current.delete(runId);
   }
 
-  async function openArtifact(artifact: Artifact) {
-    const requestId = artifactLoadRequestRef.current + 1;
-    artifactLoadRequestRef.current = requestId;
-    setArtifactViewer({ artifact, loading: true, error: null });
-    try {
-      const fullArtifact = await apiInvoke("artifact_read", { artifactId: artifact.id });
-      if (artifactLoadRequestRef.current !== requestId) return;
-      setArtifactViewer({ artifact: fullArtifact, loading: false, error: null });
-    } catch (err) {
-      if (artifactLoadRequestRef.current !== requestId) return;
-      setArtifactViewer({
-        artifact,
-        loading: false,
-        error: errorMessage(err, "Couldn’t open report"),
-      });
-    }
+  function openArtifact(artifact: Artifact) {
+    setArtifactViewer(artifact);
   }
 
   function closeArtifactViewer() {
-    artifactLoadRequestRef.current += 1;
     setArtifactViewer(null);
   }
 
@@ -4922,7 +4900,7 @@ function App() {
       const artifact = data?.artifacts.find((item) => item.id === result.id);
       dismissAppModal("search");
       if (artifact) {
-        void openArtifact(artifact);
+        openArtifact(artifact);
       } else {
         setAppError("This report was deleted");
       }
@@ -5496,12 +5474,7 @@ function App() {
         onClose={() => closeAppModal("needs", () => dismissAppModal("needs"))}
       />
 
-      <ArtifactViewerModal
-        artifact={artifactViewer?.artifact ?? null}
-        loading={artifactViewer?.loading ?? false}
-        error={artifactViewer?.error ?? null}
-        onClose={closeArtifactViewer}
-      />
+      <ArtifactReader artifact={artifactViewer} onClose={closeArtifactViewer} />
 
       <OwnerProfileModal
         open={showOwnerProfileModal}

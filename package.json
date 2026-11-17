@@ -9,6 +9,7 @@
     "test:dialogs": "node tests/dialogs.e2e.mjs",
     "test:image-lightbox": "node tests/image-lightbox.e2e.mjs",
     "test:attachment-sheet": "node tests/attachment-sheet.e2e.mjs",
+    "test:artifacts": "node tests/artifacts.e2e.mjs",
     "test:ui-panels": "node tests/ui-panels.e2e.mjs",
     "test:agent-loops": "node tests/agent-loops.e2e.mjs",
     "test:agent-tools": "node tests/agent-tools.e2e.mjs",
