@@ -17,7 +17,6 @@ line to stdout. Non-matching stdout and stderr stay in the process log.
 | --- | --- |
 | `activity` | Write a compact hidden progress/activity event. |
 | `usage` | Record token and cost usage. |
-| `memory_append` / `memory_compact` | Stage a durable update in `notes/work-log.md` or replace the compact `MEMORY.md` recovery index. |
 | `profile_update` | Update the current agent profile. |
 | `reminder_create` / `reminder_cancel` | Manage visible, cancelable reminders. Recurrence is `none`, `daily`, `weekly`, or `interval` (a loop; see below). |
 | `task_create` / `task_status` | Create a durable task or update its status. |

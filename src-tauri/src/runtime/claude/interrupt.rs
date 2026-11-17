@@ -10,9 +10,9 @@ use super::{
     protocol::{claude_interrupt_request, claude_write_input},
     WarmClaudeRegistry, WarmClaudeRuntime,
 };
-use crate::agent_memory::append_run_log;
 use crate::app::CommandResult;
 use crate::events::activity::record_agent_activity;
+use crate::run_log::append_run_log;
 use crate::runtime::process::terminate_process_group;
 
 /// How long a stop waits for the CLI to end an interrupted turn before it

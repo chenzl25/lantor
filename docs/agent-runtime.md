@@ -307,23 +307,12 @@ Each agent has a persistent working directory. By default Lantor uses
 can point at any directory you prefer. On first launch Lantor seeds the
 directory with `MEMORY.md` and a `notes/` subdirectory.
 
-`MEMORY.md` is the recovery entry point and should stay concise and index-like.
-Detailed knowledge belongs in `notes/<topic>.md` files. Agents can also keep
-artifacts and task-specific files in their workspace when work needs durable
-context.
-
-Memory-related control events:
-
-- `memory_append`: stage a durable update in `notes/work-log.md` while keeping `MEMORY.md` as the compact recovery index.
-- `memory_compact`: replace `MEMORY.md` with a cleaned compact version.
-- `profile_update`: update display name, role, avatar, or description.
-
-Memory prompts intentionally follow a file-based memory model: raw dialog/tool
-output stays out of the compact index, chronological updates are staged in a work
-log, and `MEMORY.md` is periodically distilled into a restart-friendly map. When
-an agent compacts active work, it should preserve the fields that make the next
-turn recoverable: Goal, Constraints, Progress, Key Decisions, Critical Context,
-and Next Steps.
+`MEMORY.md` is the agent's note to its future self. Lantor puts it in front of
+the turn prompt when a runtime session starts and again whenever the file
+changes, up to 8K characters (the middle of a longer file is cut). Agents edit
+the file directly with their own file tools. It should hold who the agent is,
+stable user preferences and project facts, the resume point of unfinished
+work, and paths to longer notes or artifacts in the workspace.
 
 ## Agent Skills
 

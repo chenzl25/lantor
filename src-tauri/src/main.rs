@@ -3,7 +3,6 @@
 mod activity_store;
 mod agent_environment;
 mod agent_inbox_wake;
-mod agent_memory;
 mod agent_profile;
 mod agent_routing;
 mod agent_work_dispatch;
@@ -30,6 +29,7 @@ mod models;
 mod owner_inbox;
 mod prompts;
 mod provider_auth;
+mod run_log;
 mod runtime;
 mod subscription_status;
 mod system_commands;

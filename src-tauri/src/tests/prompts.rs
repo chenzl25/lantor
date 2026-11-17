@@ -37,13 +37,11 @@ fn runtime_standing_prompt_excludes_memory_snapshot() {
     assert!(prompt.contains("channel and thread are delivered as message envelope fields"));
     assert!(prompt.contains("Treat messages as conversation"));
     assert!(prompt.contains("Activity events are the short progress notes"));
-    assert!(prompt.contains("MEMORY.md is the compact index"));
-    assert!(prompt.contains("raw conversation/tool logs should stay out of memory"));
-    assert!(prompt.contains("notes/<topic>.md"));
-    assert!(prompt.contains("not replay past turns"));
-    assert!(prompt.contains("timestamp-log-like"));
-    assert!(prompt.contains("stable user preferences"));
-    assert!(prompt.contains("Before long-running work, update Active Context"));
+    assert!(prompt.contains("MEMORY.md there is your note to your future self"));
+    assert!(prompt.contains("Edit it directly with your file tools"));
+    assert!(prompt.contains("remove the resume point when the work is done"));
+    assert!(!prompt.contains("memory_append"));
+    assert!(!prompt.contains("memory_compact"));
     assert!(prompt.contains("Turn startup sequence:"));
     assert!(prompt.contains("first mentioned in a thread"));
     assert!(prompt.contains("Use history-read or message-search when older channel/thread context"));
@@ -99,21 +97,17 @@ fn memory_snapshot_is_turn_context() {
 }
 
 #[test]
-fn ensure_agent_workspace_creates_index_memory_template_and_notes_dir() {
+fn ensure_agent_workspace_creates_short_memory_template_and_notes_dir() {
     let dir = std::env::temp_dir().join(format!("lantor-memory-template-{}", Uuid::new_v4()));
     ensure_agent_workspace(dir.to_str().expect("utf8 temp dir"), "template-agent")
         .expect("ensure workspace");
 
     let memory = std::fs::read_to_string(dir.join("MEMORY.md")).expect("read memory");
     assert!(dir.join("notes").is_dir());
-    assert!(memory.contains("# @template-agent"));
-    assert!(memory.contains("## Key Knowledge"));
-    assert!(memory.contains("## Memory Map"));
-    assert!(memory.contains("notes/user-preferences.md"));
-    assert!(memory.contains("notes/work-log.md"));
-    assert!(memory.contains("## Active Context"));
-    assert!(memory.contains("Keep this file concise and index-like"));
-    assert!(memory.contains("Do not use MEMORY.md as a chronological log"));
+    assert_eq!(
+        memory,
+        "# @template-agent\n\n## Role\nLantor agent.\n\n## Key facts\n\n## Current work\n- none\n"
+    );
 
     std::fs::remove_dir_all(dir).ok();
 }

@@ -9,7 +9,6 @@ use tokio::{
 use uuid::Uuid;
 
 use crate::agent_environment::apply_agent_environment_variables;
-use crate::agent_memory::append_run_log;
 use crate::events::activity::{
     record_agent_activity, record_agent_activity_throttled, work_status_title,
 };
@@ -18,6 +17,7 @@ use crate::events::control::{
     silent_reply_reason,
 };
 use crate::freshness::advance_agent_target_watermark_for_work_item;
+use crate::run_log::append_run_log;
 use crate::runtime::lifecycle::{
     create_run_in_tx, end_cold_run, fail_cold_launch, fail_warm_start, mark_run_running_in_tx,
     ColdRunEnd, NewRun, WarmStartFailed, WarmStartFailure, MAX_WARM_START_ATTEMPTS,
