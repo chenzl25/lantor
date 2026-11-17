@@ -7,25 +7,6 @@ use uuid::Uuid;
 use crate::app::{to_string, CommandResult};
 use crate::runtime::process::truncate_activity_detail;
 
-const CODEX_CONTEXT_ROTATE_DEFAULT_INPUT_TOKENS: i64 = 180_000;
-const CODEX_CONTEXT_ROTATE_MIN_INPUT_TOKENS: i64 = 50_000;
-const CODEX_CONTEXT_ROTATE_ENV: &str = "LANTOR_CODEX_CONTEXT_ROTATE_INPUT_TOKENS";
-
-fn codex_context_rotate_input_tokens_from_env(value: Option<&str>) -> i64 {
-    value
-        .and_then(|value| value.trim().parse::<i64>().ok())
-        .filter(|tokens| *tokens >= CODEX_CONTEXT_ROTATE_MIN_INPUT_TOKENS)
-        .unwrap_or(CODEX_CONTEXT_ROTATE_DEFAULT_INPUT_TOKENS)
-}
-
-pub(super) fn codex_context_rotate_input_tokens() -> i64 {
-    codex_context_rotate_input_tokens_from_env(env::var(CODEX_CONTEXT_ROTATE_ENV).ok().as_deref())
-}
-
-pub(super) fn codex_context_rotate_env() -> &'static str {
-    CODEX_CONTEXT_ROTATE_ENV
-}
-
 pub(super) fn codex_stream_key(run_id: Uuid, item_id: &str) -> String {
     format!("{run_id}:{item_id}")
 }
@@ -227,6 +208,11 @@ pub(super) fn codex_item_started_activity(value: &Value) -> (&'static str, &'sta
             ("tools", "Using tool", codex_item_summary(value))
         }
         "agentMessage" => ("acting", "Writing response", "Writing response".to_owned()),
+        "contextCompaction" => (
+            "run",
+            "Compacting context",
+            "Codex is summarizing earlier turns".to_owned(),
+        ),
         _ => ("activity", "Codex activity", codex_item_summary(value)),
     }
 }
@@ -335,10 +321,9 @@ pub(super) fn apply_codex_turn_options(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_codex_thread_options, apply_codex_turn_options,
-        codex_context_rotate_input_tokens_from_env, codex_error_notification_detail,
+        apply_codex_thread_options, apply_codex_turn_options, codex_error_notification_detail,
         codex_item_started_activity, codex_turn_id_from_value,
-        codex_unattended_server_request_response, CODEX_CONTEXT_ROTATE_DEFAULT_INPUT_TOKENS,
+        codex_unattended_server_request_response,
     };
     use crate::usage::{usage_from_run_log, usage_from_runtime_event};
     use serde_json::json;
@@ -354,26 +339,6 @@ mod tests {
         assert_eq!(
             turn_params,
             json!({ "effort": "medium", "serviceTier": "fast" })
-        );
-    }
-
-    #[test]
-    fn codex_context_rotation_threshold_is_configurable_with_floor() {
-        assert_eq!(
-            codex_context_rotate_input_tokens_from_env(None),
-            CODEX_CONTEXT_ROTATE_DEFAULT_INPUT_TOKENS
-        );
-        assert_eq!(
-            codex_context_rotate_input_tokens_from_env(Some("220000")),
-            220_000
-        );
-        assert_eq!(
-            codex_context_rotate_input_tokens_from_env(Some("49999")),
-            CODEX_CONTEXT_ROTATE_DEFAULT_INPUT_TOKENS
-        );
-        assert_eq!(
-            codex_context_rotate_input_tokens_from_env(Some("not-a-number")),
-            CODEX_CONTEXT_ROTATE_DEFAULT_INPUT_TOKENS
         );
     }
 
@@ -504,6 +469,16 @@ mod tests {
                 "file_edit",
                 "Editing file",
                 json!({"file": "src/main.rs", "operation": "update"}).to_string()
+            )
+        );
+        assert_eq!(
+            codex_item_started_activity(&json!({
+                "params": {"item": {"type": "contextCompaction", "id": "item-1"}}
+            })),
+            (
+                "run",
+                "Compacting context",
+                "Codex is summarizing earlier turns".to_owned()
             )
         );
     }

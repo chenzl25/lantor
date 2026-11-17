@@ -230,6 +230,26 @@ pub(super) fn claude_result_error(value: &Value) -> Option<String> {
         .or_else(|| Some("Claude stream-json result reported an error".to_owned()))
 }
 
+fn claude_compact_boundary_detail(value: &Value) -> String {
+    let tokens = |key: &str| {
+        value
+            .pointer(&format!("/compact_metadata/{key}"))
+            .and_then(Value::as_i64)
+    };
+    let mut detail = match (tokens("pre_tokens"), tokens("post_tokens")) {
+        (Some(pre), Some(post)) => format!("{pre} → {post} context tokens"),
+        (Some(pre), None) => format!("from {pre} context tokens"),
+        _ => "earlier turns summarized".to_owned(),
+    };
+    if let Some(trigger) = value
+        .pointer("/compact_metadata/trigger")
+        .and_then(Value::as_str)
+    {
+        detail.push_str(&format!(" · {trigger}"));
+    }
+    detail
+}
+
 fn claude_api_retry_detail(value: &Value) -> String {
     let attempt = value
         .get("attempt")
@@ -288,6 +308,18 @@ pub(super) fn claude_stream_event_activity(
                 "run_retry",
                 "Claude provider retrying",
                 claude_api_retry_detail(value),
+            )),
+            Some("status") if value.get("status").and_then(Value::as_str) == Some("compacting") => {
+                Some((
+                    "run",
+                    "Compacting context",
+                    "Claude Code is summarizing earlier turns".to_owned(),
+                ))
+            }
+            Some("compact_boundary") => Some((
+                "run",
+                "Context compacted",
+                claude_compact_boundary_detail(value),
             )),
             Some(_) => None,
             None => None,
@@ -606,6 +638,34 @@ mod tests {
                 "Claude provider retrying",
                 "Lantor will retry automatically; no action needed · attempt 2/3 · status 529 (overloaded) · error rate_limit"
                     .to_owned()
+            ))
+        );
+        assert_eq!(
+            claude_stream_event_activity(
+                &json!({"type": "system", "subtype": "status", "status": "compacting"})
+            ),
+            Some((
+                "run",
+                "Compacting context",
+                "Claude Code is summarizing earlier turns".to_owned()
+            ))
+        );
+        assert_eq!(
+            claude_stream_event_activity(
+                &json!({"type": "system", "subtype": "status", "status": null, "compact_result": "success"})
+            ),
+            None
+        );
+        assert_eq!(
+            claude_stream_event_activity(&json!({
+                "type": "system",
+                "subtype": "compact_boundary",
+                "compact_metadata": {"trigger": "auto", "pre_tokens": 170141, "post_tokens": 5673}
+            })),
+            Some((
+                "run",
+                "Context compacted",
+                "170141 → 5673 context tokens · auto".to_owned()
             ))
         );
         assert_eq!(

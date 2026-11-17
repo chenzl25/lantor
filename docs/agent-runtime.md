@@ -47,6 +47,14 @@ thread. A process that is in a turn is replaced at the first start after that
 turn. Use it when something the provider reads only at startup has changed,
 such as an MCP login.
 
+Lantor does not limit how large a session grows. Claude Code and Codex compact
+a session themselves when it nears the model's context window, keeping a
+summary of earlier turns, and each compaction shows as a "Compacting context"
+activity. To compact earlier, use the provider's own setting: for Claude,
+`autoCompactWindow` in Claude Code's settings or
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` in an agent's environment variables; for
+Codex, `model_auto_compact_token_limit` in `~/.codex/config.toml`.
+
 A work item's prompt carries the recent messages of its channel or thread,
 read when the turn starts (`runtime/surface.rs`) for every runtime. Queued
 work stores only what woke the agent, so each message appears once, including

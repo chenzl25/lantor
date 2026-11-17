@@ -103,7 +103,7 @@ async fn reuse(
     registry: &WarmRegistry<FakeProvider>,
     agent_id: Uuid,
 ) -> Result<Option<Arc<WarmRuntime<FakeProvider>>>, String> {
-    reusable_runtime(pool, registry, agent_id, "", false).await
+    reusable_runtime(pool, registry, agent_id, "").await
 }
 
 #[cfg(unix)]

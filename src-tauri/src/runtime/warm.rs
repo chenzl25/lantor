@@ -189,16 +189,14 @@ pub(crate) async fn request_restart_in_tx(
 }
 
 /// The agent's live process when it can take the next start. A process
-/// whose environment changed, that the provider wants replaced, or whose
-/// restart was requested is retired first unless a turn still needs it; a
-/// dead one is dropped. `None` means the caller spawns a new process, which
-/// also serves a pending restart request.
+/// whose environment changed or whose restart was requested is retired first
+/// unless a turn still needs it; a dead one is dropped. `None` means the
+/// caller spawns a new process, which also serves a pending restart request.
 pub(crate) async fn reusable_runtime<P: WarmProvider>(
     pool: &SqlitePool,
     registry: &WarmRegistry<P>,
     agent_id: Uuid,
     environment_variables: &str,
-    replace: bool,
 ) -> CommandResult<Option<Arc<WarmRuntime<P>>>> {
     let restart_requested_at: Option<String> =
         sqlx::query_scalar("select runtime_restart_requested_at from agents where id = $1")
@@ -211,7 +209,7 @@ pub(crate) async fn reusable_runtime<P: WarmProvider>(
         registry,
         agent_id,
         environment_variables,
-        replace || restart_requested_at.is_some(),
+        restart_requested_at.is_some(),
     )
     .await;
     if let (None, Some(requested_at)) = (&runtime, restart_requested_at) {

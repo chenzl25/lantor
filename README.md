@@ -241,8 +241,8 @@ Defaults work out of the box. The two settings most users care about:
 | `LANTOR_DATABASE_URL` | `sqlite://~/Library/Application Support/Lantor/lantor.sqlite` | SQLite database URL. |
 | `LANTOR_WEB_BIND` | `127.0.0.1:8787` | Loopback-only Web UI bind. Set `off` to disable; use a non-loopback address only on a trusted network. |
 
-Advanced options (attachment paths, web public URL, web bundle override, warm
-Codex rotation) are in [`docs/configuration.md`](docs/configuration.md) and
+Advanced options (attachment paths, web public URL, web bundle override) are
+in [`docs/configuration.md`](docs/configuration.md) and
 [`.env.example`](.env.example).
 
 ## Documentation

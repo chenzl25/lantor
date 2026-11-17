@@ -24,13 +24,6 @@ also appear in [`.env.example`](../.env.example).
 | --- | --- | --- |
 | `LANTOR_ATTACHMENT_DIR` | `~/Library/Application Support/Lantor/attachments` | Disk location where Lantor copies inbound message attachments. Point this at an alternative volume if you want attachments stored outside `~/Library`. |
 
-## Runtime tuning
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `LANTOR_CLAUDE_CONTEXT_ROTATE_TOKENS` | `200000` | Start a new Claude Code session instead of resuming the stored one when the last turn's context (input plus cache read and write tokens) reached this many tokens. Values below `50000` are ignored and the default applies. |
-| `LANTOR_CODEX_CONTEXT_ROTATE_INPUT_TOKENS` | `180000` | Rotate warm Codex sessions when the last stopped run exceeds this many input tokens. Lantor ignores values below `50000` to avoid churning sessions unnecessarily. |
-
 ## Notes
 
 - Lantor does not perform its own browser auth. Keep the backend on loopback
