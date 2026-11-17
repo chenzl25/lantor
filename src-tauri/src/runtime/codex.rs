@@ -61,11 +61,11 @@ mod turn;
 
 use protocol::{
     apply_codex_thread_options, apply_codex_turn_options, codex_auth_failure,
-    codex_auto_compact_tokens, codex_error_notification_detail, codex_item_id,
-    codex_item_started_activity, codex_item_type, codex_model_value, codex_network_failure,
-    codex_pending_stream_key, codex_request_error, codex_stream_key, codex_thread_id_from_response,
-    codex_tool_completion_activity, codex_turn_id_from_value,
-    codex_unattended_server_request_response, codex_write_json, effective_codex_cwd,
+    codex_error_notification_detail, codex_item_id, codex_item_started_activity, codex_item_type,
+    codex_model_value, codex_network_failure, codex_pending_stream_key, codex_request_error,
+    codex_stream_key, codex_thread_id_from_response, codex_tool_completion_activity,
+    codex_turn_id_from_value, codex_unattended_server_request_response, codex_write_json,
+    effective_codex_cwd,
 };
 use reaper::codex_warm_idle_reaper;
 pub(crate) use reaper::reap_stuck_codex_turn;
@@ -75,12 +75,6 @@ const CODEX_TURN_START_TIMEOUT: Duration = Duration::from_secs(90);
 const CODEX_RATE_LIMIT_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(30);
 const CODEX_APP_SERVER_SHELL_COMMAND: &str =
     "exec codex app-server --listen stdio:// -c 'notify=[]' -c 'features.memories=false'";
-
-/// Codex compacts a thread itself once it holds this many tokens, so Lantor
-/// keeps resuming the same thread however long it grows.
-fn codex_app_server_shell_command(auto_compact_tokens: i64) -> String {
-    format!("{CODEX_APP_SERVER_SHELL_COMMAND} -c 'model_auto_compact_token_limit={auto_compact_tokens}'")
-}
 
 /// A `codex app-server` process as a warm runtime provider, bound to the
 /// Codex thread it was started or resumed on.
@@ -315,9 +309,7 @@ pub(super) fn app_server_command(
     environment_variables: &str,
 ) -> CommandResult<Command> {
     let mut command = Command::new("/bin/zsh");
-    command
-        .arg("-lc")
-        .arg(codex_app_server_shell_command(codex_auto_compact_tokens()));
+    command.arg("-lc").arg(CODEX_APP_SERVER_SHELL_COMMAND);
     apply_agent_environment_variables(&mut command, environment_variables)?;
     configure_agent_identity_env(&mut command, agent_id, handle);
     configure_agent_context_tool_env(&mut command);
@@ -1551,21 +1543,13 @@ mod tests {
     };
 
     use super::{
-        app_server_command, finish_warm_codex_active_turn, track_codex_agent_message_stream,
-        CodexActiveTurn, CodexAppServer, WarmCodexRuntime, CODEX_TURN_START_TIMEOUT,
+        finish_warm_codex_active_turn, track_codex_agent_message_stream, CodexActiveTurn,
+        CodexAppServer, WarmCodexRuntime, CODEX_APP_SERVER_SHELL_COMMAND, CODEX_TURN_START_TIMEOUT,
     };
 
     #[test]
-    fn codex_app_server_compacts_threads_and_disables_provider_memories() {
-        let command = app_server_command(uuid::Uuid::new_v4(), "Tester", "/tmp", "").unwrap();
-        let args: Vec<_> = command
-            .as_std()
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(args[0], "-lc");
-        assert!(args[1].contains("-c 'features.memories=false'"));
-        assert!(args[1].ends_with("-c 'model_auto_compact_token_limit=180000'"));
+    fn codex_app_server_disables_provider_memories() {
+        assert!(CODEX_APP_SERVER_SHELL_COMMAND.contains("-c 'features.memories=false'"));
     }
 
     async fn test_runtime_with_active_turn(

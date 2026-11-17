@@ -68,12 +68,11 @@ mod recovery_tests;
 mod steer_tests;
 
 use protocol::{
-    claude_auth_failure, claude_auto_compact_tokens, claude_context_tokens,
-    claude_main_tool_use_started, claude_message_text_blocks, claude_network_failure,
-    claude_replayed_input_uuid, claude_result_error, claude_result_text,
-    claude_resume_session_missing, claude_session_id, claude_stream_event_activity,
-    claude_stream_key, claude_streaming_command_text, claude_surface_boundary_marker,
-    claude_text_delta, claude_user_input, claude_write_input, CLAUDE_AUTO_COMPACT_WINDOW_ENV,
+    claude_auth_failure, claude_context_tokens, claude_main_tool_use_started,
+    claude_message_text_blocks, claude_network_failure, claude_replayed_input_uuid,
+    claude_result_error, claude_result_text, claude_resume_session_missing, claude_session_id,
+    claude_stream_event_activity, claude_stream_key, claude_streaming_command_text,
+    claude_surface_boundary_marker, claude_text_delta, claude_user_input, claude_write_input,
     CLAUDE_DISABLE_BACKGROUND_TASKS_ENV, CLAUDE_DISABLE_CRON_ENV, CLAUDE_DISALLOWED_TOOLS,
     CLAUDE_MAX_RETRIES_ENV, DEFAULT_CLAUDE_MAX_RETRIES,
 };
@@ -332,11 +331,6 @@ pub(super) fn configure_claude_command(
     working_directory: &str,
     environment_variables: &str,
 ) -> CommandResult<()> {
-    // Before the agent's own environment, which may set its own window.
-    command.env(
-        CLAUDE_AUTO_COMPACT_WINDOW_ENV,
-        claude_auto_compact_tokens().to_string(),
-    );
     apply_agent_environment_variables(command, environment_variables)?;
     command
         .arg("--output-format")
@@ -1100,39 +1094,10 @@ mod tests {
     };
 
     use super::{
-        configure_claude_command, configure_claude_process_environment,
-        finish_warm_claude_active_turn, ClaudeActiveTurn, ClaudeTextState, WarmClaudeRuntime,
-        CLAUDE_DISABLE_AUTO_MEMORY_ENV, CLAUDE_DISABLE_BACKGROUND_TASKS_ENV,
-        CLAUDE_DISABLE_CRON_ENV, CLAUDE_MAX_RETRIES_ENV,
+        configure_claude_process_environment, finish_warm_claude_active_turn, ClaudeActiveTurn,
+        ClaudeTextState, WarmClaudeRuntime, CLAUDE_DISABLE_AUTO_MEMORY_ENV,
+        CLAUDE_DISABLE_BACKGROUND_TASKS_ENV, CLAUDE_DISABLE_CRON_ENV, CLAUDE_MAX_RETRIES_ENV,
     };
-
-    #[tokio::test]
-    async fn claude_child_compacts_at_lantor_window_unless_agent_sets_one() {
-        async fn child_window(environment_variables: &str) -> String {
-            // The CLI flags configure_claude_command appends become positional
-            // arguments of the script.
-            let mut command = Command::new("sh");
-            command
-                .arg("-c")
-                .arg(r#"printf '%s' "$CLAUDE_CODE_AUTO_COMPACT_WINDOW""#);
-            configure_claude_command(
-                &mut command,
-                Uuid::new_v4(),
-                "Tester",
-                "",
-                environment_variables,
-            )
-            .unwrap();
-            let output = command.output().await.unwrap();
-            assert!(output.status.success());
-            String::from_utf8(output.stdout).unwrap()
-        }
-        assert_eq!(child_window("").await, "200000");
-        assert_eq!(
-            child_window("CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000").await,
-            "400000"
-        );
-    }
 
     #[tokio::test]
     async fn claude_child_enforces_turn_boundaries_over_environment_overrides() {

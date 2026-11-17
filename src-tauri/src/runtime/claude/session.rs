@@ -3,8 +3,8 @@
 //! The idle reaper, failure resets and environment changes end the `claude`
 //! process, but its session transcript stays on disk. A respawn resumes the
 //! stored session ID so earlier turns remain in provider context. Claude Code
-//! compacts a long session itself (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`), so
-//! Lantor never starts over because a session grew.
+//! compacts a long session itself, so Lantor never starts over because a
+//! session grew.
 
 use std::sync::Arc;
 

@@ -14,29 +14,6 @@ pub(super) const CLAUDE_DISABLE_BACKGROUND_TASKS_ENV: &str = "CLAUDE_CODE_DISABL
 pub(super) const CLAUDE_DISABLE_CRON_ENV: &str = "CLAUDE_CODE_DISABLE_CRON";
 /// Tools that would start provider turns outside a Lantor request.
 pub(super) const CLAUDE_DISALLOWED_TOOLS: &str = "Monitor,ScheduleWakeup";
-/// Claude Code auto-compacts as if the model's context window were this size.
-/// Without it a 1M-context model only compacts near 1M tokens.
-pub(super) const CLAUDE_AUTO_COMPACT_WINDOW_ENV: &str = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
-const CLAUDE_AUTO_COMPACT_DEFAULT_TOKENS: i64 = 200_000;
-/// Claude Code treats any smaller window as 100k.
-const CLAUDE_AUTO_COMPACT_MIN_TOKENS: i64 = 100_000;
-pub(super) const CLAUDE_AUTO_COMPACT_LANTOR_ENV: &str = "LANTOR_CLAUDE_AUTO_COMPACT_TOKENS";
-
-fn claude_auto_compact_tokens_from_env(value: Option<&str>) -> i64 {
-    value
-        .and_then(|value| value.trim().parse::<i64>().ok())
-        .filter(|tokens| *tokens >= CLAUDE_AUTO_COMPACT_MIN_TOKENS)
-        .unwrap_or(CLAUDE_AUTO_COMPACT_DEFAULT_TOKENS)
-}
-
-/// The context size at which warm Claude sessions compact themselves.
-pub(super) fn claude_auto_compact_tokens() -> i64 {
-    claude_auto_compact_tokens_from_env(
-        std::env::var(CLAUDE_AUTO_COMPACT_LANTOR_ENV)
-            .ok()
-            .as_deref(),
-    )
-}
 
 pub(super) fn claude_stream_key(run_id: Uuid) -> String {
     format!("{run_id}:claude-assistant")
@@ -494,17 +471,6 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-
-    #[test]
-    fn auto_compact_tokens_read_env_with_claude_code_floor() {
-        assert_eq!(claude_auto_compact_tokens_from_env(None), 200_000);
-        assert_eq!(
-            claude_auto_compact_tokens_from_env(Some(" 300000 ")),
-            300_000
-        );
-        assert_eq!(claude_auto_compact_tokens_from_env(Some("99999")), 200_000);
-        assert_eq!(claude_auto_compact_tokens_from_env(Some("lots")), 200_000);
-    }
 
     #[test]
     fn network_failures_are_api_errors_about_the_connection() {

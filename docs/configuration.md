@@ -24,13 +24,6 @@ also appear in [`.env.example`](../.env.example).
 | --- | --- | --- |
 | `LANTOR_ATTACHMENT_DIR` | `~/Library/Application Support/Lantor/attachments` | Disk location where Lantor copies inbound message attachments. Point this at an alternative volume if you want attachments stored outside `~/Library`. |
 
-## Runtime tuning
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `LANTOR_CLAUDE_AUTO_COMPACT_TOKENS` | `200000` | Passed to Claude Code as `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it compacts an agent's session as if the model's context window were this size. Values below `100000` (Claude Code's minimum) are ignored and the default applies. An agent's own `CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable overrides it. |
-| `LANTOR_CODEX_AUTO_COMPACT_TOKENS` | `180000` | Passed to `codex app-server` as `model_auto_compact_token_limit`: Codex compacts a thread once it holds this many tokens. Values below `50000` are ignored and the default applies. |
-
 ## Notes
 
 - Lantor does not perform its own browser auth. Keep the backend on loopback

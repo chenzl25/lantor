@@ -7,22 +7,6 @@ use uuid::Uuid;
 use crate::app::{to_string, CommandResult};
 use crate::runtime::process::truncate_activity_detail;
 
-const CODEX_AUTO_COMPACT_DEFAULT_TOKENS: i64 = 180_000;
-const CODEX_AUTO_COMPACT_MIN_TOKENS: i64 = 50_000;
-const CODEX_AUTO_COMPACT_ENV: &str = "LANTOR_CODEX_AUTO_COMPACT_TOKENS";
-
-fn codex_auto_compact_tokens_from_env(value: Option<&str>) -> i64 {
-    value
-        .and_then(|value| value.trim().parse::<i64>().ok())
-        .filter(|tokens| *tokens >= CODEX_AUTO_COMPACT_MIN_TOKENS)
-        .unwrap_or(CODEX_AUTO_COMPACT_DEFAULT_TOKENS)
-}
-
-/// The token count at which warm Codex threads compact themselves.
-pub(super) fn codex_auto_compact_tokens() -> i64 {
-    codex_auto_compact_tokens_from_env(env::var(CODEX_AUTO_COMPACT_ENV).ok().as_deref())
-}
-
 pub(super) fn codex_stream_key(run_id: Uuid, item_id: &str) -> String {
     format!("{run_id}:{item_id}")
 }
@@ -337,9 +321,9 @@ pub(super) fn apply_codex_turn_options(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_codex_thread_options, apply_codex_turn_options, codex_auto_compact_tokens_from_env,
-        codex_error_notification_detail, codex_item_started_activity, codex_turn_id_from_value,
-        codex_unattended_server_request_response, CODEX_AUTO_COMPACT_DEFAULT_TOKENS,
+        apply_codex_thread_options, apply_codex_turn_options, codex_error_notification_detail,
+        codex_item_started_activity, codex_turn_id_from_value,
+        codex_unattended_server_request_response,
     };
     use crate::usage::{usage_from_run_log, usage_from_runtime_event};
     use serde_json::json;
@@ -355,23 +339,6 @@ mod tests {
         assert_eq!(
             turn_params,
             json!({ "effort": "medium", "serviceTier": "fast" })
-        );
-    }
-
-    #[test]
-    fn codex_auto_compact_threshold_is_configurable_with_floor() {
-        assert_eq!(
-            codex_auto_compact_tokens_from_env(None),
-            CODEX_AUTO_COMPACT_DEFAULT_TOKENS
-        );
-        assert_eq!(codex_auto_compact_tokens_from_env(Some("220000")), 220_000);
-        assert_eq!(
-            codex_auto_compact_tokens_from_env(Some("49999")),
-            CODEX_AUTO_COMPACT_DEFAULT_TOKENS
-        );
-        assert_eq!(
-            codex_auto_compact_tokens_from_env(Some("not-a-number")),
-            CODEX_AUTO_COMPACT_DEFAULT_TOKENS
         );
     }
 
