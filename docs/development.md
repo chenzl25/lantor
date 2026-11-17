@@ -142,8 +142,9 @@ installed. Each suite has an npm script, for example:
   thread, including replies that are not loaded and collapsed text (see
   [`bootstrap-payload.md`](bootstrap-payload.md#finding-in-a-thread)).
 - `npm run test:ui-panels`, `test:dialogs`, `test:image-lightbox`,
-  `test:attachment-sheet`, `test:activity`, `test:app-shell`, `test:streaming`,
-  `test:web-sync`, `test:message-rows`, `test:message-state-races`,
+  `test:attachment-sheet`, `test:artifacts`, `test:activity`,
+  `test:app-shell`, `test:streaming`, `test:web-sync`, `test:message-rows`,
+  `test:message-state-races`,
   `test:channel-reading` and `test:mobile-performance` cover the matching UI
   areas.
 

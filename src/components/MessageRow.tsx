@@ -6,6 +6,7 @@ import type { MessageRowData } from "../hooks/useMessageRows";
 import type { MessageReferenceStore } from "../message-reference-store";
 import type { ResolvedMessageReference } from "../message-references";
 import { isPrimaryUnmodifiedClick } from "../message-interactions";
+import { bodyOnlyAnnouncesArtifact } from "../artifacts";
 import { messageHasVisibleContent, wasEdited } from "../message-grouping";
 import { shouldCollapseMessage } from "../message-preview";
 import type { Artifact, Message } from "../types";
@@ -89,11 +90,13 @@ export const MessageRow = memo(function MessageRow({
   const root = variant === "thread-root";
   // Lantor raises its own decision cards as system messages; they render as cards.
   const system = message.sender_role === "system" && !decision;
-  const collapsible = !decision && message.delivery_state !== "streaming" && shouldCollapseMessage(message.body);
+  // The artifact card already shows what this body says.
+  const bodyHidden = bodyOnlyAnnouncesArtifact(message);
+  const collapsible = !decision && !bodyHidden && message.delivery_state !== "streaming" && shouldCollapseMessage(message.body);
   const onMount = actions.onMount;
   const setNode = useCallback((node: HTMLElement | null) => onMount?.(message.id, node), [message.id, onMount]);
   const act = (action: MessageRowAction) => actions.onAction(message, action);
-  const body = message.body.trim() ? <MessageMarkdown
+  const body = message.body.trim() && !bodyHidden ? <MessageMarkdown
     body={message.body}
     references={references}
     streamingReferenceStore={data.message.delivery_state === "streaming" ? actions.referenceStore : undefined}

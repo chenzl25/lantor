@@ -27,24 +27,6 @@
       "n": 0
     },
     {
-      "selector": ":root[data-theme=\"dark\"] .artifact-render-error",
-      "prop": "background",
-      "literal": "rgba(255, 69, 58, 0.12)",
-      "n": 0
-    },
-    {
-      "selector": ":root[data-theme=\"dark\"] .artifact-render-error",
-      "prop": "border-color",
-      "literal": "rgba(255, 69, 58, 0.22)",
-      "n": 0
-    },
-    {
-      "selector": ":root[data-theme=\"dark\"] .artifact-render-error",
-      "prop": "color",
-      "literal": "#ffb4ab",
-      "n": 0
-    },
-    {
       "selector": ":root[data-theme=\"dark\"] .markdown-body code",
       "prop": "background",
       "literal": "rgba(226, 232, 240, 0.12)",
@@ -351,24 +333,6 @@
       "n": 0
     },
     {
-      "selector": ".artifact-render-error",
-      "prop": "background",
-      "literal": "rgba(254, 242, 242, 0.82)",
-      "n": 0
-    },
-    {
-      "selector": ".artifact-render-error",
-      "prop": "border",
-      "literal": "rgba(185, 28, 28, 0.16)",
-      "n": 0
-    },
-    {
-      "selector": ".artifact-render-error",
-      "prop": "color",
-      "literal": "#991b1b",
-      "n": 0
-    },
-    {
       "selector": ".attach-button",
       "prop": "box-shadow",
       "literal": "rgba(20, 23, 31, 0.04)",
@@ -648,18 +612,6 @@
       "selector": ".message-action-menu button:hover",
       "prop": "background",
       "literal": "rgba(10, 132, 255, 0.08)",
-      "n": 0
-    },
-    {
-      "selector": ".message-artifact pre",
-      "prop": "background",
-      "literal": "#10141d",
-      "n": 0
-    },
-    {
-      "selector": ".message-artifact pre",
-      "prop": "color",
-      "literal": "#eef3ff",
       "n": 0
     },
     {

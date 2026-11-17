@@ -1,11 +1,9 @@
-import { Component, ReactNode } from "react";
-import { FileText } from "lucide-react";
+import { ChevronRight, FileText } from "lucide-react";
 import { Artifact } from "../types";
-import { MessageMarkdown } from "./MessageMarkdown";
 
 type MessageArtifactsProps = {
   artifacts?: Artifact[] | null;
-  onOpenArtifact?: (artifact: Artifact) => void;
+  onOpenArtifact: (artifact: Artifact) => void;
 };
 
 type SafeArtifact = Artifact & {
@@ -15,34 +13,6 @@ type SafeArtifact = Artifact & {
   summary: string;
   content: string;
 };
-
-type ArtifactErrorBoundaryProps = {
-  artifactTitle: string;
-  children: ReactNode;
-};
-
-type ArtifactErrorBoundaryState = {
-  failed: boolean;
-};
-
-class ArtifactErrorBoundary extends Component<ArtifactErrorBoundaryProps, ArtifactErrorBoundaryState> {
-  state: ArtifactErrorBoundaryState = { failed: false };
-
-  static getDerivedStateFromError() {
-    return { failed: true };
-  }
-
-  render() {
-    if (this.state.failed) {
-      return (
-        <div className="artifact-render-error">
-          Could not render artifact "{this.props.artifactTitle}". Open the full artifact or retry after reload.
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
 
 function asText(value: unknown, fallback = "") {
   if (typeof value === "string") return value;
@@ -73,52 +43,20 @@ function safeArtifact(artifact: Partial<Artifact> | null | undefined, index: num
   };
 }
 
-function safeKindClass(kind: string) {
-  return kind.replace(/[^a-z0-9_-]/g, "-") || "text";
-}
-
-function artifactIcon(kind: string) {
-  switch (kind) {
-    case "markdown":
-      return FileText;
-    default:
-      return FileText;
-  }
-}
-
-function ArtifactContent({ artifact }: { artifact: Artifact }) {
-  if (!artifact.content) return null;
-
-  if (artifact.kind === "markdown") {
-    return (
-      <div className="artifact-markdown-content">
-        <MessageMarkdown body={artifact.content} scrollKey={`artifact:${artifact.id}`} channelId={artifact.channel_id} />
-      </div>
-    );
-  }
-
-  return <pre>{artifact.content}</pre>;
-}
-
-function ArtifactCard({ artifact, onOpenArtifact }: { artifact: SafeArtifact; onOpenArtifact?: (artifact: Artifact) => void }) {
-  const Icon = artifactIcon(artifact.kind);
+function ArtifactCard({ artifact, onOpenArtifact }: { artifact: SafeArtifact; onOpenArtifact: (artifact: Artifact) => void }) {
   return (
-    <details className={`message-artifact artifact-${safeKindClass(artifact.kind)}`}>
-      <summary>
-        <span className="artifact-icon"><Icon size={16} /></span>
-        <span>
-          <strong>{artifact.title}</strong>
-          <small>{artifact.kind} · artifact {artifact.id.slice(0, 8)}</small>
-        </span>
-      </summary>
-      {onOpenArtifact && (
-        <div className="artifact-actions">
-          <button type="button" onClick={() => onOpenArtifact(artifact)}>Open report</button>
-        </div>
-      )}
-      {artifact.summary && <p>{artifact.summary}</p>}
-      <ArtifactContent artifact={artifact} />
-    </details>
+    // The click must not reach the row, which would also select a thread reply.
+    <button type="button" className="message-artifact" onClick={(event) => {
+      event.stopPropagation();
+      onOpenArtifact(artifact);
+    }}>
+      <span className="artifact-icon"><FileText size={16} /></span>
+      <span className="message-artifact-text">
+        <strong>{artifact.title}</strong>
+        {artifact.summary && <small>{artifact.summary}</small>}
+      </span>
+      <ChevronRight className="message-artifact-chevron" size={16} aria-hidden="true" />
+    </button>
   );
 }
 
@@ -129,11 +67,7 @@ export function MessageArtifacts({ artifacts, onOpenArtifact }: MessageArtifacts
     <div className="message-artifacts">
       {artifacts.map((rawArtifact, index) => {
         const artifact = safeArtifact(rawArtifact, index);
-        return (
-          <ArtifactErrorBoundary key={artifact.id || `artifact-${index}`} artifactTitle={artifact.title}>
-            <ArtifactCard artifact={artifact} onOpenArtifact={onOpenArtifact} />
-          </ArtifactErrorBoundary>
-        );
+        return <ArtifactCard key={artifact.id} artifact={artifact} onOpenArtifact={onOpenArtifact} />;
       })}
     </div>
   );
