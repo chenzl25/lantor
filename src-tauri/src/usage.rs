@@ -100,9 +100,13 @@ fn model_cost_micros(runtime: &str, model: &str, input_tokens: i64, output_token
         } else {
             (3_000_000_i64, 15_000_000_i64)
         }
+    } else if runtime == "codex" && model == "gpt-6.2-astra" {
+        (8_000_000_i64, 40_000_000_i64)
     } else if runtime == "codex" && model == "gpt-6-astra" {
         (10_000_000_i64, 50_000_000_i64)
-    } else if runtime == "codex" && matches!(model.as_str(), "gpt-6.1-sol" | "gpt-6-sol") {
+    } else if runtime == "codex"
+        && matches!(model.as_str(), "gpt-6.2-sol" | "gpt-6.1-sol" | "gpt-6-sol")
+    {
         (2_000_000_i64, 10_000_000_i64)
     } else if runtime == "codex" && model == "gpt-6.1-terra" {
         (1_000_000_i64, 5_000_000_i64)
@@ -287,6 +291,18 @@ mod tests {
         assert_eq!(
             model_cost_micros("codex", "gpt-6-astra", 1_000_000, 1_000_000),
             60_000_000
+        );
+    }
+
+    #[test]
+    fn gpt_6_2_usage_uses_current_public_rates() {
+        assert_eq!(
+            model_cost_micros("codex", "gpt-6.2-astra", 1_000_000, 1_000_000),
+            48_000_000
+        );
+        assert_eq!(
+            model_cost_micros("codex", "gpt-6.2-sol", 1_000_000, 1_000_000),
+            12_000_000
         );
     }
 
