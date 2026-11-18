@@ -357,6 +357,7 @@ async fn adopt_follow_up_turn(
                 thread_root_id: steer.thread_root_id,
                 stream_key,
                 pending_memory_context: None,
+                surface_delivered_seq: None,
                 text: ClaudeTextState::default(),
                 interrupt_requested: false,
                 auth_required: false,

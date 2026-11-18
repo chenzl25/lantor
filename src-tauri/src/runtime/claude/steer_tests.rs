@@ -80,6 +80,7 @@ impl Fixture {
                     thread_root_id: None,
                     stream_key,
                     pending_memory_context: None,
+                    surface_delivered_seq: None,
                     text: ClaudeTextState::default(),
                     interrupt_requested: false,
                     auth_required: false,
@@ -523,6 +524,7 @@ async fn live_claude_cli_follow_up_and_interrupt() {
                 String::new(),
                 prompt.to_owned(),
                 0,
+                SurfaceDelivery::default(),
                 None,
             )
             .await

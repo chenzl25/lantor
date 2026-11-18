@@ -149,6 +149,12 @@ pub(super) fn claude_turn_usage(value: &Value) -> Option<(RunUsage, Option<i64>)
     Some((usage, cost_micros))
 }
 
+/// Claude Code replaced the session's earlier turns with a summary.
+pub(super) fn claude_context_compacted(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("system")
+        && value.get("subtype").and_then(Value::as_str) == Some("compact_boundary")
+}
+
 /// The result Claude Code emits when `--resume` names a session it cannot find.
 pub(super) fn claude_resume_session_missing(value: &Value) -> bool {
     value.get("type").and_then(Value::as_str) == Some("result")

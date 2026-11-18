@@ -12,6 +12,7 @@ use crate::runtime::{
     lifecycle::{end_turn, settle_codex_steer, TurnEnd},
     network_retry::{plan_network_retry, raise_network_failure_card, NetworkRetryPlan},
     process::{terminate_process_group, upsert_runtime_thread_id},
+    session_context::{store_injected_memory, store_surface_delivery},
     streaming::{
         consume_streaming_agent_control_lines, delete_streaming_agent_message_by_key,
         dispatch_streaming_agent_message_mentions, finish_streaming_agent_message,
@@ -91,6 +92,7 @@ pub(super) async fn finish_warm_codex_active_turn(
     success: bool,
     error: Option<String>,
 ) -> CommandResult<()> {
+    let mut injected_memory = None;
     let active = {
         let mut state = runtime.state.lock().await;
         state.last_activity = std::time::Instant::now();
@@ -100,7 +102,8 @@ pub(super) async fn finish_warm_codex_active_turn(
                 .as_mut()
                 .and_then(|active| active.pending_memory_context.take())
             {
-                state.injected_memory_context = next_memory_context;
+                state.injected_memory_context = next_memory_context.clone();
+                injected_memory = Some(next_memory_context);
             }
         }
         active
@@ -108,6 +111,26 @@ pub(super) async fn finish_warm_codex_active_turn(
     let Some(active) = active else {
         return Ok(());
     };
+    if success {
+        // The thread now holds what this turn's prompt brought. Losing the
+        // record only makes a later prompt repeat it.
+        let thread_id = runtime.provider.thread_id.as_str();
+        if let Some(memory) = &injected_memory {
+            let _ =
+                store_injected_memory(pool, agent_id, "codex", thread_id, memory.as_deref()).await;
+        }
+        if let (Some(channel_id), Some(seq)) = (active.channel_id, active.surface_delivered_seq) {
+            let _ = store_surface_delivery(
+                pool,
+                agent_id,
+                channel_id,
+                active.thread_root_id,
+                thread_id,
+                seq,
+            )
+            .await;
+        }
+    }
     // The turn has left memory: every step below is best effort except the
     // terminal write, so a failed step cannot leave the run open.
     let mut first_error = None;

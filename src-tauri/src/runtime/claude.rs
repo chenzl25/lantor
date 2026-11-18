@@ -27,6 +27,7 @@ use crate::runtime::{
         cleanup_failed_warm_start, configure_agent_context_tool_env, configure_agent_identity_env,
         truncate_activity_detail, upsert_runtime_thread_id,
     },
+    session_context::{forget_session_context, load_injected_memory, SurfaceDelivery},
     streaming::{
         append_streaming_agent_message, ensure_streaming_agent_message,
         reconcile_streaming_agent_message, start_streaming_agent_text_block,
@@ -65,17 +66,19 @@ mod network_retry_tests;
 #[cfg(test)]
 mod recovery_tests;
 #[cfg(test)]
+mod session_context_tests;
+#[cfg(test)]
 mod steer_tests;
 
 use protocol::{
-    claude_auth_failure, claude_context_tokens, claude_main_tool_use_started,
-    claude_message_text_blocks, claude_network_failure, claude_replayed_input_uuid,
-    claude_request_usage, claude_result_error, claude_result_text, claude_resume_session_missing,
-    claude_session_id, claude_stream_event_activity, claude_stream_key,
-    claude_streaming_command_text, claude_surface_boundary_marker, claude_text_delta,
-    claude_turn_usage, claude_user_input, claude_write_input, CLAUDE_DISABLE_BACKGROUND_TASKS_ENV,
-    CLAUDE_DISABLE_CRON_ENV, CLAUDE_DISALLOWED_TOOLS, CLAUDE_MAX_RETRIES_ENV,
-    DEFAULT_CLAUDE_MAX_RETRIES,
+    claude_auth_failure, claude_context_compacted, claude_context_tokens,
+    claude_main_tool_use_started, claude_message_text_blocks, claude_network_failure,
+    claude_replayed_input_uuid, claude_request_usage, claude_result_error, claude_result_text,
+    claude_resume_session_missing, claude_session_id, claude_stream_event_activity,
+    claude_stream_key, claude_streaming_command_text, claude_surface_boundary_marker,
+    claude_text_delta, claude_turn_usage, claude_user_input, claude_write_input,
+    CLAUDE_DISABLE_BACKGROUND_TASKS_ENV, CLAUDE_DISABLE_CRON_ENV, CLAUDE_DISALLOWED_TOOLS,
+    CLAUDE_MAX_RETRIES_ENV, DEFAULT_CLAUDE_MAX_RETRIES,
 };
 use reaper::claude_warm_idle_reaper;
 use session::{
@@ -181,6 +184,10 @@ struct ClaudeActiveTurn {
     thread_root_id: Option<Uuid>,
     stream_key: String,
     pending_memory_context: Option<Option<String>>,
+    /// Highest surface message seq this turn's prompt delivers. The session
+    /// holds it once the turn succeeds, unless the provider compacted the
+    /// session meanwhile.
+    surface_delivered_seq: Option<i64>,
     text: ClaudeTextState,
     /// Lantor asked the CLI to interrupt this turn, so its error result is a stop.
     interrupt_requested: bool,
@@ -436,6 +443,12 @@ async fn spawn_warm_claude_runtime(
         } => (Some(session_id.clone()), *context_tokens, *last_surface),
         _ => (None, 0, None),
     };
+    // A resumed session still holds the memory snapshot an earlier process
+    // gave it.
+    let injected_memory_context = match &session_id {
+        Some(session_id) => load_injected_memory(pool, agent_id, "claude", session_id).await?,
+        None => None,
+    };
     let runtime = Arc::new(WarmClaudeRuntime {
         stdin: AsyncMutex::new(stdin),
         state: AsyncMutex::new(WarmClaudeState {
@@ -444,7 +457,7 @@ async fn spawn_warm_claude_runtime(
             session_id: session_id.clone(),
             context_tokens,
             last_surface,
-            injected_memory_context: None,
+            injected_memory_context,
             last_activity: Instant::now(),
             pending_steers: Vec::new(),
         }),
@@ -518,6 +531,7 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
     environment_variables: String,
     work_item_prompt: String,
     rendered_context_max_seq: i64,
+    surface_delivery: SurfaceDelivery,
     memory_context: Option<String>,
 ) -> CommandResult<()> {
     let claude_prompt = build_claude_streaming_prompt(&work_item_prompt);
@@ -610,7 +624,7 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
         channel_id,
         thread_root_id,
     };
-    let (surface_boundary, memory_update) = {
+    let (surface_boundary, memory_update, session_id) = {
         let state = runtime.state.lock().await;
         (
             claude_surface_boundary_marker(state.last_surface, current_surface).unwrap_or_default(),
@@ -618,8 +632,17 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
                 state.injected_memory_context.as_deref(),
                 memory_context.as_deref(),
             ),
+            state.session_id.clone(),
         )
     };
+    // The session this process resumed may already hold the surface's earlier
+    // messages; only that session gets the prompt that leaves them out.
+    let claude_prompt = match surface_delivery.delta_prompt_for(session_id.as_deref()) {
+        Some(delta_prompt) => build_claude_streaming_prompt(delta_prompt),
+        None => claude_prompt,
+    };
+    let surface_delivered_seq =
+        (surface_delivery.delivered_seq > 0).then_some(surface_delivery.delivered_seq);
     let claude_prompt = if surface_boundary.is_empty() {
         claude_prompt
     } else {
@@ -717,6 +740,7 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
                 thread_root_id,
                 stream_key,
                 pending_memory_context: next_injected_memory_context,
+                surface_delivered_seq,
                 text: ClaudeTextState::default(),
                 interrupt_requested: false,
                 auth_required: false,
@@ -968,6 +992,20 @@ async fn apply_claude_warm_stdout_line(
         record_claude_usage(pool, agent_id, runtime, run_id, &value).await;
     }
 
+    if claude_context_compacted(&value) {
+        // The summary may have dropped what Lantor put into the session, so
+        // the next turns bring the memory snapshot and surface messages again.
+        {
+            let mut state = runtime.state.lock().await;
+            state.injected_memory_context = None;
+            if let Some(active) = state.active.as_mut() {
+                active.pending_memory_context = None;
+                active.surface_delivered_seq = None;
+            }
+        }
+        forget_session_context(pool, agent_id, "claude").await?;
+    }
+
     if let Some(session_id) = claude_session_id(&value) {
         {
             let mut state = runtime.state.lock().await;
@@ -1193,6 +1231,7 @@ mod tests {
                     thread_root_id: None,
                     stream_key,
                     pending_memory_context: None,
+                    surface_delivered_seq: None,
                     text: ClaudeTextState::default(),
                     interrupt_requested: false,
                     auth_required: false,

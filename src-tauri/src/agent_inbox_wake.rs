@@ -495,7 +495,7 @@ async fn load_channel_wiki_context(
 
 /// Renders what woke the agent. The surface's recent messages are not stored
 /// here: the supervisor reads them when the turn starts
-/// (`runtime::surface::append_surface_context`).
+/// (`runtime::surface::render_surface_context`).
 pub(crate) fn inbox_wake_context_with_wiki(
     items: &[InboxWakeItem],
     channel_wiki_block: Option<&str>,

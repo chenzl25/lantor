@@ -22,8 +22,9 @@ use super::{
         effective_launch_command, start_process_agent, terminate_process_group, ProcessAgentLaunch,
     },
     self_update::SelfUpdate,
+    session_context::{SurfaceContextDelta, SurfaceDelivery},
     streaming::settle_orphaned_streaming_messages,
-    surface::{append_surface_context, same_codex_surface, CodexActiveTurnScheduleState},
+    surface::{render_surface_context, same_codex_surface, CodexActiveTurnScheduleState},
     wake::SupervisorWake,
 };
 use crate::{
@@ -980,6 +981,7 @@ async fn supervisor_start_agent(
         }
     };
     let mut rendered_context_max_seq = 0;
+    let mut surface_delivery = SurfaceDelivery::default();
     let work_item_prompt = match work_item_id {
         Some(work_item_id) => {
             let row = sqlx::query(
@@ -1009,15 +1011,17 @@ async fn supervisor_start_agent(
             let channel_name: Option<String> = row.get("channel_name");
             let task_number: Option<i64> = row.get("task_number");
             let thread_root_id: Option<Uuid> = row.get("thread_root_id");
-            let rendered = append_surface_context(
+            let rendered = render_surface_context(
                 pool,
                 &context,
+                Some(agent_id),
                 channel_id,
                 channel_name.as_deref(),
                 thread_root_id,
             )
             .await?;
             rendered_context_max_seq = rendered.max_seq;
+            surface_delivery.delivered_seq = rendered.delivered_seq;
             let context = rendered.context;
             let available_agents = load_channel_agent_roster(pool, channel_id, agent_id).await?;
             let github_reference_lines =
@@ -1032,39 +1036,49 @@ async fn supervisor_start_agent(
                         "Your agent profile currently has no avatar. If your handle or MEMORY.md gives you a stable identity, you may emit one standalone LANTOR_EVENT profile_update with an avatar like `dicebear:dylan:{handle}`. Keep handling the user's request normally and do not send visible chat only for avatar setup."
                     )
                 });
-            let prompt = if is_warm_streaming_runtime {
-                build_streaming_work_item_prompt(
-                    work_item_id,
-                    &title,
-                    &context,
-                    channel_name.as_deref(),
-                    &github_reference_lines,
-                    task_number,
-                    thread_root_id,
-                    &available_agents,
-                    agent_profile_hint.as_deref(),
-                )
-            } else {
-                build_work_item_prompt(
-                    work_item_id,
-                    &title,
-                    &context,
-                    channel_name.as_deref(),
-                    &github_reference_lines,
-                    task_number,
-                    thread_root_id,
-                    &available_agents,
-                    agent_profile_hint.as_deref(),
-                )
-            };
-            if row
+            let network_retry = row
                 .get::<Option<String>, _>("network_requeued_at")
-                .is_some()
-            {
-                with_network_retry_note(prompt)
-            } else {
-                prompt
-            }
+                .is_some();
+            let prompt_with = |context: &str| {
+                let prompt = if is_warm_streaming_runtime {
+                    build_streaming_work_item_prompt(
+                        work_item_id,
+                        &title,
+                        context,
+                        channel_name.as_deref(),
+                        &github_reference_lines,
+                        task_number,
+                        thread_root_id,
+                        &available_agents,
+                        agent_profile_hint.as_deref(),
+                    )
+                } else {
+                    build_work_item_prompt(
+                        work_item_id,
+                        &title,
+                        context,
+                        channel_name.as_deref(),
+                        &github_reference_lines,
+                        task_number,
+                        thread_root_id,
+                        &available_agents,
+                        agent_profile_hint.as_deref(),
+                    )
+                };
+                if network_retry {
+                    with_network_retry_note(prompt)
+                } else {
+                    prompt
+                }
+            };
+            surface_delivery.delta =
+                rendered
+                    .delta
+                    .map(|(thread_id, context)| SurfaceContextDelta {
+                        thread_id,
+                        prompt: prompt_with(&context),
+                    });
+            prompt_with(&context)
         }
         None => String::new(),
     };
@@ -1082,6 +1096,7 @@ async fn supervisor_start_agent(
             environment_variables,
             work_item_prompt,
             rendered_context_max_seq,
+            surface_delivery,
             memory_context,
         )
         .await;
@@ -1099,6 +1114,7 @@ async fn supervisor_start_agent(
             environment_variables,
             work_item_prompt,
             rendered_context_max_seq,
+            surface_delivery,
             memory_context,
         )
         .await;
@@ -1991,6 +2007,7 @@ mod tests {
                         String::new(),
                         String::new(),
                         0,
+                        super::SurfaceDelivery::default(),
                         None,
                     )
                     .await
@@ -2008,6 +2025,7 @@ mod tests {
                         String::new(),
                         String::new(),
                         0,
+                        super::SurfaceDelivery::default(),
                         None,
                     )
                     .await

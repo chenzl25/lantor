@@ -14,6 +14,7 @@ use crate::runtime::{
     lifecycle::{end_turn, TurnEnd},
     network_retry::{plan_network_retry, raise_network_failure_card, NetworkRetryPlan},
     process::{terminate_process_group, upsert_runtime_thread_id},
+    session_context::{store_injected_memory, store_surface_delivery},
     streaming::{
         consume_streaming_agent_control_lines, delete_streaming_agent_message_by_key,
         finish_streaming_agent_message,
@@ -32,6 +33,7 @@ pub(super) async fn finish_warm_claude_active_turn(
     success: bool,
     error: Option<String>,
 ) -> CommandResult<()> {
+    let mut injected_memory = None;
     let (active, session_id, context_tokens) = {
         let mut state = runtime.state.lock().await;
         state.last_activity = Instant::now();
@@ -41,7 +43,8 @@ pub(super) async fn finish_warm_claude_active_turn(
                 .as_mut()
                 .and_then(|active| active.pending_memory_context.take())
             {
-                state.injected_memory_context = next_memory_context;
+                state.injected_memory_context = next_memory_context.clone();
+                injected_memory = Some(next_memory_context);
             }
         }
         if let Some(active) = active.as_ref() {
@@ -57,6 +60,25 @@ pub(super) async fn finish_warm_claude_active_turn(
         // A process that died between turns still owes its follow-ups a turn.
         return settle_claude_follow_ups(pool, agent_id, runtime).await;
     };
+    if let (true, Some(session_id)) = (success, session_id.as_deref()) {
+        // The session now holds what this turn's prompt brought. Losing the
+        // record only makes a later prompt repeat it.
+        if let Some(memory) = &injected_memory {
+            let _ = store_injected_memory(pool, agent_id, "claude", session_id, memory.as_deref())
+                .await;
+        }
+        if let (Some(channel_id), Some(seq)) = (active.channel_id, active.surface_delivered_seq) {
+            let _ = store_surface_delivery(
+                pool,
+                agent_id,
+                channel_id,
+                active.thread_root_id,
+                session_id,
+                seq,
+            )
+            .await;
+        }
+    }
     // From here on the turn has left memory, so every step below is best
     // effort except the terminal write: a failed step must not leave the run
     // open, which would block the agent's queue until a restart.
