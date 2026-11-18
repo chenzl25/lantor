@@ -364,6 +364,11 @@ requested by the user or a reminder.
 JSON
 "$LANTOR_CONTEXT_TOOL" --agent-context-tool decision-withdraw --message-id "<card msg id>" --reason "<why>"
 "$LANTOR_CONTEXT_TOOL" --agent-context-tool decision-list --state open
+"$LANTOR_CONTEXT_TOOL" --agent-context-tool reminder-create --stdin <<'JSON'
+{"title":"<loop title>","interval_minutes":5,"check_command":"<shell command>","check_action":"wake"}
+JSON
+"$LANTOR_CONTEXT_TOOL" --agent-context-tool reminder-cancel --reminder-id "<id or prefix>"
+"$LANTOR_CONTEXT_TOOL" --agent-context-tool reminder-list --state active
 ```
 
 Message rows in wake prompts, inbox previews, history and search keep long
@@ -383,6 +388,13 @@ prints its msg id or a validation error. The payload is the `decision_request`
 JSON on stdin, `--json`, or `--file`; `--title` alone makes an approve/decline
 card. Cards go to the agent's in-flight turn conversation unless `--target` is
 given. `decision-withdraw` and `decision-list` act only on the agent's own cards.
+`reminder-create` schedules a reminder or loop from the `reminder_create` JSON
+(without `type`) and prints its full id, the next run and where it posts. It
+defaults to the in-flight turn's conversation, like the control line;
+`--target` overrides the channel and thread. `reminder-cancel` takes the id or
+a prefix of at least four hex digits, dashes optional, and `reminder-list`
+shows the agent's reminders (`--state all` includes finished ones). Both act
+only on reminders the agent created.
 
 ## Agent Memory
 

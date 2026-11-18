@@ -22,6 +22,7 @@ use crate::decision_store::{
     withdraw_agent_decision, DecisionOptionInput, NewDecision,
 };
 use crate::events::activity::record_agent_activity;
+use crate::events::control::{cancel_agent_reminder, schedule_agent_reminder, ReminderRequest};
 use crate::freshness::advance_agent_target_watermark;
 use crate::github::{refresh_github_review_attention, GithubReviewAttentionRefreshResult};
 use crate::message_store::load_artifact;
@@ -2208,13 +2209,24 @@ async fn current_agent_run_id(pool: &SqlitePool, agent_id: Uuid) -> CommandResul
 }
 
 fn read_decision_payload(args: &[String]) -> CommandResult<Option<DecisionRequestPayload>> {
+    read_json_payload(args, "decision-request")
+}
+
+/// A command's JSON payload from `--json`, `--file` or `--stdin`; `None` when
+/// none of them is given.
+fn read_json_payload<T: serde::de::DeserializeOwned>(
+    args: &[String],
+    command: &str,
+) -> CommandResult<Option<T>> {
     let sources = [
         arg_value(args, "--json").is_some(),
         arg_value(args, "--file").is_some(),
         has_arg(args, "--stdin"),
     ];
     if sources.iter().filter(|given| **given).count() > 1 {
-        return Err("decision-request accepts only one of --json, --file, or --stdin".to_owned());
+        return Err(format!(
+            "{command} accepts only one of --json, --file, or --stdin"
+        ));
     }
     let raw = if let Some(json) = arg_value(args, "--json") {
         json
@@ -2231,11 +2243,11 @@ fn read_decision_payload(args: &[String]) -> CommandResult<Option<DecisionReques
         return Ok(None);
     };
     if raw.trim().is_empty() {
-        return Err("decision-request payload is empty".to_owned());
+        return Err(format!("{command} payload is empty"));
     }
     serde_json::from_str(raw.trim())
         .map(Some)
-        .map_err(|err| format!("invalid decision-request JSON: {err}"))
+        .map_err(|err| format!("invalid {command} JSON: {err}"))
 }
 
 async fn decision_target_label(
@@ -2473,10 +2485,220 @@ async fn decision_list_for_agent(
     Ok(output.join("\n"))
 }
 
+pub(crate) async fn agent_context_reminder_create(
+    pool: &SqlitePool,
+    args: &[String],
+) -> CommandResult<String> {
+    let agent_id = require_current_agent(pool, "reminder-create").await?;
+    reminder_create_for_agent(pool, agent_id, args).await
+}
+
+/// Schedules a reminder or loop like the `reminder_create` control line and
+/// prints its id, so the agent can cancel it later.
+async fn reminder_create_for_agent(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    args: &[String],
+) -> CommandResult<String> {
+    let mut request: ReminderRequest = read_json_payload(args, "reminder-create")?.ok_or_else(|| {
+        "reminder-create needs a JSON payload (--stdin, --json, or --file) shaped like the reminder_create control line".to_owned()
+    })?;
+    if let Some(target) = arg_value(args, "--target") {
+        let target = resolve_agent_context_target(pool, &target, None).await?;
+        request.channel = None;
+        request.channel_id = Some(target.channel_id);
+        request.thread_root_id = target.thread_root_id;
+    }
+    let run_id = current_agent_run_id(pool, agent_id).await?;
+    let title = request.title.trim().to_owned();
+    let check_action = request.check_action.clone().unwrap_or_default();
+    let reminder = schedule_agent_reminder(pool, agent_id, run_id, request).await?;
+    let place = match reminder.channel_id {
+        Some(channel_id) => {
+            format!(
+                " in {}",
+                decision_target_label(pool, channel_id, reminder.thread_root_id).await?
+            )
+        }
+        None => String::new(),
+    };
+    let check = match check_action.trim() {
+        "" => String::new(),
+        "post" => ", check output is posted".to_owned(),
+        "wake" => ", check output wakes you".to_owned(),
+        other => format!(", check action {other}"),
+    };
+    Ok(format!(
+        "Created reminder {}: {title}\nNext: {}, {}{check}{place}.\nCancel with: reminder-cancel --reminder-id {}",
+        reminder.id,
+        reminder.due_at.to_rfc3339(),
+        reminder_cadence(&reminder.recurrence, reminder.interval_seconds),
+        short_id(reminder.id),
+    ))
+}
+
+fn reminder_cadence(recurrence: &str, interval_seconds: Option<i64>) -> String {
+    match (recurrence, interval_seconds) {
+        (_, Some(seconds)) if seconds % 60 == 0 => format!("every {} min", seconds / 60),
+        (_, Some(seconds)) => format!("every {seconds} s"),
+        ("none", None) => "once".to_owned(),
+        (recurrence, None) => recurrence.to_owned(),
+    }
+}
+
+/// The agent's own reminder whose id is `id` or starts with it, dashes
+/// optional. Only reminders the agent created can be named.
+async fn resolve_own_reminder(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    id: &str,
+    active_only: bool,
+) -> CommandResult<(Uuid, String)> {
+    let wanted = id.trim().to_lowercase().replace('-', "");
+    if wanted.len() < 4 || !wanted.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(format!(
+            "invalid reminder id {id:?}: give the id or at least its first 4 hex digits"
+        ));
+    }
+    let rows = sqlx::query(
+        r#"
+        select id, title
+        from reminders
+        where creator_agent_id = $1
+          and ($2 = 0 or status in ('scheduled', 'fired'))
+        "#,
+    )
+    .bind(agent_id)
+    .bind(i64::from(active_only))
+    .fetch_all(pool)
+    .await
+    .map_err(to_string)?;
+    let matches: Vec<(Uuid, String)> = rows
+        .iter()
+        .map(|row| (row.get::<Uuid, _>("id"), row.get::<String, _>("title")))
+        .filter(|(id, _)| id.simple().to_string().starts_with(&wanted))
+        .collect();
+    match matches.as_slice() {
+        [single] => Ok(single.clone()),
+        [] => Err(format!(
+            "no {}reminder of yours matches {id}; reminder-list shows them",
+            if active_only { "active " } else { "" }
+        )),
+        several => Err(format!(
+            "{id} matches {} of your reminders; give more of the id: {}",
+            several.len(),
+            several
+                .iter()
+                .map(|(id, title)| format!("{id} ({title})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+pub(crate) async fn agent_context_reminder_cancel(
+    pool: &SqlitePool,
+    args: &[String],
+) -> CommandResult<String> {
+    let agent_id = require_current_agent(pool, "reminder-cancel").await?;
+    reminder_cancel_for_agent(pool, agent_id, args).await
+}
+
+async fn reminder_cancel_for_agent(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    args: &[String],
+) -> CommandResult<String> {
+    let id = arg_value(args, "--reminder-id")
+        .or_else(|| arg_value(args, "--id"))
+        .ok_or_else(|| "reminder-cancel requires --reminder-id <uuid-or-prefix>".to_owned())?;
+    let (reminder_id, title) = resolve_own_reminder(pool, agent_id, &id, true).await?;
+    let run_id = current_agent_run_id(pool, agent_id).await?;
+    cancel_agent_reminder(pool, agent_id, run_id, reminder_id).await?;
+    Ok(format!("Cancelled reminder {reminder_id}: {title}"))
+}
+
+pub(crate) async fn agent_context_reminder_list(
+    pool: &SqlitePool,
+    args: &[String],
+) -> CommandResult<String> {
+    let agent_id = require_current_agent(pool, "reminder-list").await?;
+    reminder_list_for_agent(pool, agent_id, args).await
+}
+
+/// The agent's own reminders, active ones first.
+async fn reminder_list_for_agent(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    args: &[String],
+) -> CommandResult<String> {
+    let all = match arg_value(args, "--state").as_deref() {
+        None | Some("active") => false,
+        Some("all") => true,
+        Some(other) => return Err(format!("unknown --state {other:?}; use active or all")),
+    };
+    let limit = parse_context_tool_limit(args, 20, 100)?;
+    let rows = sqlx::query(
+        r#"
+        select id, channel_id, thread_root_id, title, status, recurrence, interval_seconds,
+               check_action, last_check_status, due_at
+        from reminders
+        where creator_agent_id = $1
+          and ($2 = 1 or status in ('scheduled', 'fired'))
+        order by case when status in ('scheduled', 'fired') then 0 else 1 end, due_at
+        limit $3
+        "#,
+    )
+    .bind(agent_id)
+    .bind(i64::from(all))
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(to_string)?;
+    if rows.is_empty() {
+        return Ok(if all {
+            "You have no reminders.".to_owned()
+        } else {
+            "You have no active reminders.".to_owned()
+        });
+    }
+    let mut lines = Vec::with_capacity(rows.len());
+    for row in rows {
+        let id: Uuid = row.get("id");
+        let title: String = row.get("title");
+        let status: String = row.get("status");
+        let recurrence: String = row.get("recurrence");
+        let interval_seconds: Option<i64> = row.get("interval_seconds");
+        let check_action: String = row.get("check_action");
+        let last_check_status: String = row.get("last_check_status");
+        let due_at: DateTime<Utc> = row.get("due_at");
+        let place = match row.get::<Option<Uuid>, _>("channel_id") {
+            Some(channel_id) => format!(
+                " in {}",
+                decision_target_label(pool, channel_id, row.get("thread_root_id")).await?
+            ),
+            None => String::new(),
+        };
+        let mut line = format!(
+            "{id} [{status}] {title}: {}, next {}{place}",
+            reminder_cadence(&recurrence, interval_seconds),
+            due_at.to_rfc3339(),
+        );
+        if !check_action.is_empty() {
+            line.push_str(&format!(", check {check_action}"));
+            if !last_check_status.is_empty() {
+                line.push_str(&format!(" (last {last_check_status})"));
+            }
+        }
+        lines.push(line);
+    }
+    Ok(lines.join("\n"))
+}
+
 pub(crate) async fn run_agent_context_tool(args: &[String]) -> CommandResult<String> {
     if args.is_empty() || has_arg(args, "--help") || has_arg(args, "-h") {
         return Ok(
-            "Lantor agent context tool\n\nCommands:\n  inbox-list [--state active|unread|processing|archived|all] [--limit 20]\n  inbox-read --inbox-id <uuid-or-prefix>\n  inbox-archive --inbox-id <uuid-or-prefix>\n  workspace-info [--target @handle]\n  workspace-list [--target @handle] [--max-depth 2] [--limit 80]\n  memory-read [--target @handle] [--limit 16000]\n  run-read --run-id <uuid-or-prefix> [--target @handle] [--limit 8] [--log-limit 8000]\n  history-read --target \"#channel[:thread]\" [--limit 30]\n  message-read --message-id <uuid-or-prefix> [--max-chars 40000]\n  message-search --query <text> [--target \"#channel\"] [--limit 30]\n  wiki-read --channel \"#channel\"\n  wiki-write --channel \"#channel\" [--parent <rev>] --file <markdown-path> | --content <text> [--note \"<one-line reason>\"]\n  wiki-log --channel \"#channel\" [--limit 10]\n  github sync --channel \"#channel\"\n  attachment-info --attachment-id <uuid>\n  artifact-read --artifact-id <uuid>\n  agent-inspect --target @handle\n  decision-request --stdin | --json <payload> | --file <path> | --title <question> [--context <why>] [--target \"#channel[:thread]\"]\n  decision-withdraw --message-id <card-msg-id> [--reason <why>]\n  decision-list [--state open|all] [--limit 20]\n\nTargets may be #channel, #channel:<message-id-prefix>, dm:@agent, channel UUID, or channel UUID:<message-id-prefix>. Inbox, run, workspace, and memory commands default to the current LANTOR_AGENT_ID when invoked by an agent."
+            "Lantor agent context tool\n\nCommands:\n  inbox-list [--state active|unread|processing|archived|all] [--limit 20]\n  inbox-read --inbox-id <uuid-or-prefix>\n  inbox-archive --inbox-id <uuid-or-prefix>\n  workspace-info [--target @handle]\n  workspace-list [--target @handle] [--max-depth 2] [--limit 80]\n  memory-read [--target @handle] [--limit 16000]\n  run-read --run-id <uuid-or-prefix> [--target @handle] [--limit 8] [--log-limit 8000]\n  history-read --target \"#channel[:thread]\" [--limit 30]\n  message-read --message-id <uuid-or-prefix> [--max-chars 40000]\n  message-search --query <text> [--target \"#channel\"] [--limit 30]\n  wiki-read --channel \"#channel\"\n  wiki-write --channel \"#channel\" [--parent <rev>] --file <markdown-path> | --content <text> [--note \"<one-line reason>\"]\n  wiki-log --channel \"#channel\" [--limit 10]\n  github sync --channel \"#channel\"\n  attachment-info --attachment-id <uuid>\n  artifact-read --artifact-id <uuid>\n  agent-inspect --target @handle\n  decision-request --stdin | --json <payload> | --file <path> | --title <question> [--context <why>] [--target \"#channel[:thread]\"]\n  decision-withdraw --message-id <card-msg-id> [--reason <why>]\n  decision-list [--state open|all] [--limit 20]\n  reminder-create --stdin | --json <payload> | --file <path> [--target \"#channel[:thread]\"]\n  reminder-cancel --reminder-id <uuid-or-prefix>\n  reminder-list [--state active|all] [--limit 20]\n\nTargets may be #channel, #channel:<message-id-prefix>, dm:@agent, channel UUID, or channel UUID:<message-id-prefix>. Inbox, run, workspace, and memory commands default to the current LANTOR_AGENT_ID when invoked by an agent."
                 .to_owned(),
         );
     }
@@ -2528,6 +2750,9 @@ pub(crate) async fn run_agent_context_tool(args: &[String]) -> CommandResult<Str
         "artifact-read" | "artifact" | "artifact-view" => {
             agent_context_artifact_read_in_pool(&pool, args).await
         }
+        "reminder-create" | "create-reminder" => agent_context_reminder_create(&pool, args).await,
+        "reminder-cancel" | "cancel-reminder" => agent_context_reminder_cancel(&pool, args).await,
+        "reminder-list" | "reminders" => agent_context_reminder_list(&pool, args).await,
         "decision-request" | "request-decision" => {
             agent_context_decision_request(&pool, args).await
         }

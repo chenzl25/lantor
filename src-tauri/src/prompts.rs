@@ -20,8 +20,8 @@ fn lantor_operating_policy_prompt() -> &'static str {
 - When showing code, use fenced blocks with a language tag. For a file excerpt, put its location after the language, e.g. ```rust path=src/lib.rs#L42 (a GitHub permalink also works). Show changes as unified diffs in ```diff <language> blocks with real `@@ -a,b +c,d @@` hunk headers. Keep excerpts verbatim apart from marked elisions, and explain outside the block.
 - When you need the owner to choose between concrete options or approve an action, post a decision card (see Decision cards) instead of asking in chat text.
 - Activity events are the short progress notes a user would otherwise see in chat. When work takes more than a moment, emit them with a concrete user-facing title and detail that says what you are doing or what you just learned, not just a generic phase label.
-- Reminders are visible, cancelable future wakeups. Use them for user-requested future follow-up or state that needs re-checking later.
-- For recurring polling (watch a channel, CI, a queue), create a loop: a reminder_create with interval_minutes, a check_command, and check_action. Lantor runs the command on schedule without waking you; empty stdout is a quiet tick. With check_action "post" the output is posted into the reminder's thread as you (mentions in it are not dispatched); with "wake" you get the output as an inbox item to act on. Keep state (what was already seen) in your workspace so the command prints only new items. Provider-native loops, cron, and scheduled wakeups do not run in Lantor.
+- Reminders are visible, cancelable future wakeups. Use them for user-requested future follow-up or state that needs re-checking later. Create, list, and cancel them with the reminder commands under Agent context tools; reminder-create prints the id that reminder-cancel takes.
+- For recurring polling (watch a channel, CI, a queue), create a loop: reminder-create with interval_minutes, a check_command, and check_action. Lantor runs the command on schedule without waking you; empty stdout is a quiet tick. With check_action "post" the output is posted into the reminder's thread as you (mentions in it are not dispatched); with "wake" you get the output as an inbox item to act on. Keep state (what was already seen) in your workspace so the command prints only new items. Provider-native loops, cron, and scheduled wakeups do not run in Lantor.
 - A channel may have a channel wiki: shared required reading before substantive work in that channel. Wake turns announce the current wiki revision; when it is inlined, read it in place, and when only the revision id is shown, run wiki-read unless you already read that revision. Any channel member may update the wiki with wiki-write (pass the current head as --parent; on conflict re-read and merge). Keep wikis concise and index-like: stable conventions, key decisions, and links — not chat logs or transient status."#
 }
 
@@ -51,6 +51,13 @@ fn lantor_context_tools_prompt() -> &'static str {
 - attachment: "$LANTOR_CONTEXT_TOOL" --agent-context-tool attachment-info --attachment-id "<uuid>"
 - artifact: "$LANTOR_CONTEXT_TOOL" --agent-context-tool artifact-read --artifact-id "<uuid>"
 - agent introspection: "$LANTOR_CONTEXT_TOOL" --agent-context-tool agent-inspect --target "@handle"
+- reminder create (JSON on stdin; prints the reminder id; goes to your current conversation unless the JSON names channel/thread_root_id or you pass --target "#channel[:thread]"):
+"$LANTOR_CONTEXT_TOOL" --agent-context-tool reminder-create --stdin <<'JSON'
+{"title":"<title>","when":"<ISO8601 timestamp>","note":"<optional note>","recurrence":"none|daily|weekly"}
+JSON
+  A loop instead: {"title":"<loop title>","interval_minutes":5,"check_command":"<shell command; stdout = new items, empty = nothing new>","check_action":"post|wake"}
+- reminder cancel: "$LANTOR_CONTEXT_TOOL" --agent-context-tool reminder-cancel --reminder-id "<id or its first 8 characters>"
+- your reminders: "$LANTOR_CONTEXT_TOOL" --agent-context-tool reminder-list (add --state all to include finished ones)
 Inbox, run, workspace, and memory commands default to your own LANTOR_AGENT_ID; add --target "@handle" only when inspecting another visible agent.
 Inbox, history, and search message rows use `[target=... msg=... time=... type=...] sender: body` headers. The target is the message surface, and msg is the short source message id. A long body is cut in the middle with a `[... Lantor omitted N chars here; message-read --message-id <msg> prints the full message ...]` marker; run message-read when the omitted part matters."##
 }
@@ -77,9 +84,6 @@ fn lantor_control_api_prompt() -> &'static str {
 LANTOR_EVENT {"type":"activity","kind":"thinking|command|file_edit|tools|acting","title":"<short user-facing status>","detail":"<optional compact detail>"}
 LANTOR_EVENT {"type":"usage","input_tokens":1234,"output_tokens":567,"cost_usd":0.0123}
 LANTOR_EVENT {"type":"profile_update","display_name":"<optional>","role":"<optional concise role>","avatar":"<optional emoji, initials, URL, or dicebear:style[:seed]>","description":"<optional capability summary>"}
-LANTOR_EVENT {"type":"reminder_create","when":"<ISO8601 timestamp>","title":"<title>","note":"<optional note>","recurrence":"none|daily|weekly"}
-LANTOR_EVENT {"type":"reminder_create","title":"<loop title>","interval_minutes":5,"check_command":"<shell command; stdout = new items, empty = nothing new>","check_action":"post|wake","channel":"<optional #channel>","thread_root_id":"<optional thread uuid>"}
-LANTOR_EVENT {"type":"reminder_cancel","reminder_id":"<uuid>"}
 LANTOR_EVENT {"type":"task_create","channel":"<#channel>","title":"<short task title>","body":"<root task message>","thread_body":"<first execution update in the task thread>","assign_self":true,"status":"in_progress"}
 LANTOR_EVENT {"type":"task_status","task_number":1,"status":"in_review"}
 LANTOR_EVENT {"type":"task_claim","task_number":1}

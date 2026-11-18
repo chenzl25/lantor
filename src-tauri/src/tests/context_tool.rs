@@ -5,7 +5,8 @@ use super::{
     agent_context_message_search, agent_context_run_read, agent_context_wiki_log,
     agent_context_wiki_read, agent_context_wiki_write, agent_context_workspace_info,
     agent_context_workspace_list, decision_list_for_agent, decision_request_for_agent,
-    decision_withdraw_for_agent, render_agent_context_github_sync, short_id,
+    decision_withdraw_for_agent, reminder_cancel_for_agent, reminder_create_for_agent,
+    reminder_list_for_agent, render_agent_context_github_sync, short_id,
 };
 use crate::channels::open_dm_with_agent_in_pool;
 use crate::events::activity::record_agent_activity;
@@ -973,6 +974,158 @@ async fn decision_cli_needs_a_live_turn_or_explicit_target() {
         .await
         .expect_err("two payload sources");
         assert!(conflicting.contains("only one of"), "{conflicting}");
+        Ok(())
+    }
+    .await;
+    drop_test_schema(pool, schema).await;
+    assert!(result.is_ok(), "{:?}", result.err());
+}
+
+#[tokio::test]
+async fn reminder_cli_returns_the_id_lists_and_cancels_by_prefix() {
+    let Some((pool, schema)) = test_pool().await else {
+        return;
+    };
+    let result: Result<(), String> = async {
+        let agent_id = insert_test_agent(&pool, "reminder-cli").await?;
+        let other_agent = insert_test_agent(&pool, "reminder-other").await?;
+        let channel_id = insert_test_channel(&pool, "reminder-cli").await?;
+        for agent in [agent_id, other_agent] {
+            sqlx::query("insert into channel_members (channel_id, agent_id) values ($1, $2)")
+                .bind(channel_id)
+                .bind(agent)
+                .execute(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        }
+        let root_id: Uuid = sqlx::query_scalar(
+            "insert into messages (channel_id, sender_name, sender_role, body) values ($1, 'Dylan', 'owner', 'watch CI') returning id",
+        )
+        .bind(channel_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        let run_id = insert_running_turn(&pool, agent_id, channel_id, root_id).await?;
+
+        // A loop in the current turn's thread; the output names its id.
+        let created = reminder_create_for_agent(
+            &pool,
+            agent_id,
+            &cli_args(&[
+                "reminder-create",
+                "--json",
+                r#"{"title":"Watch CI","interval_minutes":5,"check_command":"./check.sh","check_action":"wake"}"#,
+            ]),
+        )
+        .await?;
+        let (loop_id, thread_root_id, interval): (Uuid, Option<Uuid>, Option<i64>) =
+            sqlx::query_as(
+                "select id, thread_root_id, interval_seconds from reminders where creator_agent_id = $1",
+            )
+            .bind(agent_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        assert!(
+            created.starts_with(&format!("Created reminder {loop_id}: Watch CI")),
+            "{created}"
+        );
+        assert!(created.contains("every 5 min"), "{created}");
+        assert!(created.contains(&format!("#reminder-cli:{}", short_id(root_id))), "{created}");
+        assert!(
+            created.contains(&format!("reminder-cancel --reminder-id {}", short_id(loop_id))),
+            "{created}"
+        );
+        assert_eq!(thread_root_id, Some(root_id));
+        assert_eq!(interval, Some(300));
+        let activity_runs: Vec<Option<Uuid>> = sqlx::query_scalar(
+            "select run_id from agent_activities where agent_id = $1 and title = 'Reminder scheduled'",
+        )
+        .bind(agent_id)
+        .fetch_all(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        assert_eq!(activity_runs, vec![Some(run_id)]);
+
+        // A one-off reminder elsewhere, and one of another agent.
+        reminder_create_for_agent(
+            &pool,
+            agent_id,
+            &cli_args(&[
+                "reminder-create",
+                "--target",
+                "#reminder-cli",
+                "--json",
+                r#"{"title":"Check the release","when":"2099-01-01T09:00:00Z"}"#,
+            ]),
+        )
+        .await?;
+        reminder_create_for_agent(
+            &pool,
+            other_agent,
+            &cli_args(&[
+                "reminder-create",
+                "--target",
+                "#reminder-cli",
+                "--json",
+                r#"{"title":"Not yours","when":"2099-01-01T09:00:00Z"}"#,
+            ]),
+        )
+        .await?;
+
+        let listed = reminder_list_for_agent(&pool, agent_id, &cli_args(&["reminder-list"])).await?;
+        assert_eq!(listed.lines().count(), 2, "{listed}");
+        assert!(listed.contains(&format!("{loop_id} [scheduled] Watch CI: every 5 min")), "{listed}");
+        assert!(listed.contains("Check the release: once, next 2099-01-01T09:00:00+00:00 in #reminder-cli"), "{listed}");
+        assert!(!listed.contains("Not yours"), "{listed}");
+
+        // The printed short id cancels it, with or without dashes.
+        let hyphenated = loop_id.to_string();
+        let cancelled = reminder_cancel_for_agent(
+            &pool,
+            agent_id,
+            &cli_args(&["reminder-cancel", "--reminder-id", &hyphenated[..13]]),
+        )
+        .await?;
+        assert_eq!(cancelled, format!("Cancelled reminder {loop_id}: Watch CI"));
+        let status: String = sqlx::query_scalar("select status from reminders where id = $1")
+            .bind(loop_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+        assert_eq!(status, "cancelled");
+        let again = reminder_cancel_for_agent(
+            &pool,
+            agent_id,
+            &cli_args(&["reminder-cancel", "--reminder-id", &short_id(loop_id)]),
+        )
+        .await
+        .unwrap_err();
+        assert!(again.contains("no active reminder of yours matches"), "{again}");
+
+        // Another agent's reminder cannot be named.
+        let foreign: Uuid =
+            sqlx::query_scalar("select id from reminders where creator_agent_id = $1")
+                .bind(other_agent)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+        let refused = reminder_cancel_for_agent(
+            &pool,
+            agent_id,
+            &cli_args(&["reminder-cancel", "--reminder-id", &foreign.to_string()]),
+        )
+        .await
+        .unwrap_err();
+        assert!(refused.contains("no active reminder of yours matches"), "{refused}");
+
+        let all = reminder_list_for_agent(&pool, agent_id, &cli_args(&["reminder-list", "--state", "all"])).await?;
+        assert!(all.contains(&format!("{loop_id} [cancelled] Watch CI")), "{all}");
+
+        let missing = reminder_create_for_agent(&pool, agent_id, &cli_args(&["reminder-create"]))
+            .await
+            .unwrap_err();
+        assert!(missing.contains("needs a JSON payload"), "{missing}");
         Ok(())
     }
     .await;
