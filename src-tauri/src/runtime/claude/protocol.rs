@@ -5,6 +5,7 @@ use uuid::Uuid;
 use super::ClaudeSurface;
 use crate::app::{to_string, CommandResult};
 use crate::runtime::process::truncate_activity_detail;
+use crate::usage::RunUsage;
 
 /// Claude Code reads its API retry limit from this variable; it ignores the SDK's
 /// `ANTHROPIC_MAX_RETRIES`.
@@ -102,6 +103,50 @@ pub(super) fn claude_context_tokens(value: &Value) -> Option<i64> {
     .filter_map(|key| usage.get(key).and_then(Value::as_i64))
     .sum::<i64>();
     (tokens > 0).then_some(tokens)
+}
+
+fn claude_usage(usage: &Value) -> RunUsage {
+    let tokens = |key: &str| usage.get(key).and_then(Value::as_i64).unwrap_or_default();
+    RunUsage {
+        input_tokens: tokens("input_tokens"),
+        cached_input_tokens: tokens("cache_read_input_tokens"),
+        cache_write_tokens: tokens("cache_creation_input_tokens"),
+        output_tokens: tokens("output_tokens"),
+    }
+}
+
+/// What one finished API request used, from the `message_delta` that ends it.
+/// A subagent's requests count as well: the turn pays for them.
+pub(super) fn claude_request_usage(value: &Value) -> Option<RunUsage> {
+    if value.get("type").and_then(Value::as_str) != Some("stream_event")
+        || value.pointer("/event/type").and_then(Value::as_str) != Some("message_delta")
+    {
+        return None;
+    }
+    value.pointer("/event/usage").map(claude_usage)
+}
+
+/// A turn's totals from its `result`, with Claude Code's own cost for the
+/// turn in millionths of a dollar when the result reports one. That cost also
+/// covers requests to other models, such as the small model that reads a web
+/// page.
+pub(super) fn claude_turn_usage(value: &Value) -> Option<(RunUsage, Option<i64>)> {
+    if value.get("type").and_then(Value::as_str) != Some("result") {
+        return None;
+    }
+    let usage = claude_usage(value.get("usage")?);
+    let cost_micros = value
+        .get("model_usage_since_last_result")
+        .and_then(Value::as_object)
+        .filter(|models| !models.is_empty())
+        .and_then(|models| {
+            models
+                .values()
+                .map(|model| model.get("costUSD").and_then(Value::as_f64))
+                .sum::<Option<f64>>()
+        })
+        .map(|cost| (cost.max(0.0) * 1_000_000.0).round() as i64);
+    Some((usage, cost_micros))
 }
 
 /// The result Claude Code emits when `--resume` names a session it cannot find.
@@ -717,6 +762,82 @@ mod tests {
                 "Editing file",
                 json!({"tool": "Edit"}).to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn request_usage_reads_the_delta_that_ends_a_request() {
+        let usage = json!({"input_tokens": 2, "cache_creation_input_tokens": 6053, "cache_read_input_tokens": 146879, "output_tokens": 567});
+        let expected = RunUsage {
+            input_tokens: 2,
+            cached_input_tokens: 146_879,
+            cache_write_tokens: 6_053,
+            output_tokens: 567,
+        };
+        assert_eq!(
+            claude_request_usage(
+                &json!({"type": "stream_event", "parent_tool_use_id": null, "event": {"type": "message_delta", "usage": usage}})
+            ),
+            Some(expected)
+        );
+        assert_eq!(
+            claude_request_usage(
+                &json!({"type": "stream_event", "parent_tool_use_id": "toolu_1", "event": {"type": "message_delta", "usage": usage}})
+            ),
+            Some(expected),
+            "a subagent's request is paid for by the turn"
+        );
+        // The same request's opening usage has no final output count yet.
+        assert_eq!(
+            claude_request_usage(
+                &json!({"type": "stream_event", "event": {"type": "message_start", "message": {"usage": usage}}})
+            ),
+            None
+        );
+        assert_eq!(
+            claude_request_usage(&json!({"type": "assistant", "message": {"usage": usage}})),
+            None
+        );
+    }
+
+    #[test]
+    fn turn_usage_reads_result_totals_and_reported_cost() {
+        let usage = json!({"input_tokens": 64, "cache_creation_input_tokens": 146879, "cache_read_input_tokens": 3884715, "output_tokens": 14424});
+        let totals = RunUsage {
+            input_tokens: 64,
+            cached_input_tokens: 3_884_715,
+            cache_write_tokens: 146_879,
+            output_tokens: 14_424,
+        };
+        assert_eq!(
+            claude_turn_usage(&json!({
+                "type": "result",
+                "usage": usage,
+                "total_cost_usd": 9.5,
+                "model_usage_since_last_result": {
+                    "claude-opus-5-5": {"costUSD": 2.240711},
+                    "claude-haiku-5-5": {"costUSD": 0.0240319}
+                }
+            })),
+            Some((totals, Some(2_264_743))),
+            "the turn's cost, not the process total"
+        );
+        assert_eq!(
+            claude_turn_usage(&json!({"type": "result", "usage": usage, "total_cost_usd": 9.5})),
+            Some((totals, None))
+        );
+        assert_eq!(
+            claude_turn_usage(&json!({
+                "type": "result",
+                "usage": usage,
+                "model_usage_since_last_result": {"claude-opus-5-5": {"inputTokens": 64}}
+            })),
+            Some((totals, None)),
+            "a model without a cost leaves the price table to decide"
+        );
+        assert_eq!(
+            claude_turn_usage(&json!({"type": "assistant", "message": {"usage": usage}})),
+            None
         );
     }
 

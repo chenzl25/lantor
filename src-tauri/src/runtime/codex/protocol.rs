@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::app::{to_string, CommandResult};
 use crate::runtime::process::truncate_activity_detail;
+use crate::usage::RunUsage;
 
 pub(super) fn codex_stream_key(run_id: Uuid, item_id: &str) -> String {
     format!("{run_id}:{item_id}")
@@ -24,6 +25,57 @@ pub(super) async fn codex_write_json(
     stdin.write_all(&line).await.map_err(to_string)?;
     stdin.flush().await.map_err(to_string)?;
     Ok(())
+}
+
+/// Tokens the app-server counts for a thread or for one request. Cached input
+/// is part of `input_tokens`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct CodexTokenCount {
+    pub(super) input_tokens: i64,
+    pub(super) cached_input_tokens: i64,
+    pub(super) output_tokens: i64,
+}
+
+impl CodexTokenCount {
+    fn from_value(value: &Value) -> Option<Self> {
+        let tokens = |key: &str| value.get(key).and_then(Value::as_i64);
+        Some(Self {
+            input_tokens: tokens("inputTokens")?,
+            cached_input_tokens: tokens("cachedInputTokens").unwrap_or_default(),
+            output_tokens: tokens("outputTokens").unwrap_or_default(),
+        })
+    }
+
+    pub(super) fn minus(&self, other: &Self) -> Self {
+        Self {
+            input_tokens: (self.input_tokens - other.input_tokens).max(0),
+            cached_input_tokens: (self.cached_input_tokens - other.cached_input_tokens).max(0),
+            output_tokens: (self.output_tokens - other.output_tokens).max(0),
+        }
+    }
+
+    pub(super) fn run_usage(&self) -> RunUsage {
+        RunUsage {
+            input_tokens: (self.input_tokens - self.cached_input_tokens).max(0),
+            cached_input_tokens: self.cached_input_tokens.min(self.input_tokens).max(0),
+            cache_write_tokens: 0,
+            output_tokens: self.output_tokens.max(0),
+        }
+    }
+}
+
+/// A `thread/tokenUsage/updated` notification: the thread's running total,
+/// when the app-server sends one, and the latest request.
+pub(super) fn codex_token_usage(
+    value: &Value,
+) -> Option<(Option<CodexTokenCount>, CodexTokenCount)> {
+    if value.get("method").and_then(Value::as_str) != Some("thread/tokenUsage/updated") {
+        return None;
+    }
+    let usage = value.pointer("/params/tokenUsage")?;
+    let last = CodexTokenCount::from_value(usage.get("last")?)?;
+    let total = usage.get("total").and_then(CodexTokenCount::from_value);
+    Some((total, last))
 }
 
 pub(super) fn codex_request_error(value: &Value) -> Option<String> {
@@ -322,8 +374,8 @@ pub(super) fn apply_codex_turn_options(
 mod tests {
     use super::{
         apply_codex_thread_options, apply_codex_turn_options, codex_error_notification_detail,
-        codex_item_started_activity, codex_turn_id_from_value,
-        codex_unattended_server_request_response,
+        codex_item_started_activity, codex_token_usage, codex_turn_id_from_value,
+        codex_unattended_server_request_response, CodexTokenCount,
     };
     use crate::usage::{usage_from_run_log, usage_from_runtime_event};
     use serde_json::json;
@@ -502,6 +554,27 @@ mod tests {
             }
         });
         assert_eq!(usage_from_runtime_event(&value), Some((33569, 1278)));
+        assert_eq!(
+            codex_token_usage(&value),
+            Some((
+                Some(CodexTokenCount {
+                    input_tokens: 11_488_567,
+                    cached_input_tokens: 0,
+                    output_tokens: 36_332,
+                }),
+                CodexTokenCount {
+                    input_tokens: 33_569,
+                    cached_input_tokens: 31_616,
+                    output_tokens: 1_278,
+                },
+            ))
+        );
+        assert_eq!(
+            codex_token_usage(
+                &json!({"method": "turn/completed", "params": {"tokenUsage": {"last": {"inputTokens": 1}}}})
+            ),
+            None
+        );
 
         let log = format!(
             "[codex] {{\"method\":\"item/agentMessage/delta\",\"params\":{{\"delta\":\"hi\"}}}}\n[codex] {value}"

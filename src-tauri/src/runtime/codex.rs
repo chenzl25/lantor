@@ -49,7 +49,7 @@ use crate::subscription_status::{
     codex_subscription_status_from_response, persist_agent_subscription_status,
 };
 use crate::ui_notifications::reconcile_work_item_change;
-use crate::usage::{record_run_usage, usage_from_runtime_event};
+use crate::usage::record_turn_usage;
 use crate::{
     app::{to_string, CommandResult},
     build_steer_followup_prompt, load_inbox_wake_items_for_work_item,
@@ -63,9 +63,10 @@ use protocol::{
     apply_codex_thread_options, apply_codex_turn_options, codex_auth_failure,
     codex_error_notification_detail, codex_item_id, codex_item_started_activity, codex_item_type,
     codex_model_value, codex_network_failure, codex_pending_stream_key, codex_request_error,
-    codex_stream_key, codex_thread_id_from_response, codex_tool_completion_activity,
-    codex_turn_id_from_value, codex_unattended_server_request_response, codex_write_json,
-    effective_codex_cwd,
+    codex_stream_key, codex_thread_id_from_response, codex_token_usage,
+    codex_tool_completion_activity, codex_turn_id_from_value,
+    codex_unattended_server_request_response, codex_write_json, effective_codex_cwd,
+    CodexTokenCount,
 };
 use reaper::codex_warm_idle_reaper;
 pub(crate) use reaper::reap_stuck_codex_turn;
@@ -204,6 +205,9 @@ struct CodexActiveTurn {
     auth_required: bool,
     /// The app-server gave up because the connection to the provider failed.
     network_failure: bool,
+    /// The thread's token total before this turn's first request. The turn has
+    /// used what the total has grown by since.
+    usage_baseline: Option<CodexTokenCount>,
 }
 
 struct CodexSteerRequest {
@@ -1029,6 +1033,7 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
                 interrupt_request_id: None,
                 auth_required: false,
                 network_failure: false,
+                usage_baseline: None,
             });
             Ok(request_id)
         }
@@ -1150,6 +1155,21 @@ async fn codex_warm_stdout_reader(
     registry.remove_if_same(agent_id, &runtime).await;
 }
 
+/// What the turn has used up to this usage notification. The thread's total
+/// keeps counting across turns, so the turn's share is its growth since the
+/// first notification, whose latest request is the turn's first. Without a
+/// total the latest request is all that is known.
+fn codex_turn_token_count(
+    baseline: &mut Option<CodexTokenCount>,
+    total: Option<CodexTokenCount>,
+    last: CodexTokenCount,
+) -> CodexTokenCount {
+    match total {
+        Some(total) => total.minus(baseline.get_or_insert_with(|| total.minus(&last))),
+        None => last,
+    }
+}
+
 async fn handle_codex_warm_stdout_line(
     pool: &SqlitePool,
     agent_id: Uuid,
@@ -1175,10 +1195,26 @@ async fn handle_codex_warm_stdout_line(
         let _ = append_run_log(pool, run_id, format!("[codex] {line}\n")).await;
     }
 
-    if let (Some(run_id), Some((input_tokens, output_tokens))) =
-        (active_run_id, usage_from_runtime_event(&value))
-    {
-        let _ = record_run_usage(pool, agent_id, run_id, input_tokens, output_tokens, None).await;
+    if let (Some(run_id), Some((total, last))) = (active_run_id, codex_token_usage(&value)) {
+        let turn = {
+            let mut state = runtime.state.lock().await;
+            state
+                .active
+                .as_mut()
+                .filter(|active| active.run_id == run_id)
+                .map(|active| codex_turn_token_count(&mut active.usage_baseline, total, last))
+        };
+        if let Some(turn) = turn {
+            let _ = record_turn_usage(
+                pool,
+                agent_id,
+                run_id,
+                &turn.run_usage(),
+                last.input_tokens,
+                None,
+            )
+            .await;
+        }
     }
 
     // App-server can ask the client to collect user input even when command/file
@@ -1543,9 +1579,113 @@ mod tests {
     };
 
     use super::{
-        finish_warm_codex_active_turn, track_codex_agent_message_stream, CodexActiveTurn,
-        CodexAppServer, WarmCodexRuntime, CODEX_APP_SERVER_SHELL_COMMAND, CODEX_TURN_START_TIMEOUT,
+        codex_turn_token_count, finish_warm_codex_active_turn, track_codex_agent_message_stream,
+        CodexActiveTurn, CodexAppServer, CodexTokenCount, WarmCodexRuntime,
+        CODEX_APP_SERVER_SHELL_COMMAND, CODEX_TURN_START_TIMEOUT,
     };
+
+    #[test]
+    fn a_turn_uses_what_the_thread_total_grew_by() {
+        let count = |input_tokens, cached_input_tokens, output_tokens| CodexTokenCount {
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+        };
+        let mut baseline = None;
+        // The thread already counted 944,091 input tokens in earlier turns.
+        assert_eq!(
+            codex_turn_token_count(
+                &mut baseline,
+                Some(count(1_044_849, 814_592, 2_737)),
+                count(100_758, 13_184, 145),
+            ),
+            count(100_758, 13_184, 145)
+        );
+        let second = (
+            Some(count(1_449_565, 1_218_304, 2_955)),
+            count(101_370, 101_120, 77),
+        );
+        assert_eq!(
+            codex_turn_token_count(&mut baseline, second.0, second.1),
+            count(505_474, 416_896, 363)
+        );
+        assert_eq!(
+            codex_turn_token_count(&mut baseline, second.0, second.1),
+            count(505_474, 416_896, 363),
+            "a repeated notification adds nothing"
+        );
+        assert_eq!(
+            codex_turn_token_count(&mut None, None, count(101_370, 101_120, 77)),
+            count(101_370, 101_120, 77)
+        );
+    }
+
+    #[tokio::test]
+    async fn run_usage_covers_every_request_and_discounts_cached_input() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let agent_id = insert_test_agent(&pool, "codex-usage-agent").await?;
+            sqlx::query("update agents set model = 'gpt-6.1-sol' where id = $1")
+                .bind(agent_id)
+                .execute(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+            let channel_id = insert_test_channel(&pool, "codex-usage-channel").await?;
+            let work_item_id: uuid::Uuid = sqlx::query_scalar(
+                r#"
+                insert into agent_work_items (agent_id, channel_id, title, status)
+                values ($1, $2, 'review', 'running')
+                returning id
+                "#,
+            )
+            .bind(agent_id)
+            .bind(channel_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            let run_id: uuid::Uuid = sqlx::query_scalar(
+                r#"
+                insert into agent_runs (agent_id, work_item_id, command, status)
+                values ($1, $2, 'codex app-server', 'running')
+                returning id
+                "#,
+            )
+            .bind(agent_id)
+            .bind(work_item_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            let stream_key = format!("{run_id}:warm-codex");
+            let runtime =
+                test_runtime_with_active_turn(run_id, work_item_id, channel_id, stream_key).await?;
+            for line in [
+                r#"{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-1","turnId":"turn-1","tokenUsage":{"total":{"totalTokens":1047586,"inputTokens":1044849,"cachedInputTokens":814592,"outputTokens":2737},"last":{"totalTokens":100903,"inputTokens":100758,"cachedInputTokens":13184,"outputTokens":145}}}}"#,
+                r#"{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-1","turnId":"turn-1","tokenUsage":{"total":{"totalTokens":1452520,"inputTokens":1449565,"cachedInputTokens":1218304,"outputTokens":2955},"last":{"totalTokens":101447,"inputTokens":101370,"cachedInputTokens":101120,"outputTokens":77}}}}"#,
+            ] {
+                super::handle_codex_warm_stdout_line(&pool, agent_id, &runtime, line).await?;
+            }
+
+            let row = sqlx::query(
+                "select input_tokens, current_input_tokens, output_tokens, cost_micros from agent_runs where id = $1",
+            )
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            // The turn sent 505,474 input tokens over its requests, 416,896 of
+            // them cached: $2 and $0.10 per million, and $10 for 363 of output.
+            assert_eq!(row.get::<i64, _>("input_tokens"), 505_474);
+            assert_eq!(row.get::<i64, _>("current_input_tokens"), 101_370);
+            assert_eq!(row.get::<i64, _>("output_tokens"), 363);
+            assert_eq!(row.get::<i64, _>("cost_micros"), 222_475);
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        result.unwrap();
+    }
 
     #[test]
     fn codex_app_server_disables_provider_memories() {
@@ -1591,6 +1731,7 @@ mod tests {
                     interrupt_request_id: None,
                     auth_required: false,
                     network_failure: false,
+                    usage_baseline: None,
                 }),
                 next_request_id: 2,
                 pending_rate_limit_request_id: None,
@@ -1921,6 +2062,7 @@ mod tests {
             interrupt_request_id: None,
             auth_required: false,
             network_failure: false,
+            usage_baseline: None,
         };
 
         let first = track_codex_agent_message_stream(&mut active, "item-1");

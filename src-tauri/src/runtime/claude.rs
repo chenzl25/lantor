@@ -40,7 +40,7 @@ use crate::subscription_status::{
     claude_subscription_status_from_event, persist_agent_subscription_status,
 };
 use crate::ui_notifications::reconcile_work_item_change;
-use crate::usage::{record_run_usage, usage_from_runtime_event};
+use crate::usage::{record_turn_usage, RunUsage};
 
 mod interrupt;
 mod protocol;
@@ -70,11 +70,12 @@ mod steer_tests;
 use protocol::{
     claude_auth_failure, claude_context_tokens, claude_main_tool_use_started,
     claude_message_text_blocks, claude_network_failure, claude_replayed_input_uuid,
-    claude_result_error, claude_result_text, claude_resume_session_missing, claude_session_id,
-    claude_stream_event_activity, claude_stream_key, claude_streaming_command_text,
-    claude_surface_boundary_marker, claude_text_delta, claude_user_input, claude_write_input,
-    CLAUDE_DISABLE_BACKGROUND_TASKS_ENV, CLAUDE_DISABLE_CRON_ENV, CLAUDE_DISALLOWED_TOOLS,
-    CLAUDE_MAX_RETRIES_ENV, DEFAULT_CLAUDE_MAX_RETRIES,
+    claude_request_usage, claude_result_error, claude_result_text, claude_resume_session_missing,
+    claude_session_id, claude_stream_event_activity, claude_stream_key,
+    claude_streaming_command_text, claude_surface_boundary_marker, claude_text_delta,
+    claude_turn_usage, claude_user_input, claude_write_input, CLAUDE_DISABLE_BACKGROUND_TASKS_ENV,
+    CLAUDE_DISABLE_CRON_ENV, CLAUDE_DISALLOWED_TOOLS, CLAUDE_MAX_RETRIES_ENV,
+    DEFAULT_CLAUDE_MAX_RETRIES,
 };
 use reaper::claude_warm_idle_reaper;
 use session::{
@@ -187,6 +188,8 @@ struct ClaudeActiveTurn {
     auth_required: bool,
     /// The turn's result says the connection to the API failed.
     network_failure: bool,
+    /// What the turn's finished requests have used so far.
+    usage: RunUsage,
 }
 
 /// Reconcile complete provider text before finalization flushes the control gate.
@@ -718,6 +721,7 @@ pub(crate) async fn supervisor_start_claude_streaming_agent(
                 interrupt_requested: false,
                 auth_required: false,
                 network_failure: false,
+                usage: RunUsage::default(),
             });
             Ok(())
         }
@@ -870,6 +874,49 @@ async fn handle_claude_warm_stdout_line(
     applied.and(finished)
 }
 
+/// Keeps a run's tokens and cost current. Each finished request adds to a
+/// running total, priced from the table. The turn's `result` then brings the
+/// turn's own totals and the cost Claude Code reports. Neither token count is
+/// complete in every case (the stream has been seen to miss a request), so
+/// the larger one stands.
+async fn record_claude_usage(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    runtime: &Arc<WarmClaudeRuntime>,
+    run_id: Uuid,
+    value: &Value,
+) {
+    let request = claude_request_usage(value);
+    let turn = claude_turn_usage(value);
+    if request.is_none() && turn.is_none() {
+        return;
+    }
+    let (usage, context_tokens, cost_micros) = {
+        let mut state = runtime.state.lock().await;
+        let context_tokens = state.context_tokens;
+        let Some(active) = state
+            .active
+            .as_mut()
+            .filter(|active| active.run_id == run_id)
+        else {
+            return;
+        };
+        if let Some(request) = request {
+            active.usage.add(&request);
+        }
+        let mut cost_micros = None;
+        if let Some((totals, reported_cost_micros)) = turn {
+            let counted = |usage: &RunUsage| usage.total_input_tokens() + usage.output_tokens;
+            if counted(&totals) >= counted(&active.usage) {
+                active.usage = totals;
+            }
+            cost_micros = reported_cost_micros;
+        }
+        (active.usage, context_tokens, cost_micros)
+    };
+    let _ = record_turn_usage(pool, agent_id, run_id, &usage, context_tokens, cost_micros).await;
+}
+
 async fn apply_claude_warm_stdout_line(
     pool: &SqlitePool,
     agent_id: Uuid,
@@ -917,10 +964,8 @@ async fn apply_claude_warm_stdout_line(
         persist_agent_subscription_status(pool, agent_id, &snapshot).await?;
     }
 
-    if let (Some(run_id), Some((input_tokens, output_tokens))) =
-        (active_run_id, usage_from_runtime_event(&value))
-    {
-        let _ = record_run_usage(pool, agent_id, run_id, input_tokens, output_tokens, None).await;
+    if let Some(run_id) = active_run_id {
+        record_claude_usage(pool, agent_id, runtime, run_id, &value).await;
     }
 
     if let Some(session_id) = claude_session_id(&value) {
@@ -1095,7 +1140,7 @@ mod tests {
 
     use super::{
         configure_claude_process_environment, finish_warm_claude_active_turn, ClaudeActiveTurn,
-        ClaudeTextState, WarmClaudeRuntime, CLAUDE_DISABLE_AUTO_MEMORY_ENV,
+        ClaudeTextState, RunUsage, WarmClaudeRuntime, CLAUDE_DISABLE_AUTO_MEMORY_ENV,
         CLAUDE_DISABLE_BACKGROUND_TASKS_ENV, CLAUDE_DISABLE_CRON_ENV, CLAUDE_MAX_RETRIES_ENV,
     };
 
@@ -1152,6 +1197,7 @@ mod tests {
                     interrupt_requested: false,
                     auth_required: false,
                     network_failure: false,
+                    usage: RunUsage::default(),
                 }),
                 session_id: Some("test-claude-session".to_owned()),
                 context_tokens: 0,
@@ -1521,6 +1567,78 @@ mod tests {
             .map_err(|err| err.to_string())?;
             assert_eq!(cards, 1);
             assert!(runtime.state.lock().await.active.is_none());
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        result.unwrap();
+    }
+
+    async fn read_run_usage(
+        pool: &sqlx::SqlitePool,
+        run_id: Uuid,
+    ) -> Result<(i64, i64, i64, i64), String> {
+        let row = sqlx::query(
+            "select input_tokens, current_input_tokens, output_tokens, cost_micros from agent_runs where id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+        Ok((
+            row.get("input_tokens"),
+            row.get("current_input_tokens"),
+            row.get("output_tokens"),
+            row.get("cost_micros"),
+        ))
+    }
+
+    #[tokio::test]
+    async fn run_usage_counts_cached_input_and_takes_the_reported_cost() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let (agent_id, channel_id, work_item_id, run_id, stream_key) =
+                insert_running_turn_fixture(&pool, "claude-usage-agent", "claude").await?;
+            sqlx::query("update agents set model = 'claude-opus-5-5' where id = $1")
+                .bind(agent_id)
+                .execute(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+            let runtime =
+                test_runtime_with_active_turn(run_id, work_item_id, channel_id, stream_key).await?;
+
+            // Two requests. Nearly all of their input comes from the prompt cache.
+            for line in [
+                r#"{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","role":"assistant","content":[],"usage":{"input_tokens":2,"cache_creation_input_tokens":6053,"cache_read_input_tokens":146879,"output_tokens":1}},"session_id":"s1"}"#,
+                r#"{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":2,"cache_creation_input_tokens":6053,"cache_read_input_tokens":146879,"output_tokens":567}},"session_id":"s1"}"#,
+                r#"{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m2","role":"assistant","content":[],"usage":{"input_tokens":2,"cache_creation_input_tokens":2611,"cache_read_input_tokens":152932,"output_tokens":1}},"session_id":"s1"}"#,
+                r#"{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":2,"cache_creation_input_tokens":2611,"cache_read_input_tokens":152932,"output_tokens":244}},"session_id":"s1"}"#,
+            ] {
+                super::handle_claude_warm_stdout_line(&pool, agent_id, &runtime, line).await?;
+            }
+            // 4 uncached, 299,811 read from the cache and 8,664 written to it,
+            // at Opus 5.5 prices: $4, $0.20 and $8 per million, and $20 for output.
+            assert_eq!(
+                read_run_usage(&pool, run_id).await?,
+                (308_479, 155_545, 811, 145_510),
+                "running total of both requests; context of the latest one"
+            );
+
+            // The result repeats the totals and adds what the turn spent on a
+            // second model.
+            super::handle_claude_warm_stdout_line(
+                &pool,
+                agent_id,
+                &runtime,
+                r#"{"type":"result","subtype":"success","is_error":false,"result":"","session_id":"s1","total_cost_usd":7.25,"usage":{"input_tokens":4,"cache_creation_input_tokens":8664,"cache_read_input_tokens":299811,"output_tokens":811},"model_usage_since_last_result":{"claude-opus-5-5":{"costUSD":0.1455102},"claude-haiku-5-5":{"costUSD":0.024}}}"#,
+            )
+            .await?;
+            assert_eq!(
+                read_run_usage(&pool, run_id).await?,
+                (308_479, 155_545, 811, 169_510)
+            );
             Ok(())
         }
         .await;

@@ -71,7 +71,41 @@ pub(crate) fn usage_from_run_log(log: &str) -> Option<(i64, i64)> {
         .next_back()
 }
 
-fn model_cost_micros(runtime: &str, model: &str, input_tokens: i64, output_tokens: i64) -> i64 {
+/// Tokens a run has used, split the way providers bill them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RunUsage {
+    /// Input billed at the full rate.
+    pub(crate) input_tokens: i64,
+    /// Input read from the provider's prompt cache.
+    pub(crate) cached_input_tokens: i64,
+    /// Input written to the prompt cache.
+    pub(crate) cache_write_tokens: i64,
+    pub(crate) output_tokens: i64,
+}
+
+impl RunUsage {
+    /// Everything sent to the model, cached or not.
+    pub(crate) fn total_input_tokens(&self) -> i64 {
+        self.input_tokens + self.cached_input_tokens + self.cache_write_tokens
+    }
+
+    pub(crate) fn add(&mut self, other: &RunUsage) {
+        self.input_tokens += other.input_tokens;
+        self.cached_input_tokens += other.cached_input_tokens;
+        self.cache_write_tokens += other.cache_write_tokens;
+        self.output_tokens += other.output_tokens;
+    }
+}
+
+/// Prices in millionths of a dollar per million tokens.
+struct ModelRates {
+    input: i64,
+    output: i64,
+    cached_input: i64,
+    cache_write: i64,
+}
+
+fn model_rates(runtime: &str, model: &str) -> ModelRates {
     let model = model.to_lowercase();
     let runtime = runtime.to_lowercase();
     let (input_per_million, output_per_million) = if runtime == "claude" {
@@ -119,8 +153,62 @@ fn model_cost_micros(runtime: &str, model: &str, input_tokens: i64, output_token
     } else {
         (1_000_000_i64, 5_000_000_i64)
     };
-    ((input_tokens.max(0) * input_per_million) + (output_tokens.max(0) * output_per_million))
+    // A cache read costs a tenth of the input rate unless the model has its own
+    // price. These prices are the ones Claude Code reports for a turn.
+    let cached_input = if runtime == "claude" {
+        if model == "fable"
+            || model.contains("fable-5-2")
+            || model.contains("mythos-5-2")
+            || model.contains("opus-5-5")
+            || model == "opus"
+        {
+            200_000
+        } else if model.contains("fable") || model.contains("mythos") {
+            250_000
+        } else {
+            input_per_million / 10
+        }
+    } else if runtime == "codex" && model == "gpt-6.1-sol" {
+        100_000
+    } else if runtime == "codex" {
+        input_per_million / 10
+    } else {
+        input_per_million
+    };
+    // Claude Code keeps its prompt cache for an hour, which costs twice the
+    // input rate to write. Codex reports cache writes as ordinary input.
+    let cache_write = if runtime == "claude" {
+        input_per_million * 2
+    } else {
+        input_per_million
+    };
+    ModelRates {
+        input: input_per_million,
+        output: output_per_million,
+        cached_input,
+        cache_write,
+    }
+}
+
+fn usage_cost_micros(runtime: &str, model: &str, usage: &RunUsage) -> i64 {
+    let rates = model_rates(runtime, model);
+    (usage.input_tokens.max(0) * rates.input
+        + usage.cached_input_tokens.max(0) * rates.cached_input
+        + usage.cache_write_tokens.max(0) * rates.cache_write
+        + usage.output_tokens.max(0) * rates.output)
         / 1_000_000
+}
+
+fn model_cost_micros(runtime: &str, model: &str, input_tokens: i64, output_tokens: i64) -> i64 {
+    usage_cost_micros(
+        runtime,
+        model,
+        &RunUsage {
+            input_tokens,
+            output_tokens,
+            ..RunUsage::default()
+        },
+    )
 }
 
 pub(crate) async fn record_run_usage(
@@ -156,6 +244,52 @@ pub(crate) async fn record_run_usage(
     .bind(input_tokens.max(0))
     .bind(output_tokens.max(0))
     .bind(estimated_cost)
+    .execute(&mut *transaction)
+    .await
+    .map_err(to_string)?;
+    enqueue_ui_agent_run_changed_in_tx(&mut transaction, run_id, "run_usage").await?;
+    transaction.commit().await.map_err(to_string)?;
+    Ok(())
+}
+
+/// Records what a warm turn has used so far: the total of all its requests,
+/// and the input of its latest one as the context size. Each call replaces the
+/// previous figures. `reported_cost_micros` is the provider's own cost for the
+/// turn; without it the price table applies.
+pub(crate) async fn record_turn_usage(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    run_id: Uuid,
+    usage: &RunUsage,
+    context_tokens: i64,
+    reported_cost_micros: Option<i64>,
+) -> CommandResult<()> {
+    let row = sqlx::query("select runtime, model from agents where id = $1")
+        .bind(agent_id)
+        .fetch_one(pool)
+        .await
+        .map_err(to_string)?;
+    let runtime: String = row.get("runtime");
+    let model: String = row.get("model");
+    let cost_micros = reported_cost_micros
+        .unwrap_or_else(|| usage_cost_micros(&runtime, &model, usage))
+        .max(0);
+    let mut transaction = pool.begin().await.map_err(to_string)?;
+    sqlx::query(
+        r#"
+        update agent_runs
+        set input_tokens = $2,
+            current_input_tokens = case when $3 > 0 then $3 else current_input_tokens end,
+            output_tokens = $4,
+            cost_micros = $5
+        where id = $1
+        "#,
+    )
+    .bind(run_id)
+    .bind(usage.total_input_tokens().max(0))
+    .bind(context_tokens.max(0))
+    .bind(usage.output_tokens.max(0))
+    .bind(cost_micros)
     .execute(&mut *transaction)
     .await
     .map_err(to_string)?;
@@ -404,6 +538,111 @@ mod tests {
             model_cost_micros("claude", "claude-haiku-4-5", 1_000_000, 1_000_000),
             6_000_000
         );
+    }
+
+    #[test]
+    fn cached_input_is_priced_at_each_model_s_cache_rates() {
+        let usage = RunUsage {
+            input_tokens: 1_000_000,
+            cached_input_tokens: 1_000_000,
+            cache_write_tokens: 1_000_000,
+            output_tokens: 1_000_000,
+        };
+        // Input, cache read, cache write for an hour, output.
+        for (model, cost) in [
+            (
+                "claude-opus-5-5",
+                4_000_000 + 200_000 + 8_000_000 + 20_000_000,
+            ),
+            ("opus", 4_000_000 + 200_000 + 8_000_000 + 20_000_000),
+            (
+                "claude-fable-5-2",
+                8_000_000 + 200_000 + 16_000_000 + 40_000_000,
+            ),
+            (
+                "claude-fable-5-1",
+                10_000_000 + 250_000 + 20_000_000 + 50_000_000,
+            ),
+            (
+                "claude-sonnet-5-5",
+                2_000_000 + 200_000 + 4_000_000 + 10_000_000,
+            ),
+            ("claude-haiku-5-5", 100_000 + 10_000 + 200_000 + 500_000),
+        ] {
+            assert_eq!(usage_cost_micros("claude", model, &usage), cost, "{model}");
+        }
+        // Codex has no separate cache write price.
+        for (model, cost) in [
+            ("gpt-6.1-sol", 2_000_000 + 100_000 + 2_000_000 + 10_000_000),
+            ("gpt-6-sol", 2_000_000 + 200_000 + 2_000_000 + 10_000_000),
+            (
+                "gpt-6-astra",
+                10_000_000 + 1_000_000 + 10_000_000 + 50_000_000,
+            ),
+            ("gpt-6-luna", 100_000 + 10_000 + 100_000 + 500_000),
+        ] {
+            assert_eq!(usage_cost_micros("codex", model, &usage), cost, "{model}");
+        }
+    }
+
+    #[tokio::test]
+    async fn record_turn_usage_replaces_the_figures_and_prefers_a_reported_cost() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: CommandResult<()> = async {
+            let agent_id = insert_test_agent(&pool, "usage-turn-agent").await?;
+            sqlx::query("update agents set runtime = 'claude', model = 'opus' where id = $1")
+                .bind(agent_id)
+                .execute(&pool)
+                .await
+                .map_err(to_string)?;
+            let run_id: Uuid = sqlx::query_scalar(
+                r#"
+                insert into agent_runs (agent_id, command, status)
+                values ($1, 'claude stream-json', 'running')
+                returning id
+                "#,
+            )
+            .bind(agent_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(to_string)?;
+            let read = || async {
+                let row = sqlx::query(
+                    "select input_tokens, current_input_tokens, output_tokens, cost_micros from agent_runs where id = $1",
+                )
+                .bind(run_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(to_string)?;
+                Ok::<_, String>((
+                    row.get::<i64, _>("input_tokens"),
+                    row.get::<i64, _>("current_input_tokens"),
+                    row.get::<i64, _>("output_tokens"),
+                    row.get::<i64, _>("cost_micros"),
+                ))
+            };
+
+            let usage = RunUsage {
+                input_tokens: 10,
+                cached_input_tokens: 500_000,
+                cache_write_tokens: 20_000,
+                output_tokens: 1_000,
+            };
+            record_turn_usage(&pool, agent_id, run_id, &usage, 260_000, None).await?;
+            // 10 * $4 + 500,000 * $0.20 + 20,000 * $8 + 1,000 * $20, per million.
+            assert_eq!(read().await?, (520_010, 260_000, 1_000, 280_040));
+
+            // The provider's own cost for the turn wins, even when it is lower,
+            // and an unknown context size keeps the last one.
+            record_turn_usage(&pool, agent_id, run_id, &usage, 0, Some(275_000)).await?;
+            assert_eq!(read().await?, (520_010, 260_000, 1_000, 275_000));
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        result.unwrap();
     }
 
     #[tokio::test]
