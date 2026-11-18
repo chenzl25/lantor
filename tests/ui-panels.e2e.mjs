@@ -82,7 +82,7 @@ try {
     const row = page.locator(`.conversation [data-message-id="${root.id}"]`);
     await row.waitFor(); assert.equal(await page.locator(".thread").count(), 0, "initial channel has no empty thread column");
     // New profiles expose only current GPT models; older saved profiles require a replacement.
-    const currentModels = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"];
+    const currentModels = ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"];
     await page.locator('.sidebar button[title="New agent"]').click();
     const newAgent = page.getByRole("dialog", { name: "New agent", exact: true });
     await newAgent.waitFor();

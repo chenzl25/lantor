@@ -147,7 +147,12 @@ fn normalize_reasoning_effort(
         }
         let supports_ultra = matches!(
             model.as_str(),
-            "gpt-6-astra" | "gpt-6.1-sol" | "gpt-6.1-terra" | "gpt-6-sol"
+            "gpt-6.2-astra"
+                | "gpt-6.2-sol"
+                | "gpt-6-astra"
+                | "gpt-6.1-sol"
+                | "gpt-6.1-terra"
+                | "gpt-6-sol"
         );
         let supports_max = supports_ultra || model == "gpt-6-luna";
         return match effort.as_str() {
@@ -731,6 +736,10 @@ mod tests {
     #[test]
     fn codex_reasoning_effort_is_limited_by_model_capability() {
         for (model, effort) in [
+            ("gpt-6.2-astra", "max"),
+            ("gpt-6.2-astra", "ultra"),
+            ("gpt-6.2-sol", "max"),
+            ("gpt-6.2-sol", "ultra"),
             ("gpt-6-astra", "max"),
             ("gpt-6-astra", "ultra"),
             ("gpt-6.1-sol", "max"),

@@ -11,6 +11,19 @@ import {
   normalizeCodexReasoningEffortForModel,
 } from "../src/types";
 
+test("GPT-6.2 Astra and Sol presets follow the Codex app-server effort ranges", () => {
+  assert.equal(modelLabel("gpt-6.2-astra"), "GPT-6.2 Astra");
+  assert.equal(modelLabel("gpt-6.2-sol"), "GPT-6.2 Sol");
+  for (const model of ["gpt-6.2-astra", "gpt-6.2-sol"]) {
+    assert.ok(modelOptionsForRuntime("codex").includes(model));
+    assert.deepEqual(
+      codexReasoningEffortsForModel(model).map((effort) => effort.value),
+      ["low", "medium", "high", "xhigh", "max", "ultra"],
+    );
+    assert.equal(normalizeCodexReasoningEffortForModel(model, "ultra"), "ultra");
+  }
+});
+
 test("GPT-6 Astra preset uses the current model id and effort range", () => {
   assert.ok(modelOptionsForRuntime("codex").includes("gpt-6-astra"));
   assert.equal(modelLabel("gpt-6-astra"), "GPT-6 Astra");
@@ -55,7 +68,7 @@ test("GPT-6 Sol, Terra and Luna presets follow the Codex app-server effort range
 
 test("Codex offers only GPT-6 presets and marks older saved models as retired", () => {
   const models = modelOptionsForRuntime("codex");
-  assert.deepEqual(models, ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"]);
+  assert.deepEqual(models, ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"]);
   for (const model of ["gpt-4o", "gpt-5.3-codex", "gpt-5.4-mini", "gpt-5.5", " GPT-5.6-SOL ", "gpt-5.6-terra", "gpt-5.6-luna"]) {
     assert.equal(isRetiredCodexModel(model), true, `${model} must be retired`);
     assert.ok(!models.includes(model));

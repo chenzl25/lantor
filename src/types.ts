@@ -776,6 +776,8 @@ export const RUNTIME_PRESETS: Record<string, { label: string; defaultModel: stri
     defaultModel: "gpt-6-sol",
     commandName: "codex",
     models: [
+      "gpt-6.2-astra",
+      "gpt-6.2-sol",
       "gpt-6-astra",
       "gpt-6.1-sol",
       "gpt-6.1-terra",
@@ -798,6 +800,8 @@ const MODEL_LABELS: Record<string, string> = {
   opus: "Claude Opus (latest)",
   sonnet: "Claude Sonnet (latest)",
   haiku: "Claude Haiku (latest)",
+  "gpt-6.2-astra": "GPT-6.2 Astra",
+  "gpt-6.2-sol": "GPT-6.2 Sol",
   "gpt-6-astra": "GPT-6 Astra",
   "gpt-6.1-sol": "GPT-6.1 Sol",
   "gpt-6.1-terra": "GPT-6.1 Terra",
@@ -817,6 +821,8 @@ export const CODEX_REASONING_EFFORTS = [
 function maxCodexReasoningEffort(model: string) {
   const normalizedModel = model.trim().toLowerCase();
   if (
+    normalizedModel === "gpt-6.2-astra" ||
+    normalizedModel === "gpt-6.2-sol" ||
     normalizedModel === "gpt-6-astra" ||
     normalizedModel === "gpt-6.1-sol" ||
     normalizedModel === "gpt-6.1-terra" ||
