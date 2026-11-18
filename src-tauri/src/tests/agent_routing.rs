@@ -454,7 +454,7 @@ async fn owner_thread_followup_dispatches_to_thread_agents_without_mentions() {
         );
         let context: String = work_items[0].get("context");
         assert!(context.contains("Lantor agent inbox wake"));
-        assert!(context.contains("inbox-read"));
+        assert!(context.contains("Default inbox item:"));
         assert!(work_items[0]
             .get::<String, _>("body_preview")
             .contains("这个复现"));

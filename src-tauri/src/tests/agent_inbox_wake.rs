@@ -44,7 +44,10 @@ fn inbox_wake_context_keeps_selected_message_without_unrelated_summary() {
     assert!(context.contains(&format!("msg={}", short_id(source_message_id))));
     assert!(context.contains("type=owner"));
     assert!(context.contains("Dylan: please use the latest numbers and reply directly"));
-    assert!(context.contains("call inbox-read only when"));
+    // How to handle the selected item is in the system prompt, not repeated
+    // in every wake.
+    assert!(!context.contains("inbox-read"));
+    assert!(context.contains("Default inbox item:"));
     assert!(context.contains(&format!("inbox_id: {inbox_id}")));
     assert!(!context.contains("Other active inbox targets:"));
     assert!(!context.contains("Warm-runtime guard"));

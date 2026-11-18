@@ -57,7 +57,8 @@ async fn surface_context_injects_only_current_thread_messages() {
         .await?
         .context;
         assert!(context.contains("Same-thread recent context"));
-        assert!(context.contains("Resolve contextual follow-ups from this block"));
+        // How to use the block is in the system prompt.
+        assert!(!context.contains("Resolve contextual follow-ups"));
         assert!(context.contains("thread A root"));
         assert!(context.contains("thread A reply evidence"));
         assert!(!context.contains("thread B root with forbidden bleed"));
