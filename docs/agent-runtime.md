@@ -316,6 +316,27 @@ supervisor on a fresh database, replaces the copy while a request runs, and
 checks that the same process starts the newer build once the request is done.
 It takes about 70 seconds.
 
+## Agent Prompt
+
+A warm runtime gets the standing prompt once, when its process starts
+(`prompts.rs`: the Claude system prompt or the Codex developer
+instructions). Each turn then sends only the wake prompt: the selected inbox
+item, its channel and thread, the default reply target, and the block of
+recent messages on that surface. Because a session keeps every turn, a rule
+belongs in the standing prompt, stated once, and the wake prompt carries only
+what is new for the turn.
+
+- How to read a wake prompt (the selected item, inbox-read and inbox-list,
+  the recent-messages block) is the startup sequence's first steps.
+- Agents write to the owner in the language of the owner's latest message,
+  including progress notes and decision cards; commits, pull requests and
+  GitHub comments follow those systems' conventions.
+- Decision cards, pull request reviews and the control line formats stay in
+  the standing prompt. They are used often (in November, decision cards in
+  about one run in six), and a guide fetched on demand would be added to a
+  session's context each time instead of once.
+- Stdout-command runtimes keep no session, so every prompt includes the standing sections.
+
 ## Context Tools
 
 The supervisor injects `LANTOR_CONTEXT_TOOL` for context access and narrow

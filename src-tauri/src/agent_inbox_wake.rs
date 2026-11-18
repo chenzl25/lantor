@@ -505,21 +505,18 @@ pub(crate) fn inbox_wake_context_with_wiki(
     };
     let target = primary.target();
     let has_task_available = items.iter().any(|item| item.kind == "task_available");
-    let mut lines = vec![
-        "Lantor agent inbox wake.".to_owned(),
-        if items.len() == 1 {
-            "The default inbox item below is already selected for this turn. Handle it directly from this context when enough detail is present.".to_owned()
-        } else {
-            format!(
-                "This turn batches {} inbox items from the same channel/thread target. Handle them together when possible.",
-                items.len()
-            )
-        },
-        "Use the selected message header directly; call inbox-read only when its preview or attachment metadata is insufficient.".to_owned(),
+    let mut lines = vec!["Lantor agent inbox wake.".to_owned()];
+    if items.len() > 1 {
+        lines.push(format!(
+            "This turn batches {} inbox items from the same channel/thread target. Handle them together when possible.",
+            items.len()
+        ));
+    }
+    lines.extend([
         String::new(),
         format!("Default reply target for normal assistant text: {target}"),
         String::new(),
-    ];
+    ]);
     if let Some(channel_wiki_block) = channel_wiki_block.filter(|block| !block.trim().is_empty()) {
         lines.push(channel_wiki_block.trim().to_owned());
         lines.push(String::new());

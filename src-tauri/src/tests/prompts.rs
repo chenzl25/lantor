@@ -34,7 +34,7 @@ fn memory_context_is_bounded_and_preserves_tail() {
 fn runtime_standing_prompt_excludes_memory_snapshot() {
     let prompt = claude_system_prompt("tester");
     assert!(prompt.contains("one warm runtime session per agent"));
-    assert!(prompt.contains("channel and thread are delivered as message envelope fields"));
+    assert!(prompt.contains("each turn names its channel and thread"));
     assert!(prompt.contains("Treat messages as conversation"));
     assert!(prompt.contains("Activity events are the short progress notes"));
     assert!(prompt.contains("MEMORY.md there is your note to your future self"));
@@ -44,7 +44,13 @@ fn runtime_standing_prompt_excludes_memory_snapshot() {
     assert!(!prompt.contains("memory_compact"));
     assert!(prompt.contains("Turn startup sequence:"));
     assert!(prompt.contains("first mentioned in a thread"));
-    assert!(prompt.contains("Use history-read or message-search when older channel/thread context"));
+    assert!(prompt.contains("Use history-read or message-search for older channel/thread context"));
+    // Each rule is stated once.
+    assert_eq!(prompt.matches("inbox-read only when").count(), 1);
+    assert_eq!(prompt.matches("archived when the work finishes").count(), 1);
+    assert_eq!(prompt.matches("do not poll inbox-list").count(), 1);
+    assert!(prompt.contains("Same-thread recent context"));
+    assert!(prompt.contains("Write in the language of the owner's latest message"));
     assert!(prompt.contains("Reply briefly to direct greetings"));
     assert!(prompt.contains("Agent context tools"));
     assert!(prompt.contains("inbox-list"));

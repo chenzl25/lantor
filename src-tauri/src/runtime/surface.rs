@@ -163,11 +163,8 @@ pub(crate) async fn render_surface_context(
         format_context_message_row(row, Some(&target), SURFACE_CONTEXT_BODY_LIMIT)
     };
 
-    let mut lines = vec![
-        String::new(),
-        SURFACE_CONTEXT_HEADING.to_owned(),
-        "Use these messages as current-surface evidence. Resolve contextual follow-ups from this block when possible; if it is insufficient, use the Lantor history/search context tools before answering. Do not mix in older warm-runtime turns from other channels or threads unless they are explicitly quoted here.".to_owned(),
-    ];
+    // How to use the block is in the system prompt's startup sequence.
+    let mut lines = vec![String::new(), SURFACE_CONTEXT_HEADING.to_owned()];
     lines.extend(rows.iter().rev().map(row_line));
 
     let delivery = match agent_id {
@@ -192,9 +189,9 @@ pub(crate) async fn render_surface_context(
             .collect();
         let mut lines = vec![String::new(), SURFACE_CONTEXT_HEADING.to_owned()];
         if since.is_empty() {
-            lines.push("No one else has posted on this surface since your last turn here. Its earlier messages and your own replies are already in this session; use the Lantor history/search context tools to read them again.".to_owned());
+            lines.push("No one else has posted on this surface since your last turn here; its earlier messages and your own replies are already in this session.".to_owned());
         } else {
-            lines.push("Only what others posted on this surface since your last turn here is listed. Its earlier messages and your own replies are already in this session; use them together as current-surface evidence, and the Lantor history/search context tools when that is insufficient. Do not mix in older warm-runtime turns from other channels or threads unless they are explicitly quoted here.".to_owned());
+            lines.push("Only what others posted on this surface since your last turn here is listed; its earlier messages and your own replies are already in this session.".to_owned());
             if rows.len() as i64 == SURFACE_CONTEXT_MESSAGE_LIMIT
                 && rows.iter().all(|row| seq(row) > held_seq)
             {

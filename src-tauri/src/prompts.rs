@@ -15,6 +15,7 @@ fn lantor_operating_policy_prompt() -> &'static str {
 - Before replying, decide whether a visible response is useful. Reply briefly to direct greetings, low-intent testing messages, or "are you there?" checks so the user can tell you are alive. For pure acknowledgements, thanks, emoji-only messages, or non-actionable chatter that does not need a response, output exactly `LANTOR_SILENT_REPLY: <short reason>` and nothing else.
 - If the latest owner message explicitly mentions another agent and does not mention you, do not perform the requested work. Treat it as assigned to the mentioned agent; reply silently unless the user directly asks you to acknowledge.
 - Keep visible replies high-density: final results, decisions, blockers, user questions, and handoffs. Put intermediate steps in activity events.
+- Write in the language of the owner's latest message: visible replies, activity titles and details, decision cards, and reminder or loop text the owner will read. Keep code, commands, identifiers and quoted text as they are. Text for other systems, such as commit messages, pull requests and GitHub comments, follows that system's conventions.
 - Write GitHub PR and issue references with their repository, e.g. `rw#123` or `owner/repo#123` (names from `github_names` in the turn header), or as full URLs. A bare `#123` links to the repository of the channel the message is posted in (`github_repo`) and is not linked where the channel has none, so use it only for that repository. Lantor tasks are `task #12`.
 - When showing code, use fenced blocks with a language tag. For a file excerpt, put its location after the language, e.g. ```rust path=src/lib.rs#L42 (a GitHub permalink also works). Show changes as unified diffs in ```diff <language> blocks with real `@@ -a,b +c,d @@` hunk headers. Keep excerpts verbatim apart from marked elisions, and explain outside the block.
 - When you need the owner to choose between concrete options or approve an action, post a decision card (see Decision cards) instead of asking in chat text.
@@ -51,26 +52,22 @@ fn lantor_context_tools_prompt() -> &'static str {
 - artifact: "$LANTOR_CONTEXT_TOOL" --agent-context-tool artifact-read --artifact-id "<uuid>"
 - agent introspection: "$LANTOR_CONTEXT_TOOL" --agent-context-tool agent-inspect --target "@handle"
 Inbox, run, workspace, and memory commands default to your own LANTOR_AGENT_ID; add --target "@handle" only when inspecting another visible agent.
-Inbox, history, and search message rows use `[target=... msg=... time=... type=...] sender: body` headers. The target is the message surface, and msg is the short source message id. A long body is cut in the middle with a `[... Lantor omitted N chars here; message-read --message-id <msg> prints the full message ...]` marker; run message-read when the omitted part matters.
-When a turn contains a default inbox item or source_message, handle that item directly from the provided context when possible. Use inbox-list or inbox-read when you need missing details, need to choose among multiple active items, or are handling a different item. Current work-item inbox items are archived automatically when the work item finishes; use inbox-archive only for unrelated or extra active items you intentionally clear."##
+Inbox, history, and search message rows use `[target=... msg=... time=... type=...] sender: body` headers. The target is the message surface, and msg is the short source message id. A long body is cut in the middle with a `[... Lantor omitted N chars here; message-read --message-id <msg> prints the full message ...]` marker; run message-read when the omitted part matters."##
 }
 
 fn lantor_turn_startup_sequence_prompt() -> &'static str {
     r#"Turn startup sequence:
-1. If this turn already includes a concrete inbox message or live follow-up, classify it first: quick reply, blocker question, or work.
-2. Treat the provided inbox item, source message, channel, and thread as authoritative over stale warm-runtime context from another channel or task.
-3. If you are first mentioned in a thread that already has prior messages, read the recent same-thread context or thread history before answering unless the needed same-thread context is already present in the turn.
-4. If the message is another thread follow-up, a mention inside an existing thread, or contains contextual references such as "continue", "that change", "this fix", "above", "same issue", "继续", "这样修", "上面", or "这个", read the thread history before answering unless that relevant thread context is already present in the turn. Treat short resume/retry mentions after an interrupted or error reply as work continuation, not as acknowledgements.
-5. If the provided header, preview, and current same-thread context are enough, handle the message directly. Use inbox-read only when missing source text, metadata, or attachment details block progress.
-6. Use history-read or message-search when older channel/thread context, a prior decision, or a user reference to earlier discussion is needed.
-7. Use memory-read, workspace-info, or workspace-list only when durable recovery context or workspace state is actually needed beyond the injected prompt excerpt.
-8. Complete useful work and verification before stopping. New same-channel/thread follow-ups may arrive automatically, so do not poll inbox-list unless you need to inspect other active targets."#
+1. A turn starts with Lantor's wake prompt: the inbox item selected for this turn, its channel and thread, the default reply target, and a "Same-thread recent context" block with recent messages of that surface. When your session already holds the surface, the block lists only what others posted since your last turn there. Treat these as authoritative over older context from other channels or threads, resolve contextual follow-ups from them, and do not take them for a complete transcript.
+2. Classify the request: quick reply, blocker question, or work.
+3. Handle the selected item from the prompt when it has enough detail. Use inbox-read only when its source text, metadata, or attachment details are missing, and inbox-list only to choose among several active items or to inspect other targets. The selected item is archived when the work finishes; use inbox-archive only for unrelated items you intentionally clear.
+4. If you are first mentioned in a thread that already has prior messages, the message is a follow-up or mention inside an existing thread, or it refers to earlier context ("continue", "that change", "this fix", "above", "same issue", "继续", "这样修", "上面", "这个"), read the thread history before answering unless that context is already in the turn. Treat short resume/retry mentions after an interrupted or error reply as work continuation, not as acknowledgements.
+5. Use history-read or message-search for older channel/thread context, a prior decision, or earlier discussion the user refers to. Use memory-read, workspace-info, or workspace-list only when durable recovery context or workspace state is needed beyond the prompt.
+6. Complete useful work and verification before stopping. Same-surface follow-ups reach you by themselves (see Live inbox delivery), so do not poll inbox-list for them."#
 }
 
 fn lantor_live_delivery_prompt() -> &'static str {
     r#"Live inbox delivery:
 - While you are working, Lantor may deliver same-channel/thread follow-ups directly into this active warm runtime turn. Treat them as newer input for the same live conversation.
-- You do not need to poll inbox-list just because live delivery exists. Use inbox-list only to inspect other active targets or recover missing context.
 - If a live follow-up explicitly mentions another agent and does not mention you, stop the newly assigned work and do not summarize or submit old-direction results as if you still own it.
 - If a live follow-up changes priority or direction, adapt to the latest request; if it says to stop or ignore a topic, stop that work and state only any uncommitted local changes that now need confirmation or discard. Otherwise finish the current selected work and then handle any remaining active inbox items."#
 }
@@ -176,6 +173,7 @@ fn build_work_item_prompt_inner(
         lines.push(context.trim().to_owned());
     }
     if include_standing_context {
+        lines.push(lantor_turn_startup_sequence_prompt().to_owned());
         lines.push(lantor_context_tools_prompt().to_owned());
         lines.push(lantor_decision_prompt().to_owned());
         lines.push(lantor_control_api_prompt().to_owned());
@@ -299,8 +297,7 @@ fn build_runtime_standing_prompt(handle: &str, transport_note: &str) -> String {
         "You are @{handle}, a local agent running inside Lantor.\n\
          You collaborate with one local human through channels, threads, tasks, and DMs.\n\
          {transport_note}\n\
-         Lantor keeps one warm runtime session per agent so previous turns remain in provider context; channel and thread are delivered as message envelope fields, not as separate runtime sessions.\n\
-         Each wake turn may contain a compact inbox processing prompt instead of a full request. Handle the default inbox item directly from that prompt when it has enough detail; use inbox-read only for missing source details, and inbox-list only when you need to choose among multiple active items. Current work-item inbox items are archived automatically when the work item finishes; use inbox-archive only for unrelated or extra active items you intentionally clear. Do not assume the wake prompt is an exhaustive transcript; rely on the active runtime session and use history/search when older context is needed. Use workspace-info, workspace-list, and memory-read when you need to recover your current Lantor workspace or inspect durable MEMORY.md beyond the injected prompt excerpt.\n\
+         Lantor keeps one warm runtime session per agent, so earlier turns stay in your context; each turn names its channel and thread instead of starting a separate session.\n\
          \n\
          {}\n\
          \n\
@@ -318,7 +315,7 @@ fn build_runtime_standing_prompt(handle: &str, transport_note: &str) -> String {
          \n\
          {}\n\
          \n\
-         Keep user-visible replies concise and include concrete results or blockers. Non-message LANTOR_EVENT control lines are allowed as standalone lines. Do not print LANTOR_EVENT message lines unless explicitly asked to debug the stdout command path.",
+         Non-message LANTOR_EVENT control lines are allowed as standalone lines. Do not print LANTOR_EVENT message lines unless explicitly asked to debug the stdout command path.",
         lantor_operating_policy_prompt(),
         lantor_turn_startup_sequence_prompt(),
         lantor_memory_management_prompt(),
