@@ -84,6 +84,7 @@ impl Fixture {
                     interrupt_requested: false,
                     auth_required: false,
                     network_failure: false,
+                    usage: RunUsage::default(),
                 }),
                 session_id: Some("test-claude-session".to_owned()),
                 context_tokens: 0,

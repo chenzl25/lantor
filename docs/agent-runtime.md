@@ -226,6 +226,31 @@ caller picks the outcome and does what follows the commit: task status,
 reconciliation, and the activity log. A new transition is a new function in
 that module.
 
+## Usage and Cost
+
+Each run records the tokens its turn used and their cost at list prices
+(`src-tauri/src/usage.rs`). Profile sums the last 24 hours under Performance,
+and an agent's daily budget is compared with the same cost.
+
+- `input_tokens` is everything the turn sent to the model over all its
+  requests, cached input included. `output_tokens` is what the model wrote.
+  `current_input_tokens` is the input of the latest request, which is the size
+  of the context.
+- Claude: every finished request adds to a running total, priced from the
+  table as input, cache reads, cache writes and output. Claude Code keeps its
+  prompt cache for an hour, so a cache write costs twice the input price. The
+  turn's `result` then replaces the estimate with the turn's totals and the
+  cost Claude Code reports for it (`model_usage_since_last_result`), which
+  also covers requests to other models, such as the small model that reads a
+  web page.
+- Codex: the app-server reports the thread's running total, and a turn has
+  used what that total grew by since the turn's first request. Cached input
+  is priced at the model's cached rate. Codex reports no cost of its own.
+- A cache read costs a tenth of the input price unless the table names the
+  model's own rate. Long-context surcharges are not applied to table prices.
+- Runs recorded before cached input was counted keep their figures: for
+  Claude uncached input and output only, for Codex the last request only.
+
 ## Supervisor Updates
 
 The supervisor runs the app's own executable. When that file is rebuilt or

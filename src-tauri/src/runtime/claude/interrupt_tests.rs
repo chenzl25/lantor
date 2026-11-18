@@ -18,6 +18,7 @@ fn active_turn(run_id: Uuid, interrupt_requested: bool) -> ClaudeActiveTurn {
         interrupt_requested,
         auth_required: false,
         network_failure: false,
+        usage: RunUsage::default(),
     }
 }
 

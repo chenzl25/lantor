@@ -31,6 +31,7 @@ use crate::runtime::{
     surface::same_codex_surface,
 };
 use crate::ui_notifications::reconcile_work_item_change;
+use crate::usage::RunUsage;
 use crate::{build_steer_followup_prompt, load_inbox_wake_items_for_work_item};
 
 /// A follow-up written to the CLI that it has not replayed yet.
@@ -360,6 +361,7 @@ async fn adopt_follow_up_turn(
                 interrupt_requested: false,
                 auth_required: false,
                 network_failure: false,
+                usage: RunUsage::default(),
             });
         } else {
             failure = Some("Claude warm runtime changed before the follow-up turn".to_owned());
