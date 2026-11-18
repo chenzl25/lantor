@@ -152,6 +152,7 @@ fn standalone_prompt_keeps_standing_and_finish_contract() {
 
     assert!(prompt.contains("Operating policy:"));
     assert!(prompt.contains("Standalone LANTOR_EVENT control lines:"));
+    assert!(prompt.contains("Lantor lists it, with the reason, at the start of your next turn."));
     assert!(prompt.contains(WORK_ITEM_FINISH_PROMPT));
 }
 

@@ -764,6 +764,20 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         )
         "#,
         r#"
+        create table if not exists agent_control_rejections (
+            id integer primary key autoincrement,
+            agent_id blob not null references agents(id) on delete cascade,
+            run_id blob not null references agent_runs(id) on delete cascade,
+            event_hash text not null,
+            event_type text not null default '',
+            error text not null default '',
+            excerpt text not null default '',
+            shown_work_item_id blob,
+            created_at text not null default (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+            unique (run_id, event_hash)
+        )
+        "#,
+        r#"
         create table if not exists agent_target_watermarks (
             agent_id blob not null references agents(id) on delete cascade,
             channel_id blob not null references channels(id) on delete cascade,
@@ -1170,6 +1184,7 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "create index if not exists reminders_due_idx on reminders(status, due_at)",
         "create index if not exists agent_inbox_items_agent_state_idx on agent_inbox_items(agent_id, state, priority desc, created_at)",
         "create unique index if not exists agent_inbox_items_source_unique on agent_inbox_items(agent_id, source_message_id, kind) where source_message_id is not null",
+        "create index if not exists agent_control_rejections_agent_idx on agent_control_rejections(agent_id, id)",
         "create unique index if not exists agent_target_watermarks_root_unique on agent_target_watermarks(agent_id, channel_id) where thread_root_id is null",
         "create unique index if not exists agent_target_watermarks_thread_unique on agent_target_watermarks(agent_id, channel_id, thread_root_id) where thread_root_id is not null",
         "create index if not exists agent_held_outputs_state_expires_idx on agent_held_outputs(state, expires_at)",

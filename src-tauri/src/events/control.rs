@@ -24,6 +24,7 @@ use crate::domain::reminders::{
     cancel_reminder_in_pool, create_reminder_in_pool, ReminderLoopOptions,
 };
 use crate::events::activity::{normalize_agent_activity_kind, record_agent_activity};
+use crate::events::rejections::record_control_rejection;
 use crate::events::resolution::{resolve_event_channel, resolve_run_reminder_anchor};
 use crate::freshness::hold_run_event_for_target_if_stale;
 use crate::message_store::{
@@ -376,6 +377,7 @@ pub(crate) async fn replay_agent_events_from_run_log_if_needed(
             }
             Err(err) => {
                 append_run_log(pool, run_id, format!("[event-replay] rejected: {err}\n")).await?;
+                record_control_rejection(pool, agent_id, run_id, json, &err).await?;
                 record_agent_activity(
                     pool,
                     Some(agent_id),
@@ -577,34 +579,37 @@ pub(crate) async fn handle_streaming_agent_event_json(
                     .await?;
                 }
                 Err(err) => {
-                    append_run_log(pool, run_id, format!("[stream-event] rejected: {err}\n"))
-                        .await?;
-                    record_agent_activity(
-                        pool,
-                        Some(agent_id),
-                        Some(run_id),
-                        "event_error",
-                        "Stream event rejected",
-                        err,
-                    )
-                    .await?;
+                    record_stream_event_rejection(pool, agent_id, run_id, json, err).await?;
                 }
             }
         }
         Err(err) => {
-            append_run_log(pool, run_id, format!("[stream-event] rejected: {err}\n")).await?;
-            record_agent_activity(
-                pool,
-                Some(agent_id),
-                Some(run_id),
-                "event_error",
-                "Stream event rejected",
-                err,
-            )
-            .await?;
+            record_stream_event_rejection(pool, agent_id, run_id, json, err).await?;
         }
     }
     Ok(())
+}
+
+/// A rejected line goes to the run log and the activity feed, and is kept to
+/// be told to the agent at the start of its next turn.
+async fn record_stream_event_rejection(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    run_id: Uuid,
+    json: &str,
+    err: String,
+) -> CommandResult<()> {
+    append_run_log(pool, run_id, format!("[stream-event] rejected: {err}\n")).await?;
+    record_control_rejection(pool, agent_id, run_id, json, &err).await?;
+    record_agent_activity(
+        pool,
+        Some(agent_id),
+        Some(run_id),
+        "event_error",
+        "Stream event rejected",
+        err,
+    )
+    .await
 }
 
 pub(crate) async fn handle_agent_event(
