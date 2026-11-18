@@ -11,6 +11,27 @@ LANTOR_EVENT {"type":"activity","kind":"thinking","title":"Checking build","deta
 Custom stdout runtimes may also print one parser-compatible `LANTOR_EVENT` JSON
 line to stdout. Non-matching stdout and stderr stay in the process log.
 
+## Rejected Lines
+
+A line Lantor cannot apply, because it is not valid JSON, names an unknown
+type or fails its checks, changes nothing. Besides the run log and the
+activity feed (`Stream event rejected`), Lantor keeps it in
+`agent_control_rejections` (`src-tauri/src/events/rejections.rs`) and lists
+it at the start of the agent's next turn, in any channel: when, the type, the
+reason, the first 300 characters of the line, and what to do instead. The
+removed `memory_append` and `memory_compact` types get a note to edit
+`MEMORY.md` directly and to drop instructions that name them.
+
+- A line seen twice in one run, streamed and again in the final text, is
+  listed once.
+- A rejection stays listed until a turn that showed it is `done`, `silent` or
+  `held`; a turn that failed, was cancelled or did not start shows it again.
+- At most the five most recent rejections of the last seven days are listed.
+  Rows are deleted after 30 days.
+- Lantor does not insert the note into the running turn. Rejected lines have
+  been in an agent's final reply, when the turn is already over, and a note
+  sent then would start a turn nobody asked for.
+
 ## Event Types
 
 | Event | What it does |

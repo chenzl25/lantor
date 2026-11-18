@@ -27,6 +27,7 @@ use super::{
     surface::{render_surface_context, same_codex_surface, CodexActiveTurnScheduleState},
     wake::SupervisorWake,
 };
+use crate::events::rejections::take_rejection_notice;
 use crate::{
     agent_inbox_wake::{
         agent_has_active_or_pending_start, agent_runtime, enqueue_agent_work_if_available,
@@ -439,6 +440,15 @@ pub(crate) async fn cleanup_supervisor_commands(pool: &SqlitePool) -> CommandRes
     sqlx::query(
         r#"
         delete from agent_event_receipts
+        where created_at < strftime('%Y-%m-%dT%H:%M:%f+00:00','now','-30 days')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .map_err(to_string)?;
+    sqlx::query(
+        r#"
+        delete from agent_control_rejections
         where created_at < strftime('%Y-%m-%dT%H:%M:%f+00:00','now','-30 days')
         "#,
     )
@@ -1071,14 +1081,20 @@ async fn supervisor_start_agent(
                     prompt
                 }
             };
+            // Control lines rejected in earlier turns come first, in both forms.
+            let rejection_notice = take_rejection_notice(pool, agent_id, work_item_id).await?;
+            let with_notice = |prompt: String| match &rejection_notice {
+                Some(notice) => format!("{notice}\n\n{prompt}"),
+                None => prompt,
+            };
             surface_delivery.delta =
                 rendered
                     .delta
                     .map(|(thread_id, context)| SurfaceContextDelta {
                         thread_id,
-                        prompt: prompt_with(&context),
+                        prompt: with_notice(prompt_with(&context)),
                     });
-            prompt_with(&context)
+            with_notice(prompt_with(&context))
         }
         None => String::new(),
     };
@@ -1356,6 +1372,86 @@ mod tests {
     use crate::db::{db_connect_with_url, migrate};
     use crate::runtime::lifecycle::close_orphaned_runs_at_startup;
     use crate::runtime::{claude::WarmClaudeRegistry, codex::WarmCodexRegistry};
+
+    #[tokio::test]
+    async fn the_next_turn_starts_with_the_lines_lantor_rejected() {
+        // Process runtimes launch through /bin/zsh, which Linux CI runners lack.
+        if !std::path::Path::new("/bin/zsh").exists() {
+            eprintln!("skipping process launch test: /bin/zsh is missing");
+            return;
+        }
+        let Some((pool, database_path)) = test_pool().await else {
+            return;
+        };
+        let directory = std::env::temp_dir().join(format!("lantor-rejection-{}", Uuid::new_v4()));
+        std_fs::create_dir_all(&directory).unwrap();
+        let prompt_file = directory.join("prompt.txt");
+        let result: Result<(), String> = async {
+            let agent_id = insert_test_agent(&pool, "rejection-notice").await?;
+            sqlx::query(
+                "update agents set runtime = 'command', launch_command = $2, working_directory = $3 where id = $1",
+            )
+            .bind(agent_id)
+            .bind(format!(
+                "printf '%s' \"$LANTOR_WORK_ITEM_PROMPT\" > '{}'",
+                prompt_file.display()
+            ))
+            .bind(directory.to_string_lossy().into_owned())
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            let earlier_run: Uuid = sqlx::query_scalar(
+                "insert into agent_runs (agent_id, command, status, stopped_at) values ($1, 'earlier', 'exited', strftime('%Y-%m-%dT%H:%M:%f+00:00','now')) returning id",
+            )
+            .bind(agent_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            crate::events::control::handle_streaming_agent_event_json(
+                &pool,
+                agent_id,
+                earlier_run,
+                r##"{"type":"memory_compact","body":"# Rewritten memory"}"##,
+            )
+            .await?;
+            let work_item_id: Uuid = sqlx::query_scalar(
+                "insert into agent_work_items (agent_id, title, context, status) values ($1, 'next request', 'context', 'queued') returning id",
+            )
+            .bind(agent_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+
+            super::supervisor_start_agent(
+                &pool,
+                &WarmCodexRegistry::default(),
+                &WarmClaudeRegistry::default(),
+                agent_id,
+                Some(work_item_id),
+            )
+            .await?;
+            let mut prompt = String::new();
+            for _ in 0..200 {
+                prompt = std_fs::read_to_string(&prompt_file).unwrap_or_default();
+                if !prompt.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            assert!(
+                prompt.starts_with("Lantor rejected control lines from your earlier replies"),
+                "{prompt}"
+            );
+            assert!(prompt.contains("`memory_compact`"), "{prompt}");
+            assert!(prompt.contains("# Rewritten memory"), "{prompt}");
+            assert!(prompt.contains("next request"), "{prompt}");
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, database_path).await;
+        let _ = std_fs::remove_dir_all(&directory);
+        result.unwrap();
+    }
 
     #[tokio::test]
     async fn orphan_sweep_closes_live_runs_no_process_owns() {
