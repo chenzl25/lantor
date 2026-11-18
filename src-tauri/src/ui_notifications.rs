@@ -354,8 +354,10 @@ async fn maybe_insert_work_item_system_message(
 }
 
 pub(crate) async fn notify_supervisor_wake(_pool: &SqlitePool) -> CommandResult<()> {
-    // SQLite has no cross-process NOTIFY primitive. The supervisor observes
-    // queued commands through its existing short poll interval.
+    // Reaches the supervisor loop of this process. SQLite cannot notify
+    // another process: a supervisor elsewhere sees what the caller queued by
+    // watching the database (`runtime/wake.rs`).
+    crate::runtime::wake::wake_supervisor();
     Ok(())
 }
 

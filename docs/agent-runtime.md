@@ -24,6 +24,12 @@ Dispatch is work-item based:
 - DMs, thread follow-ups, reminders, tasks, channel messages, and handoffs can wake agents.
 - One active run is allowed per agent. Extra mentions, retries, and manual dispatches stay queued.
 - The supervisor schedules the oldest queued work item for each idle agent.
+  It looks for work when its own process queues a request or ends a turn,
+  and when the app queues a request or a command. The app is another
+  process, so the supervisor watches the database for that
+  (`runtime/wake.rs`): every 50 ms while work arrived in the last 30
+  seconds, every 250 ms otherwise. A check that finds no commit reads no
+  table. It also looks every 2 seconds regardless.
 - Cancellation marks queued work as cancelled or sends a stop command for a running run.
 - Retry creates a new queued work item instead of mutating historical state.
 
