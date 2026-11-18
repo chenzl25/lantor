@@ -14,6 +14,7 @@ fn active_turn(run_id: Uuid, interrupt_requested: bool) -> ClaudeActiveTurn {
         thread_root_id: None,
         stream_key: claude_stream_key(run_id),
         pending_memory_context: None,
+        surface_delivered_seq: None,
         text: ClaudeTextState::default(),
         interrupt_requested,
         auth_required: false,

@@ -1011,6 +1011,29 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "integer not null default 0",
     )
     .await?;
+    // What a provider session already holds (`runtime/session_context.rs`).
+    ensure_integer_column(
+        pool,
+        "agent_target_watermarks",
+        "context_seq",
+        "integer not null default 0",
+    )
+    .await?;
+    ensure_text_column(
+        pool,
+        "agent_target_watermarks",
+        "context_thread_id",
+        "text not null default ''",
+    )
+    .await?;
+    ensure_text_column(pool, "runtime_sessions", "memory_context", "text").await?;
+    ensure_text_column(
+        pool,
+        "runtime_sessions",
+        "memory_thread_id",
+        "text not null default ''",
+    )
+    .await?;
     ensure_integer_column(
         pool,
         "agent_runs",

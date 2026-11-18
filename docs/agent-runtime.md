@@ -68,6 +68,30 @@ anything posted while the work waited. The highest message in that block marks
 what the agent has seen, which the freshness check compares against before
 posting a reply.
 
+A warm runtime keeps one Claude session or Codex thread across turns and
+process restarts, so a prompt does not repeat what that session already holds
+(`runtime/session_context.rs`):
+
+- The memory snapshot is sent to a session once, and again only when
+  `MEMORY.md` changes. A new process that resumes the session does not send
+  it again.
+- The block of recent messages lists only what others posted on the surface
+  since the session's last successful turn there, and says so. The agent's
+  own streamed replies are left out, because the same session wrote them;
+  what Lantor posted in its name, such as a loop's output, is listed. With
+  nothing new the block is one line.
+- What a session holds is recorded when its turn succeeds: the surface's
+  highest complete message (a message still being streamed is listed again
+  once it is complete) and the snapshot. A failed, cancelled or requeued turn
+  records nothing, so the next prompt repeats it.
+- A different session gets everything: a new session, one started after the
+  old one was not found, or the other runtime. So does a session the provider
+  compacted, since a summary may drop what the prompt brought. The supervisor
+  renders both forms and the runtime picks the short one only for the session
+  it was made for.
+- Follow-ups sent into a running turn and stdout-command runtimes are
+  unchanged.
+
 Stdout-command runtimes are still supported for custom scripts. They can print
 one line to stdout with the `LANTOR_EVENT ` prefix followed by JSON. Non-matching
 stdout and stderr are preserved only in the run log.

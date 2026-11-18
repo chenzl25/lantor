@@ -7,7 +7,7 @@ use crate::context_tool::short_id;
 use crate::message_store::send_owner_message_in_pool;
 use crate::models::AttachmentUpload;
 use crate::prompts::WORK_ITEM_FINISH_PROMPT;
-use crate::runtime::surface::append_surface_context;
+use crate::runtime::surface::render_surface_context;
 use crate::test_support::{drop_test_schema, insert_test_agent, insert_test_channel, test_pool};
 use crate::ui_notifications::reconcile_work_item_change;
 use chrono::Utc;
@@ -264,9 +264,10 @@ async fn inbox_wake_thread_context_is_read_once_at_turn_start() {
         assert!(!context.contains("please debug the network failure"));
         assert!(!context.contains("partial investigation before network error"));
 
-        let prompt_context = append_surface_context(
+        let prompt_context = render_surface_context(
             &pool,
             &context,
+            None,
             Some(channel_id),
             Some("resume-thread"),
             Some(thread_root_id),

@@ -34,6 +34,7 @@ use crate::runtime::{
         cleanup_failed_warm_start, configure_agent_context_tool_env, configure_agent_identity_env,
         load_runtime_thread_id, upsert_runtime_thread_id,
     },
+    session_context::{forget_session_context, load_injected_memory, SurfaceDelivery},
     streaming::{
         adopt_streaming_agent_message_key, append_streaming_agent_message_deferred_completion,
         delete_streaming_agent_message_by_key, ensure_streaming_agent_message,
@@ -198,6 +199,10 @@ struct CodexActiveTurn {
     completed_agent_message_stream_keys: HashSet<String>,
     latest_agent_message_stream_key: Option<String>,
     pending_memory_context: Option<Option<String>>,
+    /// Highest surface message seq this turn's prompt delivers. The thread
+    /// holds it once the turn succeeds, unless Codex compacted the thread
+    /// meanwhile.
+    surface_delivered_seq: Option<i64>,
     steer_requests: HashMap<i64, CodexSteerRequest>,
     steer_disabled: bool,
     interrupt_request_id: Option<i64>,
@@ -494,6 +499,9 @@ async fn spawn_warm_codex_runtime(
     };
 
     upsert_runtime_thread_id(pool, agent_id, "codex", &thread_id, "idle").await?;
+    // A resumed thread still holds the memory snapshot an earlier process
+    // gave it; a new thread has none on record.
+    let injected_memory_context = load_injected_memory(pool, agent_id, "codex", &thread_id).await?;
     record_agent_activity(
         pool,
         Some(agent_id),
@@ -513,7 +521,7 @@ async fn spawn_warm_codex_runtime(
             next_request_id,
             pending_rate_limit_request_id: None,
             last_rate_limit_request_at: None,
-            injected_memory_context: None,
+            injected_memory_context,
             last_activity: Instant::now(),
         }),
         pid,
@@ -810,6 +818,7 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
     environment_variables: String,
     work_item_prompt: String,
     rendered_context_max_seq: i64,
+    surface_delivery: SurfaceDelivery,
     memory_context: Option<String>,
 ) -> CommandResult<()> {
     let command_text = "codex app-server --listen stdio://".to_owned();
@@ -875,6 +884,14 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
         }
     }
 
+    // The thread this process resumed may already hold the surface's earlier
+    // messages; only that thread gets the prompt that leaves them out.
+    let codex_prompt = match surface_delivery.delta_prompt_for(Some(&runtime.provider.thread_id)) {
+        Some(delta_prompt) => build_codex_streaming_prompt(delta_prompt),
+        None => codex_prompt,
+    };
+    let surface_delivered_seq =
+        (surface_delivery.delivered_seq > 0).then_some(surface_delivery.delivered_seq);
     let (codex_prompt, memory_update) = {
         let state = runtime.state.lock().await;
         let memory_update = memory_context_update(
@@ -1028,6 +1045,7 @@ pub(crate) async fn supervisor_start_codex_streaming_agent(
                 completed_agent_message_stream_keys: HashSet::new(),
                 latest_agent_message_stream_key: None,
                 pending_memory_context: next_injected_memory_context,
+                surface_delivered_seq,
                 steer_requests: HashMap::new(),
                 steer_disabled: false,
                 interrupt_request_id: None,
@@ -1193,6 +1211,20 @@ async fn handle_codex_warm_stdout_line(
         // Best effort: a lost log line must not keep a turn-ending event from
         // finishing the turn below.
         let _ = append_run_log(pool, run_id, format!("[codex] {line}\n")).await;
+    }
+
+    if codex_item_type(&value) == Some("contextCompaction") {
+        // The summary may have dropped what Lantor put into the thread, so
+        // the next turns bring the memory snapshot and surface messages again.
+        {
+            let mut state = runtime.state.lock().await;
+            state.injected_memory_context = None;
+            if let Some(active) = state.active.as_mut() {
+                active.pending_memory_context = None;
+                active.surface_delivered_seq = None;
+            }
+        }
+        forget_session_context(pool, agent_id, "codex").await?;
     }
 
     if let (Some(run_id), Some((total, last))) = (active_run_id, codex_token_usage(&value)) {
@@ -1726,6 +1758,7 @@ mod tests {
                     completed_agent_message_stream_keys: HashSet::new(),
                     latest_agent_message_stream_key: None,
                     pending_memory_context: None,
+                    surface_delivered_seq: None,
                     steer_requests: HashMap::new(),
                     steer_disabled: false,
                     interrupt_request_id: None,
@@ -2057,6 +2090,7 @@ mod tests {
             completed_agent_message_stream_keys: HashSet::new(),
             latest_agent_message_stream_key: None,
             pending_memory_context: None,
+            surface_delivered_seq: None,
             steer_requests: HashMap::new(),
             steer_disabled: false,
             interrupt_request_id: None,
@@ -2296,6 +2330,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_thread_keeps_what_a_finished_turn_gave_it_until_codex_compacts_it() {
+        use crate::runtime::session_context::{load_injected_memory, load_surface_delivery};
+
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let thread = "test-codex-thread";
+            for (handle, compacted) in [("codex-held", false), ("codex-compacted", true)] {
+                let agent_id = insert_test_agent(&pool, handle).await?;
+                let channel_id = insert_test_channel(&pool, handle).await?;
+                // A turn's start creates these rows before any turn ends.
+                crate::freshness::advance_agent_target_watermark(
+                    &pool,
+                    agent_id,
+                    Some(channel_id),
+                    None,
+                    1,
+                )
+                .await?;
+                crate::runtime::process::upsert_runtime_thread_id(
+                    &pool, agent_id, "codex", thread, "idle",
+                )
+                .await?;
+                let work_item_id: uuid::Uuid = sqlx::query_scalar(
+                    "insert into agent_work_items (agent_id, channel_id, title, status) values ($1, $2, 'review', 'running') returning id",
+                )
+                .bind(agent_id)
+                .bind(channel_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+                let run_id: uuid::Uuid = sqlx::query_scalar(
+                    "insert into agent_runs (agent_id, work_item_id, command, status) values ($1, $2, 'codex app-server', 'running') returning id",
+                )
+                .bind(agent_id)
+                .bind(work_item_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|err| err.to_string())?;
+                let stream_key = format!("{run_id}:warm-codex");
+                let runtime =
+                    test_runtime_with_active_turn(run_id, work_item_id, channel_id, stream_key)
+                        .await?;
+                {
+                    // The turn's prompt brought the surface up to seq 7 and a
+                    // new memory snapshot.
+                    let mut state = runtime.state.lock().await;
+                    let active = state.active.as_mut().expect("active turn");
+                    active.surface_delivered_seq = Some(7);
+                    active.pending_memory_context = Some(Some("memory v2".to_owned()));
+                }
+                if compacted {
+                    super::handle_codex_warm_stdout_line(
+                        &pool,
+                        agent_id,
+                        &runtime,
+                        r#"{"method":"item/completed","params":{"item":{"type":"contextCompaction","id":"compaction-1"},"threadId":"test-codex-thread","turnId":"turn-1"}}"#,
+                    )
+                    .await?;
+                }
+                finish_warm_codex_active_turn(&pool, agent_id, &runtime, true, None).await?;
+
+                let held = (
+                    load_surface_delivery(&pool, agent_id, channel_id, None).await?,
+                    load_injected_memory(&pool, agent_id, "codex", thread).await?,
+                );
+                let expected = if compacted {
+                    (None, None)
+                } else {
+                    (
+                        Some((thread.to_owned(), 7)),
+                        Some("memory v2".to_owned()),
+                    )
+                };
+                assert_eq!(held, expected, "{handle}");
+            }
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        result.unwrap();
+    }
+
+    #[tokio::test]
     async fn a_codex_runtime_that_cannot_start_fails_its_request() {
         let Some((pool, schema)) = test_pool().await else {
             return;
@@ -2328,6 +2447,7 @@ mod tests {
                 String::new(),
                 "start me".to_owned(),
                 0,
+                super::SurfaceDelivery::default(),
                 None,
             )
             .await;
