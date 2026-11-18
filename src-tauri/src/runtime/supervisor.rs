@@ -24,6 +24,7 @@ use super::{
     self_update::SelfUpdate,
     streaming::settle_orphaned_streaming_messages,
     surface::{append_surface_context, same_codex_surface, CodexActiveTurnScheduleState},
+    wake::SupervisorWake,
 };
 use crate::{
     agent_inbox_wake::{
@@ -465,6 +466,7 @@ pub(crate) async fn run_supervisor() -> CommandResult<()> {
     let mut last_command_cleanup = Instant::now() - Duration::from_secs(3600);
     let mut last_maintenance = Instant::now();
     let mut error_backoff = SUPERVISOR_ERROR_BACKOFF_INITIAL;
+    let mut wake = SupervisorWake::connect(&pool).await;
 
     loop {
         match run_supervisor_iteration(
@@ -483,7 +485,9 @@ pub(crate) async fn run_supervisor() -> CommandResult<()> {
             }
             Ok(SupervisorIteration::Waiting) => {
                 error_backoff = SUPERVISOR_ERROR_BACKOFF_INITIAL;
-                sleep(SUPERVISOR_IDLE_SLEEP).await;
+                // The next pass starts as soon as there is something for it,
+                // and after the idle interval at the latest.
+                wake.wait(SUPERVISOR_IDLE_SLEEP).await;
             }
             Ok(SupervisorIteration::NewerBuildCanTakeOver) => {
                 error_backoff = SUPERVISOR_ERROR_BACKOFF_INITIAL;
