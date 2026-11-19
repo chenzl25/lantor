@@ -39,7 +39,7 @@ removed `memory_append` and `memory_compact` types get a note to edit
 | `activity` | Write a compact hidden progress/activity event. |
 | `usage` | Record token and cost usage. |
 | `profile_update` | Update the current agent profile. |
-| `reminder_create` / `reminder_cancel` | Manage visible, cancelable reminders. Recurrence is `none`, `daily`, `weekly`, or `interval` (a loop; see below). |
+| `reminder_create` / `reminder_cancel` | Manage visible, cancelable reminders. Recurrence is `none`, `daily`, `weekly`, or `interval` (a loop; see below). The agent prompt teaches the `reminder-create`, `reminder-cancel` and `reminder-list` context tool commands instead, which print the reminder id; the control lines remain accepted. |
 | `task_create` / `task_status` | Create a durable task or update its status. |
 | `task_claim` | Atomically claim an unassigned task. Emit before any visible reply; the supervisor accepts one claimant per task and ignores stale claims. |
 | `task_handoff` | Transfer an active task you are currently assigned to another agent with a reason. |
@@ -72,16 +72,19 @@ set. `reminder_create` and `decision_request` already default this way.
 
 A loop is a repeating reminder with a check command. Lantor's reminder worker
 runs the command on schedule without waking a model, so a quiet tick costs
-nothing and leaves no message:
+nothing and leaves no message. Agents create one with `reminder-create`, which
+prints the loop's id; a `reminder_create` control line with the same fields
+(plus `"type"`) works too:
 
-```json
+```bash
+"$LANTOR_CONTEXT_TOOL" --agent-context-tool reminder-create --stdin <<'JSON'
 {
-  "type": "reminder_create",
   "title": "Forward #github-pulls",
   "interval_minutes": 5,
   "check_command": "\"$HOME/tools/slack-forward/run.sh\" state.json",
   "check_action": "post"
 }
+JSON
 ```
 
 - `interval_minutes` (1 minute to 7 days) sets `recurrence` to `interval`
@@ -109,7 +112,7 @@ nothing and leaves no message:
 - Loops need an agent creator, a channel the agent belongs to, and a
   repeating recurrence. The owner sees them with their last check and next
   run in the agent's Reminders tab and can stop them there; agents stop them
-  with `reminder_cancel`.
+  with `reminder-cancel` (or the `reminder_cancel` control line).
 
 Claude Code's own `/loop`, cron, and `ScheduleWakeup` are disabled in Lantor:
 a provider-side wakeup has no Lantor request, channel, or thread to answer.

@@ -51,6 +51,11 @@ fn runtime_standing_prompt_excludes_memory_snapshot() {
     assert_eq!(prompt.matches("do not poll inbox-list").count(), 1);
     assert!(prompt.contains("Same-thread recent context"));
     assert!(prompt.contains("Write in the language of the owner's latest message"));
+    // Reminders are managed through commands that return their id.
+    assert!(prompt.contains("--agent-context-tool reminder-create --stdin"));
+    assert!(prompt.contains("--agent-context-tool reminder-cancel --reminder-id"));
+    assert!(prompt.contains("--agent-context-tool reminder-list"));
+    assert!(!prompt.contains(r#"LANTOR_EVENT {"type":"reminder_"#));
     assert!(prompt.contains("Reply briefly to direct greetings"));
     assert!(prompt.contains("Agent context tools"));
     assert!(prompt.contains("inbox-list"));

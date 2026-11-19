@@ -612,6 +612,155 @@ async fn record_stream_event_rejection(
     .await
 }
 
+/// A reminder or loop an agent asks for, from a `reminder_create` control
+/// line or the `reminder-create` context tool command.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct ReminderRequest {
+    #[serde(default)]
+    pub(crate) channel: Option<String>,
+    #[serde(default)]
+    pub(crate) channel_id: Option<Uuid>,
+    #[serde(default)]
+    pub(crate) thread_root_id: Option<Uuid>,
+    #[serde(default)]
+    pub(crate) message_id: Option<Uuid>,
+    pub(crate) title: String,
+    #[serde(default)]
+    pub(crate) note: Option<String>,
+    #[serde(alias = "when", alias = "dueAt", default)]
+    pub(crate) due_at: Option<String>,
+    #[serde(alias = "cadence", default)]
+    pub(crate) recurrence: Option<String>,
+    #[serde(alias = "every_minutes", default)]
+    pub(crate) interval_minutes: Option<i64>,
+    #[serde(default)]
+    pub(crate) check_command: Option<String>,
+    #[serde(default)]
+    pub(crate) check_action: Option<String>,
+}
+
+/// What Lantor scheduled for a [`ReminderRequest`].
+#[derive(Debug)]
+pub(crate) struct ScheduledReminder {
+    pub(crate) id: Uuid,
+    pub(crate) due_at: chrono::DateTime<chrono::Utc>,
+    pub(crate) recurrence: String,
+    pub(crate) interval_seconds: Option<i64>,
+    pub(crate) channel_id: Option<Uuid>,
+    pub(crate) thread_root_id: Option<Uuid>,
+}
+
+/// Schedules an agent's reminder. Without a channel it goes to the
+/// conversation of `run_id`, the agent's current turn.
+pub(crate) async fn schedule_agent_reminder(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    run_id: Option<Uuid>,
+    request: ReminderRequest,
+) -> CommandResult<ScheduledReminder> {
+    let ReminderRequest {
+        channel,
+        channel_id,
+        thread_root_id,
+        message_id,
+        title,
+        note,
+        due_at,
+        recurrence,
+        interval_minutes,
+        check_command,
+        check_action,
+    } = request;
+    // interval_minutes alone means a loop; its first tick defaults to now.
+    let recurrence = recurrence.or_else(|| interval_minutes.map(|_| "interval".to_owned()));
+    let due_at = match (due_at, interval_minutes) {
+        (Some(due_at), _) => parse_due_at(&due_at)?,
+        (None, Some(_)) => chrono::Utc::now(),
+        (None, None) => {
+            return Err("reminder_create requires a when or due_at ISO8601 timestamp".to_owned())
+        }
+    };
+    let interval_seconds = match interval_minutes {
+        Some(minutes) => Some(
+            minutes
+                .checked_mul(60)
+                .ok_or_else(|| "interval_minutes is too large".to_owned())?,
+        ),
+        None => None,
+    };
+    let (default_channel_id, default_thread_root_id, default_message_id) = match run_id {
+        Some(run_id) => resolve_run_reminder_anchor(pool, agent_id, run_id).await?,
+        None => (None, None, None),
+    };
+    let resolved_channel_id = if channel_id.is_some() || channel.is_some() {
+        Some(resolve_event_channel(pool, channel_id, channel.as_deref()).await?)
+    } else {
+        default_channel_id
+    };
+    let thread_root_id = thread_root_id.or(default_thread_root_id);
+    let recurrence = recurrence.unwrap_or_else(|| "none".to_owned());
+    let reminder_id = create_reminder_in_pool(
+        pool,
+        Some(agent_id),
+        resolved_channel_id,
+        thread_root_id,
+        message_id.or(default_message_id),
+        &title,
+        note.as_deref().unwrap_or(""),
+        due_at,
+        &recurrence,
+        ReminderLoopOptions {
+            interval_seconds,
+            check_command: check_command.clone().unwrap_or_default(),
+            check_action: check_action.clone().unwrap_or_default(),
+        },
+    )
+    .await?;
+    record_agent_activity(
+        pool,
+        Some(agent_id),
+        run_id,
+        "reminder",
+        "Reminder scheduled",
+        json!({
+            "reminder_id": reminder_id,
+            "title": title.trim(),
+            "due_at": due_at.to_rfc3339(),
+            "recurrence": recurrence,
+            "interval_seconds": interval_seconds,
+            "check_action": check_action.unwrap_or_default(),
+        })
+        .to_string(),
+    )
+    .await?;
+    Ok(ScheduledReminder {
+        id: reminder_id,
+        due_at,
+        recurrence,
+        interval_seconds,
+        channel_id: resolved_channel_id,
+        thread_root_id,
+    })
+}
+
+pub(crate) async fn cancel_agent_reminder(
+    pool: &SqlitePool,
+    agent_id: Uuid,
+    run_id: Option<Uuid>,
+    reminder_id: Uuid,
+) -> CommandResult<()> {
+    cancel_reminder_in_pool(pool, reminder_id).await?;
+    record_agent_activity(
+        pool,
+        Some(agent_id),
+        run_id,
+        "reminder",
+        "Reminder cancelled",
+        json!({ "reminder_id": reminder_id }).to_string(),
+    )
+    .await
+}
+
 pub(crate) async fn handle_agent_event(
     pool: &SqlitePool,
     agent_id: Uuid,
@@ -1013,79 +1162,29 @@ pub(crate) async fn handle_agent_event(
             check_command,
             check_action,
         } => {
-            // interval_minutes alone means a loop; its first tick defaults to now.
-            let recurrence = recurrence.or_else(|| interval_minutes.map(|_| "interval".to_owned()));
-            let due_at = match (due_at, interval_minutes) {
-                (Some(due_at), _) => parse_due_at(&due_at)?,
-                (None, Some(_)) => chrono::Utc::now(),
-                (None, None) => {
-                    return Err(
-                        "reminder_create requires a when or due_at ISO8601 timestamp".to_owned(),
-                    )
-                }
-            };
-            let interval_seconds = match interval_minutes {
-                Some(minutes) => Some(
-                    minutes
-                        .checked_mul(60)
-                        .ok_or_else(|| "interval_minutes is too large".to_owned())?,
-                ),
-                None => None,
-            };
-            let (default_channel_id, default_thread_root_id, default_message_id) =
-                resolve_run_reminder_anchor(pool, agent_id, run_id).await?;
-            let resolved_channel_id = if channel_id.is_some() || channel.is_some() {
-                Some(resolve_event_channel(pool, channel_id, channel.as_deref()).await?)
-            } else {
-                default_channel_id
-            };
-            let reminder_id = create_reminder_in_pool(
+            let reminder = schedule_agent_reminder(
                 pool,
-                Some(agent_id),
-                resolved_channel_id,
-                thread_root_id.or(default_thread_root_id),
-                message_id.or(default_message_id),
-                &title,
-                note.as_deref().unwrap_or(""),
-                due_at,
-                recurrence.as_deref().unwrap_or("none"),
-                ReminderLoopOptions {
-                    interval_seconds,
-                    check_command: check_command.clone().unwrap_or_default(),
-                    check_action: check_action.clone().unwrap_or_default(),
+                agent_id,
+                Some(run_id),
+                ReminderRequest {
+                    channel,
+                    channel_id,
+                    thread_root_id,
+                    message_id,
+                    title,
+                    note,
+                    due_at,
+                    recurrence,
+                    interval_minutes,
+                    check_command,
+                    check_action,
                 },
             )
             .await?;
-            record_agent_activity(
-                pool,
-                Some(agent_id),
-                Some(run_id),
-                "reminder",
-                "Reminder scheduled",
-                json!({
-                    "reminder_id": reminder_id,
-                    "title": title.trim(),
-                    "due_at": due_at.to_rfc3339(),
-                    "recurrence": recurrence.unwrap_or_else(|| "none".to_owned()),
-                    "interval_seconds": interval_seconds,
-                    "check_action": check_action.unwrap_or_default(),
-                })
-                .to_string(),
-            )
-            .await?;
-            Ok(format!("reminder created {reminder_id}"))
+            Ok(format!("reminder created {}", reminder.id))
         }
         AgentEvent::ReminderCancel { reminder_id } => {
-            cancel_reminder_in_pool(pool, reminder_id).await?;
-            record_agent_activity(
-                pool,
-                Some(agent_id),
-                Some(run_id),
-                "reminder",
-                "Reminder cancelled",
-                json!({ "reminder_id": reminder_id }).to_string(),
-            )
-            .await?;
+            cancel_agent_reminder(pool, agent_id, Some(run_id), reminder_id).await?;
             Ok(format!("reminder cancelled {reminder_id}"))
         }
         AgentEvent::Usage {
