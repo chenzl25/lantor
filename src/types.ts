@@ -28,12 +28,38 @@ export type AgentSubscriptionWindow = {
   resets_at: number | null;
 };
 
+/** Credits on an account that bills them instead of usage windows. */
+export type AgentCredits = {
+  unlimited: boolean;
+  /** In the provider's own units; null when unlimited. */
+  balance: string | null;
+};
+
 export type AgentSubscriptionStatus = {
   provider: string;
   plan: string | null;
   status: string;
   windows: AgentSubscriptionWindow[];
   observed_at: string;
+  /** `windows`, `credits` or `metered`; empty for snapshots from before Lantor told them apart. */
+  billing: string;
+  credits: AgentCredits | null;
+  /** The provider account, so agents sharing one can be added up. */
+  account_id: string | null;
+};
+
+/** Estimated spend, at list price, over rolling windows ending now. */
+export type SpendTotals = {
+  last_day_micros: number;
+  last_week_micros: number;
+  last_month_micros: number;
+  runs_last_month: number;
+};
+
+export type AgentSpend = {
+  agent: SpendTotals;
+  /** Every agent whose provider account is this agent's; null when the account is unknown. */
+  account: { agent_count: number; totals: SpendTotals } | null;
 };
 
 export type AgentToolSummary = { name: string; description: string };

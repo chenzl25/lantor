@@ -1,4 +1,13 @@
-import { RUNTIME_PRESETS, type Agent, type AgentSubscriptionWindow } from "../types";
+import { useEffect, useState } from "react";
+import { apiInvoke } from "../apiClient";
+import {
+  RUNTIME_PRESETS,
+  type Agent,
+  type AgentSpend,
+  type AgentSubscriptionStatus,
+  type AgentSubscriptionWindow,
+  type SpendTotals,
+} from "../types";
 import { formatRelativeTime } from "../ui-utils";
 
 function titleCaseIdentifier(value: string) {
@@ -61,8 +70,108 @@ function runtimeLabel(runtime: string) {
   return RUNTIME_PRESETS[runtime]?.label ?? runtime;
 }
 
+export function formatSpend(micros: number) {
+  if (micros > 0 && micros < 10_000) return "<$0.01";
+  const dollars = micros / 1_000_000;
+  return `$${dollars.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** What the account has instead of usage windows: credits, or billing per use. */
+export function creditsSummary(subscription: Pick<AgentSubscriptionStatus, "status" | "credits">) {
+  const credits = subscription.credits;
+  const note = subscription.status === "limited" ? "Spend limit reached" : "No usage windows";
+  if (credits?.unlimited) return { label: "Credits", value: "Unlimited", note };
+  if (credits?.balance != null) {
+    const balance = Number(credits.balance);
+    const value = Number.isFinite(balance)
+      ? balance.toLocaleString("en-US", { maximumFractionDigits: 2 })
+      : credits.balance;
+    return { label: "Credits", value: `${value} left`, note };
+  }
+  return { label: "Billing", value: "Pay as you go", note };
+}
+
+/** The agent's spend, read when the card shows and again after each new usage snapshot. */
+function useAgentSpend(agentId: string | undefined, observedAt: string) {
+  const [spend, setSpend] = useState<AgentSpend | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (!agentId) return;
+    let current = true;
+    apiInvoke("load_agent_spend", { agentId }).then(
+      (next) => {
+        if (!current) return;
+        setSpend(next);
+        setFailed(false);
+      },
+      () => {
+        if (current) setFailed(true);
+      },
+    );
+    return () => { current = false; };
+  }, [agentId, observedAt]);
+  return { spend, failed };
+}
+
+function SpendRow({ label, totals }: { label: string; totals: SpendTotals }) {
+  return (
+    <div className="subscription-spend-row">
+      <span>{label}</span>
+      <dl>
+        <div><dt>24h</dt><dd>{formatSpend(totals.last_day_micros)}</dd></div>
+        <div><dt>7d</dt><dd>{formatSpend(totals.last_week_micros)}</dd></div>
+        <div><dt>30d</dt><dd>{formatSpend(totals.last_month_micros)}</dd></div>
+      </dl>
+    </div>
+  );
+}
+
+/**
+ * For accounts without usage windows (API keys, enterprise and credit plans):
+ * the credits state and what was spent lately, since there is no "percent
+ * left" to show.
+ */
+function WindowlessUsage({ agentId, subscription }: { agentId: string | undefined; subscription: AgentSubscriptionStatus }) {
+  const { spend, failed } = useAgentSpend(agentId, subscription.observed_at);
+  const credits = creditsSummary(subscription);
+  const account = spend?.account && spend.account.agent_count > 1 ? spend.account : null;
+  return (
+    <div className="subscription-grid windowless">
+      <div className={`subscription-card tone-${subscription.status === "limited" ? "danger" : "available"}`}>
+        <div className="subscription-card-head">
+          <span>{credits.label}</span>
+          <strong>{credits.value}</strong>
+        </div>
+        <div className="subscription-card-meta">
+          <span>{credits.note}</span>
+        </div>
+      </div>
+      <div className="subscription-card subscription-spend">
+        <div className="subscription-card-head">
+          <span>Est. spend</span>
+        </div>
+        {spend ? (
+          <>
+            <SpendRow label="This agent" totals={spend.agent} />
+            {account && <SpendRow label={`All ${account.agent_count} agents on this account`} totals={account.totals} />}
+          </>
+        ) : (
+          <div className="subscription-card-meta">
+            <span>{failed ? "Couldn’t load spend" : "Loading…"}</span>
+          </div>
+        )}
+        <div className="subscription-card-meta">
+          <span title="Lantor prices each run’s tokens at the model’s list price. It doesn’t know discounts or contract rates.">
+            List-price estimate, not the bill
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function AgentSubscriptionUsage({ agent, compact = false }: {
-  agent: Pick<Agent, "runtime"> & Partial<Pick<Agent, "subscription_status">>;
+  agent: Pick<Agent, "runtime"> & Partial<Pick<Agent, "id" | "subscription_status">>;
   compact?: boolean;
 }) {
   const subscription = agent.subscription_status;
@@ -123,10 +232,7 @@ export function AgentSubscriptionUsage({ agent, compact = false }: {
               })}
             </div>
           ) : (
-            <div className="subscription-empty">
-              <strong>No usage info</strong>
-              <span>This account doesn’t share usage.</span>
-            </div>
+            <WindowlessUsage agentId={agent.id} subscription={subscription} />
           )}
         </>
       ) : (

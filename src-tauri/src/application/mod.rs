@@ -11,6 +11,7 @@ pub(crate) mod decisions;
 pub(crate) mod github;
 pub(crate) mod inbox;
 pub(crate) mod messages;
+pub(crate) mod spend;
 pub(crate) mod tasks;
 pub(crate) mod wiki;
 

@@ -45,6 +45,21 @@ pub(crate) struct AgentSubscriptionStatus {
     pub(crate) status: String,
     pub(crate) windows: Vec<AgentSubscriptionWindow>,
     pub(crate) observed_at: String,
+    /// How the account is billed: `windows` (a plan with usage windows),
+    /// `credits` (a credit balance or unlimited credits, no windows) or
+    /// `metered` (pay per use, such as an API key). Empty for snapshots
+    /// stored before Lantor told them apart.
+    pub(crate) billing: String,
+    pub(crate) credits: Option<AgentCredits>,
+    /// The provider's account id, shared by agents on the same account.
+    pub(crate) account_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
+pub(crate) struct AgentCredits {
+    pub(crate) unlimited: bool,
+    /// The remaining balance as the provider reports it, in its own units.
+    pub(crate) balance: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]

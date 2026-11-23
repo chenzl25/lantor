@@ -433,6 +433,9 @@ test("subscription status upsert updates only its agent without a bootstrap", ()
       },
     ],
     observed_at: NOW,
+    billing: "windows",
+    credits: null,
+    account_id: null,
   };
 
   const result = applyBackendEvent(

@@ -237,6 +237,7 @@ fn api_router(state: Arc<WebState>) -> Router {
         )
         .route("/api/check_runtime", post(api_check_runtime))
         .route("/api/load_cli_version", post(api_load_cli_version))
+        .route("/api/load_agent_spend", post(api_load_agent_spend))
         .route("/api/report_client_crash", post(api_report_client_crash))
         .route("/api/events", get(api_events))
         .route(
@@ -551,6 +552,16 @@ async fn api_load_cli_version(
     Json(request): Json<CliRuntimeRequest>,
 ) -> Result<impl IntoResponse, Response> {
     cli_updates::load_status(request)
+        .await
+        .map(Json)
+        .map_err(api_error)
+}
+
+async fn api_load_agent_spend(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<AgentIdRequest>,
+) -> Result<impl IntoResponse, Response> {
+    crate::application::spend::load_agent_spend(&state.pool, request.agent_id)
         .await
         .map(Json)
         .map_err(api_error)

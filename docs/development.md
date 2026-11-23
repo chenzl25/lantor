@@ -127,6 +127,10 @@ installed. Each suite has an npm script, for example:
   and the avatar hover card: the update offer, the request it sends to the
   agent's DM, and the version read again afterwards (see
   [`agent-runtime.md`](agent-runtime.md#cli-updates)).
+- `npm run test:subscription-usage` checks the usage card for an account
+  without usage windows in the profile and the avatar hover card: credits,
+  the agent's and the account's spend, and a stopped account (see
+  [`agent-runtime.md`](agent-runtime.md#plan-usage)).
 - `npm run test:composer-drafts` checks that unsent channel and thread text
   comes back after a reload, that sending clears it, and that two tabs keep
   each other's drafts (see [`web-access.md`](web-access.md#unsent-drafts)).

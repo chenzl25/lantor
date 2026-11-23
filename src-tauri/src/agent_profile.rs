@@ -9,7 +9,7 @@ use crate::{
     attachments::remove_attachment_files,
     db::expand_home_path,
     events::activity::record_agent_activity,
-    models::{Agent, AgentSubscriptionStatus, AgentSubscriptionWindow, OwnerProfile},
+    models::{Agent, AgentCredits, AgentSubscriptionStatus, AgentSubscriptionWindow, OwnerProfile},
     prompts::ensure_agent_workspace,
     runtime::warm::request_restart_in_tx,
 };
@@ -650,7 +650,10 @@ async fn load_agents_with_details(
             subscription.plan as subscription_plan,
             subscription.status as subscription_status,
             subscription.windows_json as subscription_windows_json,
-            subscription.observed_at as subscription_observed_at
+            subscription.observed_at as subscription_observed_at,
+            subscription.billing as subscription_billing,
+            subscription.credits_json as subscription_credits_json,
+            subscription.account_id as subscription_account_id
         from agents a
         left join agent_subscription_status subscription on subscription.agent_id = a.id
         where ($1 is null or a.id = $1)
@@ -690,6 +693,13 @@ async fn load_agents_with_details(
                     observed_at: row
                         .get::<Option<String>, _>("subscription_observed_at")
                         .unwrap_or_default(),
+                    billing: row
+                        .get::<Option<String>, _>("subscription_billing")
+                        .unwrap_or_default(),
+                    credits: row
+                        .get::<Option<String>, _>("subscription_credits_json")
+                        .and_then(|json| serde_json::from_str::<AgentCredits>(&json).ok()),
+                    account_id: row.get("subscription_account_id"),
                 })
             });
             Agent {

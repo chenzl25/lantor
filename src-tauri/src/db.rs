@@ -1069,6 +1069,15 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "integer not null default 0",
     )
     .await?;
+    ensure_text_column(
+        pool,
+        "agent_subscription_status",
+        "billing",
+        "text not null default ''",
+    )
+    .await?;
+    ensure_text_column(pool, "agent_subscription_status", "credits_json", "text").await?;
+    ensure_text_column(pool, "agent_subscription_status", "account_id", "text").await?;
     ensure_text_column(pool, "reminders", "recurrence_anchor_at", "text").await?;
     ensure_integer_column(pool, "reminders", "interval_seconds", "integer").await?;
     for column in [
