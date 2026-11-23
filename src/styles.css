@@ -9674,6 +9674,53 @@ body.resizing-column * {
   font-size: var(--type-size-meta);
 }
 
+.subscription-grid.windowless {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.subscription-spend-row {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.subscription-spend-row > span {
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: var(--type-size-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subscription-spend-row dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.subscription-spend-row dl > div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.subscription-spend-row dt {
+  color: var(--ink-muted);
+  font-size: var(--type-size-caption);
+}
+
+.subscription-spend-row dd {
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink-primary);
+  font-size: var(--type-size-body);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--type-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-avatar-subscription {
   display: grid;
   grid-column: 1 / -1;

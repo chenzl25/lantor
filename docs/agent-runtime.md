@@ -281,6 +281,31 @@ and an agent's daily budget is compared with the same cost.
 - Runs recorded before cached input was counted keep their figures: for
   Claude uncached input and output only, for Codex the last request only.
 
+### Plan usage
+
+Each agent keeps the latest usage snapshot from its provider
+(`src-tauri/src/subscription_status.rs`, table `agent_subscription_status`).
+The avatar hover card and Profile show it. `billing` says what kind of
+account the snapshot describes:
+
+- `windows`: a subscription with usage windows, such as five hours and a week.
+  Claude sends them in `rate_limit_event`, Codex in
+  `account/rateLimits/read`. The card shows how much of each is left and when
+  it resets.
+- `credits`: a Codex account without windows that has credits, unlimited or a
+  balance in the provider's own units. Enterprise plans such as `ent26` report
+  this. `spendControlReached` marks the account as stopped.
+- `metered`: billed per use, with neither windows nor credits. Claude reports
+  this through `apiKeySource` in `system/init`: anything but `none` (a
+  claude.ai login) is an API key or a Console login.
+
+Without windows the card shows the credits state and the spend recorded in
+`agent_runs.cost_micros` over the last 24 hours, 7 days and 30 days
+(`/api/load_agent_spend`). Codex names its account (`accountId`), so the card
+also adds up every agent whose latest snapshot names the same account. The
+spend is the list-price estimate above, not the bill: Lantor does not know
+discounts or contract rates.
+
 ## Supervisor Updates
 
 The supervisor runs the app's own executable. When that file is rebuilt or

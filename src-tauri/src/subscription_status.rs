@@ -4,7 +4,7 @@ use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::app::{to_string, CommandResult};
-use crate::models::{AgentSubscriptionStatus, AgentSubscriptionWindow};
+use crate::models::{AgentCredits, AgentSubscriptionStatus, AgentSubscriptionWindow};
 use crate::ui_notifications::{enqueue_ui_event_in_tx, UiEvent};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -13,7 +13,15 @@ pub(crate) struct AgentSubscriptionSnapshot {
     pub(crate) plan: Option<String>,
     pub(crate) status: String,
     pub(crate) windows: Vec<AgentSubscriptionWindow>,
+    /// `windows`, `credits` or `metered`; see [`AgentSubscriptionStatus`].
+    pub(crate) billing: String,
+    pub(crate) credits: Option<AgentCredits>,
+    pub(crate) account_id: Option<String>,
 }
+
+const BILLING_WINDOWS: &str = "windows";
+const BILLING_CREDITS: &str = "credits";
+const BILLING_METERED: &str = "metered";
 
 pub(crate) async fn persist_agent_subscription_status(
     pool: &SqlitePool,
@@ -21,20 +29,30 @@ pub(crate) async fn persist_agent_subscription_status(
     snapshot: &AgentSubscriptionSnapshot,
 ) -> CommandResult<()> {
     let windows_json = serde_json::to_string(&snapshot.windows).map_err(to_string)?;
+    let credits_json = snapshot
+        .credits
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(to_string)?;
     let observed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let mut transaction = pool.begin().await.map_err(to_string)?;
     sqlx::query(
         r#"
         insert into agent_subscription_status (
-            agent_id, provider, plan, status, windows_json, observed_at
+            agent_id, provider, plan, status, windows_json, observed_at,
+            billing, credits_json, account_id
         )
-        values ($1, $2, $3, $4, $5, $6)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         on conflict (agent_id) do update set
             provider = excluded.provider,
             plan = excluded.plan,
             status = excluded.status,
             windows_json = excluded.windows_json,
-            observed_at = excluded.observed_at
+            observed_at = excluded.observed_at,
+            billing = excluded.billing,
+            credits_json = excluded.credits_json,
+            account_id = excluded.account_id
         "#,
     )
     .bind(agent_id)
@@ -43,6 +61,9 @@ pub(crate) async fn persist_agent_subscription_status(
     .bind(&snapshot.status)
     .bind(windows_json)
     .bind(&observed_at)
+    .bind(&snapshot.billing)
+    .bind(credits_json)
+    .bind(&snapshot.account_id)
     .execute(&mut *transaction)
     .await
     .map_err(to_string)?;
@@ -52,6 +73,9 @@ pub(crate) async fn persist_agent_subscription_status(
         status: snapshot.status.clone(),
         windows: snapshot.windows.clone(),
         observed_at,
+        billing: snapshot.billing.clone(),
+        credits: snapshot.credits.clone(),
+        account_id: snapshot.account_id.clone(),
     };
     enqueue_ui_event_in_tx(
         &mut transaction,
@@ -86,7 +110,9 @@ pub(crate) fn codex_subscription_status_from_response(
     let mut plan = None;
     let mut reached = false;
     let mut windows = Vec::new();
+    let mut credits = None;
     for (bucket_key, snapshot) in snapshots {
+        credits = credits.or_else(|| codex_credits(snapshot));
         plan = plan.or_else(|| {
             snapshot
                 .get("planType")
@@ -138,18 +164,60 @@ pub(crate) fn codex_subscription_status_from_response(
         }
     }
 
-    let status = quota_status(reached, &windows);
+    let billing = if !windows.is_empty() {
+        BILLING_WINDOWS
+    } else if credits.is_some() {
+        BILLING_CREDITS
+    } else {
+        BILLING_METERED
+    };
+    let status = if windows.is_empty() {
+        // Nothing to measure against: the account works until it is stopped.
+        if reached { "limited" } else { "available" }.to_owned()
+    } else {
+        quota_status(reached, &windows)
+    };
     Some(AgentSubscriptionSnapshot {
         provider: "codex".to_owned(),
         plan,
         status,
         windows,
+        billing: billing.to_owned(),
+        credits,
+        account_id: result
+            .get("accountId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+            .map(str::to_owned),
     })
+}
+
+/// A rate limit bucket's credits: unlimited, or a balance in the provider's
+/// own units. `None` when the account has no credits.
+fn codex_credits(snapshot: &Value) -> Option<AgentCredits> {
+    let credits = snapshot.get("credits")?.as_object()?;
+    let unlimited = credits
+        .get("unlimited")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let balance = credits.get("balance").and_then(|balance| match balance {
+        Value::String(text) => Some(text.trim().to_owned()),
+        Value::Number(number) => Some(number.to_string()),
+        _ => None,
+    });
+    let has_credits = credits
+        .get("hasCredits")
+        .and_then(Value::as_bool)
+        .unwrap_or(unlimited || balance.is_some());
+    (has_credits && (unlimited || balance.is_some())).then_some(AgentCredits { unlimited, balance })
 }
 
 pub(crate) fn claude_subscription_status_from_event(
     value: &Value,
 ) -> Option<AgentSubscriptionSnapshot> {
+    if let Some(snapshot) = claude_api_key_status_from_init(value) {
+        return Some(snapshot);
+    }
     if value.get("type").and_then(Value::as_str) != Some("rate_limit_event") {
         return None;
     }
@@ -207,7 +275,39 @@ pub(crate) fn claude_subscription_status_from_event(
         provider: "claude".to_owned(),
         plan: None,
         status,
+        billing: if windows.is_empty() {
+            BILLING_METERED
+        } else {
+            BILLING_WINDOWS
+        }
+        .to_owned(),
         windows,
+        credits: None,
+        account_id: None,
+    })
+}
+
+/// Claude Code's `init` names where its credentials come from. Anything but
+/// `none` (a claude.ai login, which reports usage windows) is an API key,
+/// billed per use and without usage windows.
+fn claude_api_key_status_from_init(value: &Value) -> Option<AgentSubscriptionSnapshot> {
+    if value.get("type").and_then(Value::as_str) != Some("system")
+        || value.get("subtype").and_then(Value::as_str) != Some("init")
+    {
+        return None;
+    }
+    let source = value.get("apiKeySource").and_then(Value::as_str)?.trim();
+    if source.is_empty() || source.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    Some(AgentSubscriptionSnapshot {
+        provider: "claude".to_owned(),
+        plan: Some("API key".to_owned()),
+        status: "available".to_owned(),
+        windows: Vec::new(),
+        billing: BILLING_METERED.to_owned(),
+        credits: None,
+        account_id: None,
     })
 }
 
@@ -279,7 +379,7 @@ mod tests {
     use serde_json::json;
 
     use crate::agent_profile::load_agents;
-    use crate::models::AgentSubscriptionWindow;
+    use crate::models::{AgentCredits, AgentSubscriptionWindow};
     use crate::test_support::{drop_test_schema, insert_test_agent, test_pool};
 
     use super::{
@@ -322,6 +422,89 @@ mod tests {
         assert_eq!(snapshot.windows[0].label, "5-hour");
         assert_eq!(snapshot.windows[1].label, "Weekly");
         assert_eq!(snapshot.windows[1].used_percent, 81.0);
+        assert_eq!(snapshot.billing, "windows");
+    }
+
+    #[test]
+    fn codex_enterprise_without_windows_reports_its_credits_and_account() {
+        let response = |credits: serde_json::Value, reached: bool| {
+            json!({
+                "id": 7,
+                "result": {
+                    "rateLimits": {
+                        "limitId": "codex",
+                        "primary": null,
+                        "secondary": null,
+                        "credits": credits,
+                        "individualLimit": null,
+                        "spendControlReached": reached,
+                        "planType": "ent26",
+                        "rateLimitReachedType": null
+                    },
+                    "rateLimitsByLimitId": null,
+                    "accountId": "account-1"
+                }
+            })
+        };
+
+        let unlimited = codex_subscription_status_from_response(&response(
+            json!({ "hasCredits": true, "unlimited": true, "balance": null }),
+            false,
+        ))
+        .expect("enterprise response should parse");
+        assert_eq!(unlimited.plan.as_deref(), Some("ent26"));
+        assert_eq!(unlimited.status, "available");
+        assert!(unlimited.windows.is_empty());
+        assert_eq!(unlimited.billing, "credits");
+        assert_eq!(
+            unlimited.credits,
+            Some(AgentCredits {
+                unlimited: true,
+                balance: None
+            })
+        );
+        assert_eq!(unlimited.account_id.as_deref(), Some("account-1"));
+
+        let balance = codex_subscription_status_from_response(&response(
+            json!({ "hasCredits": true, "unlimited": false, "balance": "62500.0000000000" }),
+            true,
+        ))
+        .expect("enterprise response should parse");
+        assert_eq!(balance.status, "limited", "spend control stops the account");
+        assert_eq!(
+            balance
+                .credits
+                .and_then(|credits| credits.balance)
+                .as_deref(),
+            Some("62500.0000000000")
+        );
+
+        let metered = codex_subscription_status_from_response(&response(
+            json!({ "hasCredits": false, "unlimited": false, "balance": null }),
+            false,
+        ))
+        .expect("enterprise response should parse");
+        assert_eq!(metered.billing, "metered");
+        assert_eq!(metered.credits, None);
+    }
+
+    #[test]
+    fn claude_api_key_login_is_metered_and_claude_ai_login_waits_for_windows() {
+        let init = |source: &str| json!({ "type": "system", "subtype": "init", "apiKeySource": source, "session_id": "s" });
+        let snapshot = claude_subscription_status_from_event(&init("ANTHROPIC_API_KEY"))
+            .expect("an API key login is metered");
+        assert_eq!(snapshot.provider, "claude");
+        assert_eq!(snapshot.plan.as_deref(), Some("API key"));
+        assert_eq!(snapshot.billing, "metered");
+        assert!(snapshot.windows.is_empty());
+        assert!(claude_subscription_status_from_event(&init("none")).is_none());
+
+        let without_windows = claude_subscription_status_from_event(&json!({
+            "type": "rate_limit_event",
+            "rate_limit_info": { "status": "allowed" }
+        }))
+        .expect("rate-limit event should parse");
+        assert_eq!(without_windows.billing, "metered");
     }
 
     #[test]
@@ -399,6 +582,9 @@ mod tests {
                     used_percent: 24.0,
                     resets_at: Some(1_788_348_600),
                 }],
+                billing: "windows".to_owned(),
+                credits: None,
+                account_id: Some("account-1".to_owned()),
             };
             persist_agent_subscription_status(&pool, agent_id, &snapshot).await?;
 
@@ -411,6 +597,8 @@ mod tests {
             assert_eq!(status.provider, "codex");
             assert_eq!(status.plan.as_deref(), Some("plus"));
             assert_eq!(status.windows, snapshot.windows);
+            assert_eq!(status.billing, "windows");
+            assert_eq!(status.account_id.as_deref(), Some("account-1"));
 
             let refresh_event: String = sqlx::query_scalar(
                 "select json_extract(event_json, '$.type') from ui_events order by id desc limit 1",

@@ -58,7 +58,9 @@ context, tasks track execution, and decisions come back to you.
   with unread counts. Each agent's profile shows its recent activity,
   reminders and workspace files.
 - **Subscription usage**: hover an agent's avatar to see how much of its
-  Codex or Claude plan is left and when it resets.
+  Codex or Claude plan is left and when it resets. Accounts without usage
+  windows, such as API keys and enterprise plans, show their credits and an
+  estimate of recent spend instead.
 
 ### Decide from anywhere
 

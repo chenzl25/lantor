@@ -2,6 +2,7 @@ import type {
   Agent,
   AgentTools,
   AgentActivity,
+  AgentSpend,
   AgentWorkItem,
   AgentWorkspaceFile,
   AgentWorkspaceListing,
@@ -103,6 +104,10 @@ export type ApiContract = {
   load_cli_version: {
     args: { runtime: string };
     result: CliVersionStatus;
+  };
+  load_agent_spend: {
+    args: { agentId: string };
+    result: AgentSpend;
   };
   report_client_crash: {
     args: {
@@ -452,6 +457,7 @@ const API_COMMAND_NAMES = {
   replay_ui_events: true,
   check_runtime: true,
   load_cli_version: true,
+  load_agent_spend: true,
   report_client_crash: true,
   send_message: true,
   load_older_channel_messages: true,
