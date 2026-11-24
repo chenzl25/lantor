@@ -72,6 +72,17 @@ pub(crate) fn normalize_agent_environment_variables(
         .join("\n"))
 }
 
+/// The value an agent's environment sets for `key`. A later line wins, as it
+/// does when the variables are applied to the process.
+pub(crate) fn agent_environment_value(environment_variables: &str, key: &str) -> Option<String> {
+    parse_agent_environment_variables(environment_variables)
+        .ok()?
+        .into_iter()
+        .rev()
+        .find(|variable| variable.key == key)
+        .map(|variable| variable.value)
+}
+
 pub(crate) fn apply_agent_environment_variables(
     command: &mut Command,
     environment_variables: &str,

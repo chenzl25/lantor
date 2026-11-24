@@ -295,14 +295,20 @@ account the snapshot describes:
 - `credits`: a Codex account without windows that has credits, unlimited or a
   balance in the provider's own units. Enterprise plans such as `ent26` report
   this. `spendControlReached` marks the account as stopped.
-- `metered`: billed per use, with neither windows nor credits. Claude reports
-  this through `apiKeySource` in `system/init`: anything but `none` (a
-  claude.ai login) is an API key or a Console login.
+- `metered`: billed per use, with neither windows nor credits. Claude's
+  `system/init` names the credentials in `apiKeySource`. Anything but `none`
+  is an API key or a Console login. `none` is a claude.ai login, whose plan
+  only Claude Code's own config names: the `oauthAccount` in
+  `$CLAUDE_CONFIG_DIR/.claude.json` (the agent's variable first), or in
+  `~/.claude.json`. A `usage_based` seat, as on most Enterprise plans, gets
+  no `rate_limit_event`, so Lantor reads the config at each `init` and stores
+  it as metered. A subscription keeps reporting its windows.
 
 Without windows the card shows the credits state and the spend recorded in
 `agent_runs.cost_micros` over the last 24 hours, 7 days and 30 days
-(`/api/load_agent_spend`). Codex names its account (`accountId`), so the card
-also adds up every agent whose latest snapshot names the same account. The
+(`/api/load_agent_spend`). Codex names its account (`accountId`) and a
+claude.ai login its organization (`organizationUuid`), so the card also adds
+up every agent whose latest snapshot names the same account. The
 spend is the list-price estimate above, not the bill: Lantor does not know
 discounts or contract rates.
 
