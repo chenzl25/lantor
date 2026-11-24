@@ -92,14 +92,18 @@ export function creditsSummary(subscription: Pick<AgentSubscriptionStatus, "stat
 }
 
 /** The agent's spend, read when the card shows and again after each new usage snapshot. */
+/** The last spend read per agent, so a card that opens again starts at its full size. */
+const lastSpend = new Map<string, AgentSpend>();
+
 function useAgentSpend(agentId: string | undefined, observedAt: string) {
-  const [spend, setSpend] = useState<AgentSpend | null>(null);
+  const [spend, setSpend] = useState<AgentSpend | null>(() => (agentId ? lastSpend.get(agentId) ?? null : null));
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     if (!agentId) return;
     let current = true;
     apiInvoke("load_agent_spend", { agentId }).then(
       (next) => {
+        lastSpend.set(agentId, next);
         if (!current) return;
         setSpend(next);
         setFailed(false);

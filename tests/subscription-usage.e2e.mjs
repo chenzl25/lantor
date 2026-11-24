@@ -140,6 +140,31 @@ try {
     assert.deepEqual(hoverErrors, []);
     await browser.close(); browser = null;
     console.log(`✓ ${engineName} hover`);
+
+    // In the sidebar the card opens above the avatar, then grows when the
+    // spend arrives and covers the avatar for a frame before it moves up. The
+    // pointer never left the avatar, so the card stays open.
+    state = freshState(credits(null)); requests.length = 0;
+    browser = await engine.launch();
+    const sidebarPage = await (await browser.newContext({ serviceWorkers: "block", viewport: { width: 1440, height: 900 } })).newPage();
+    sidebarPage.setDefaultTimeout(10000);
+    const sidebarErrors = []; sidebarPage.on("pageerror", error => sidebarErrors.push(error.message));
+    await sidebarPage.goto(`http://127.0.0.1:${api.address().port}`, { waitUntil: "domcontentloaded" });
+    const sidebarAvatar = sidebarPage.locator(".sidebar .dm-avatar-shell .agent-avatar-profile-anchor").first();
+    await sidebarAvatar.hover();
+    const sidebarCard = sidebarPage.getByRole("tooltip");
+    await sidebarCard.getByText("All 2 agents on this account", { exact: true }).waitFor();
+    // Longer than the 120 ms the card waits before it closes after the pointer leaves.
+    await sidebarPage.waitForTimeout(400);
+    assert.equal(await sidebarCard.count(), 1, "the card stays open while the pointer rests on the avatar");
+    const [cardBox, avatarBox] = [await sidebarCard.boundingBox(), await sidebarAvatar.boundingBox()];
+    assert.ok(cardBox.y + cardBox.height <= avatarBox.y, "the card ends above the avatar once placed again");
+    // Leaving the avatar still closes it.
+    await sidebarPage.mouse.move(900, 880);
+    await sidebarCard.waitFor({ state: "detached" });
+    assert.deepEqual(sidebarErrors, []);
+    await browser.close(); browser = null;
+    console.log(`✓ ${engineName} sidebar hover`);
   }
 } finally {
   await browser?.close(); api.close(); for (const client of clients) client.end();
