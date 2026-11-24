@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { cachedIdenticon, diceBearAvatarCache, diceBearKey, parseDiceBearAvatar } from "../avatar-rendering";
 import type { Agent } from "../types";
@@ -268,7 +268,12 @@ export function AgentAvatarWithProfile({
     }
   }, [profilePopoverEnabled, updateProfilePosition]);
 
-  const closeProfile = useCallback(() => {
+  const closeProfile = useCallback((event: ReactMouseEvent) => {
+    // A card that grows can cover the avatar for a frame before it is placed
+    // again. The pointer then leaves the card for the avatar without leaving
+    // the anchor, so the anchor never sees it enter again: stay open.
+    const next = event.relatedTarget;
+    if (next instanceof Node && (anchorRef.current?.contains(next) || cardRef.current?.contains(next))) return;
     if (closeTimerRef.current !== null) clearTimeout(closeTimerRef.current);
     closeTimerRef.current = setTimeout(() => setIsProfileOpen(false), 120);
   }, []);
