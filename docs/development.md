@@ -131,6 +131,9 @@ installed. Each suite has an npm script, for example:
   without usage windows in the profile and the avatar hover card: credits,
   the agent's and the account's spend, and a stopped account (see
   [`agent-runtime.md`](agent-runtime.md#plan-usage)).
+- `npm run test:reply-progress-menu` checks that the menu a working thread's
+  reply summary opens on hover stays above the next message and is not cut
+  off, with one agent and with three.
 - `npm run test:composer-drafts` checks that unsent channel and thread text
   comes back after a reload, that sending clears it, and that two tabs keep
   each other's drafts (see [`web-access.md`](web-access.md#unsent-drafts)).

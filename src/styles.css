@@ -2150,6 +2150,12 @@ button,
     content-visibility: visible;
   }
 
+  /* The active reply menu opens over the next or previous row and can be
+     taller than the clip margin. Hover only: see the focus note above. */
+  .message-render-boundary:has(.thread-reply-summary.active-reply:hover) {
+    content-visibility: visible;
+  }
+
   @media print {
     .message-render-boundary {
       content-visibility: visible;
@@ -2585,6 +2591,13 @@ button,
 
 :root[data-theme="dark"] .thread-reply-active-menu {
   background: var(--bg-panel-strong);
+}
+
+/* Rows render with paint containment, so each later row paints above the
+   menu that overflows into it unless this row is raised while it is open. */
+.message-render-boundary:has(.thread-reply-summary.active-reply:is(:hover, :focus-visible)) {
+  position: relative;
+  z-index: 2;
 }
 
 .thread-reply-summary.active-reply:hover .thread-reply-active-menu,

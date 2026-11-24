@@ -95,7 +95,8 @@ export function MessageReplySummary({ reply, replyCount, unreadReplyCount, onOpe
         type="button"
         className={replySummaryClassName}
         data-active-menu-placement={hasActiveReplyProgress ? activeReplyMenuPlacement : undefined}
-        title="View replies"
+        // The progress menu already shows on hover; a native tooltip would cover it.
+        title={hasActiveReplyProgress ? undefined : "View replies"}
         aria-label={hasActiveReplyProgress
           ? `${activeReplyStatus}${replyingAgents ? `: ${replyingAgents}` : ""}. View thread`
           : `View ${replyCount} ${replyCount === 1 ? "reply" : "replies"} in thread`}

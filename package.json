@@ -15,6 +15,7 @@
     "test:agent-tools": "node tests/agent-tools.e2e.mjs",
     "test:cli-updates": "node tests/cli-updates.e2e.mjs",
     "test:subscription-usage": "node tests/subscription-usage.e2e.mjs",
+    "test:reply-progress-menu": "node tests/reply-progress-menu.e2e.mjs",
     "test:activity": "node tests/activity-feed.e2e.mjs",
     "test:app-shell": "node tests/app-shell.e2e.mjs",
     "test:streaming": "node tests/streaming.e2e.mjs",
