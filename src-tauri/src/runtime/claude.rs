@@ -38,7 +38,8 @@ use crate::runtime::{
     },
 };
 use crate::subscription_status::{
-    claude_subscription_status_from_event, persist_agent_subscription_status,
+    claude_login_status, claude_subscription_status_from_event, is_claude_login_init,
+    persist_agent_subscription_status,
 };
 use crate::ui_notifications::reconcile_work_item_change;
 use crate::usage::{record_turn_usage, RunUsage};
@@ -984,7 +985,12 @@ async fn apply_claude_warm_stdout_line(
             .map(|_| ClaudeLineFlow::Handled);
     }
 
-    if let Some(snapshot) = claude_subscription_status_from_event(&value) {
+    let snapshot = if is_claude_login_init(&value) {
+        claude_login_status(&runtime.environment_variables).await
+    } else {
+        claude_subscription_status_from_event(&value)
+    };
+    if let Some(snapshot) = snapshot {
         persist_agent_subscription_status(pool, agent_id, &snapshot).await?;
     }
 

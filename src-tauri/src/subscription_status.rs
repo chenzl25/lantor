@@ -1,9 +1,15 @@
+use std::env;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
+
 use chrono::{SecondsFormat, Utc};
 use serde_json::Value;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+use crate::agent_environment::agent_environment_value;
 use crate::app::{to_string, CommandResult};
+use crate::db::expand_home_path;
 use crate::models::{AgentCredits, AgentSubscriptionStatus, AgentSubscriptionWindow};
 use crate::ui_notifications::{enqueue_ui_event_in_tx, UiEvent};
 
@@ -287,16 +293,23 @@ pub(crate) fn claude_subscription_status_from_event(
     })
 }
 
-/// Claude Code's `init` names where its credentials come from. Anything but
-/// `none` (a claude.ai login, which reports usage windows) is an API key,
-/// billed per use and without usage windows.
-fn claude_api_key_status_from_init(value: &Value) -> Option<AgentSubscriptionSnapshot> {
+fn claude_init_key_source(value: &Value) -> Option<&str> {
     if value.get("type").and_then(Value::as_str) != Some("system")
         || value.get("subtype").and_then(Value::as_str) != Some("init")
     {
         return None;
     }
-    let source = value.get("apiKeySource").and_then(Value::as_str)?.trim();
+    value
+        .get("apiKeySource")
+        .and_then(Value::as_str)
+        .map(str::trim)
+}
+
+/// Claude Code's `init` names where its credentials come from. Anything but
+/// `none` (a claude.ai login) is an API key, billed per use and without usage
+/// windows.
+fn claude_api_key_status_from_init(value: &Value) -> Option<AgentSubscriptionSnapshot> {
+    let source = claude_init_key_source(value)?;
     if source.is_empty() || source.eq_ignore_ascii_case("none") {
         return None;
     }
@@ -308,6 +321,69 @@ fn claude_api_key_status_from_init(value: &Value) -> Option<AgentSubscriptionSna
         billing: BILLING_METERED.to_owned(),
         credits: None,
         account_id: None,
+    })
+}
+
+/// Whether an event is the `init` of a claude.ai login, whose plan only
+/// Claude Code's config names (see [`claude_login_status`]).
+pub(crate) fn is_claude_login_init(value: &Value) -> bool {
+    claude_init_key_source(value).is_some_and(|source| source.eq_ignore_ascii_case("none"))
+}
+
+/// The plan of the claude.ai login an agent's Claude Code uses, when it has
+/// no usage windows. Claude Code sends no `rate_limit_event` for a
+/// usage-based seat, such as most Enterprise seats, so without this the card
+/// would keep the windows of the account the agent used before. Subscriptions
+/// return `None` and keep reporting through `rate_limit_event`.
+pub(crate) async fn claude_login_status(
+    environment_variables: &str,
+) -> Option<AgentSubscriptionSnapshot> {
+    let config_dir = agent_environment_value(environment_variables, "CLAUDE_CONFIG_DIR")
+        .or_else(|| env::var("CLAUDE_CONFIG_DIR").ok());
+    let path = claude_config_path(config_dir.as_deref(), env::var_os("HOME").as_deref())?;
+    let config = tokio::fs::read(path).await.ok()?;
+    claude_login_status_from_config(&serde_json::from_slice(&config).ok()?)
+}
+
+/// Claude Code keeps its global config in `$CLAUDE_CONFIG_DIR/.claude.json`,
+/// or in `~/.claude.json` when that is not set.
+fn claude_config_path(config_dir: Option<&str>, home: Option<&OsStr>) -> Option<PathBuf> {
+    match config_dir.map(str::trim).filter(|dir| !dir.is_empty()) {
+        Some(dir) => Some(PathBuf::from(expand_home_path(dir)).join(".claude.json")),
+        None => home.map(|home| Path::new(home).join(".claude.json")),
+    }
+}
+
+/// Reads the `oauthAccount` Claude Code stores for its login. A usage-based
+/// seat is billed per use, like an API key; the organization is the account
+/// its agents share.
+fn claude_login_status_from_config(config: &Value) -> Option<AgentSubscriptionSnapshot> {
+    let account = config.get("oauthAccount")?.as_object()?;
+    let text = |key: &str| {
+        account
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let usage_based = text("billingType") == Some("usage_based")
+        || text("seatTier").is_some_and(|tier| tier.ends_with("usage_based"));
+    if !usage_based {
+        return None;
+    }
+    let plan = match text("organizationType") {
+        Some("claude_enterprise") => "Enterprise",
+        Some("claude_team") => "Team",
+        _ => "Usage based",
+    };
+    Some(AgentSubscriptionSnapshot {
+        provider: "claude".to_owned(),
+        plan: Some(plan.to_owned()),
+        status: "available".to_owned(),
+        windows: Vec::new(),
+        billing: BILLING_METERED.to_owned(),
+        credits: None,
+        account_id: text("organizationUuid").map(str::to_owned),
     })
 }
 
@@ -383,7 +459,8 @@ mod tests {
     use crate::test_support::{drop_test_schema, insert_test_agent, test_pool};
 
     use super::{
-        claude_subscription_status_from_event, codex_subscription_status_from_response,
+        claude_config_path, claude_login_status, claude_subscription_status_from_event,
+        codex_subscription_status_from_response, is_claude_login_init,
         persist_agent_subscription_status, AgentSubscriptionSnapshot,
     };
 
@@ -486,6 +563,78 @@ mod tests {
         .expect("enterprise response should parse");
         assert_eq!(metered.billing, "metered");
         assert_eq!(metered.credits, None);
+    }
+
+    #[tokio::test]
+    async fn claude_usage_based_login_is_metered_and_a_subscription_waits_for_windows() {
+        let init =
+            |source: &str| json!({ "type": "system", "subtype": "init", "apiKeySource": source });
+        assert!(is_claude_login_init(&init("none")));
+        assert!(!is_claude_login_init(&init("ANTHROPIC_API_KEY")));
+        assert!(!is_claude_login_init(
+            &json!({ "type": "rate_limit_event" })
+        ));
+
+        // The agent's CLAUDE_CONFIG_DIR picks the config Claude Code reads.
+        let dir =
+            std::env::temp_dir().join(format!("lantor-claude-config-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let environment = format!("CLAUDE_CONFIG_DIR={}", dir.display());
+        let write_account = |account: serde_json::Value| {
+            std::fs::write(
+                dir.join(".claude.json"),
+                json!({ "numStartups": 3, "oauthAccount": account }).to_string(),
+            )
+            .unwrap();
+        };
+
+        write_account(json!({
+            "billingType": "usage_based",
+            "organizationType": "claude_enterprise",
+            "organizationUuid": "org-1",
+            "seatTier": "enterprise_usage_based"
+        }));
+        let snapshot = claude_login_status(&environment)
+            .await
+            .expect("a usage-based seat is metered");
+        assert_eq!(snapshot.provider, "claude");
+        assert_eq!(snapshot.plan.as_deref(), Some("Enterprise"));
+        assert_eq!(snapshot.status, "available");
+        assert_eq!(snapshot.billing, "metered");
+        assert!(snapshot.windows.is_empty());
+        assert_eq!(snapshot.account_id.as_deref(), Some("org-1"));
+
+        write_account(json!({
+            "billingType": "stripe_subscription",
+            "organizationType": "claude_max",
+            "organizationUuid": "org-2"
+        }));
+        assert!(
+            claude_login_status(&environment).await.is_none(),
+            "a subscription keeps reporting its windows through rate_limit_event"
+        );
+
+        std::fs::remove_file(dir.join(".claude.json")).unwrap();
+        assert!(claude_login_status(&environment).await.is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn claude_config_lives_in_the_config_dir_or_the_home_directory() {
+        let home = std::ffi::OsStr::new("/home/owner");
+        assert_eq!(
+            claude_config_path(None, Some(home)),
+            Some(std::path::PathBuf::from("/home/owner/.claude.json"))
+        );
+        assert_eq!(
+            claude_config_path(Some("/srv/claude"), Some(home)),
+            Some(std::path::PathBuf::from("/srv/claude/.claude.json"))
+        );
+        assert_eq!(
+            claude_config_path(Some("  "), Some(home)),
+            Some(std::path::PathBuf::from("/home/owner/.claude.json"))
+        );
+        assert_eq!(claude_config_path(None, None), None);
     }
 
     #[test]
