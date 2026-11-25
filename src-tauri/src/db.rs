@@ -1271,7 +1271,81 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     backfill_agent_run_usage_from_logs(pool).await?;
     fold_legacy_owner_inbox_dismissals(pool).await?;
     messages_fts::migrate(pool).await?;
+    create_foreign_key_indexes(pool).await?;
 
+    Ok(())
+}
+
+/// Child columns of foreign keys that no other index leads with.
+///
+/// SQLite applies `on delete cascade` / `set null` by looking up the child
+/// rows on this column. Without an index it scans the whole child table once
+/// per deleted parent row, so deleting an agent with a long history scanned
+/// `agent_activities` and `agent_runs` hundreds of times inside one write
+/// transaction. A test checks that every foreign key has such an index.
+const FOREIGN_KEY_INDEXES: &[(&str, &str)] = &[
+    ("agent_activities", "run_id"),
+    ("agent_held_outputs", "agent_id"),
+    ("agent_held_outputs", "channel_id"),
+    ("agent_held_outputs", "latest_message_id"),
+    ("agent_held_outputs", "retry_work_item_id"),
+    ("agent_held_outputs", "run_id"),
+    ("agent_held_outputs", "thread_root_id"),
+    ("agent_inbox_items", "channel_id"),
+    ("agent_inbox_items", "source_message_id"),
+    ("agent_inbox_items", "task_id"),
+    ("agent_inbox_items", "thread_root_id"),
+    ("agent_inbox_items", "work_item_id"),
+    ("agent_runs", "agent_id"),
+    ("agent_runs", "work_item_id"),
+    ("agent_target_watermarks", "agent_id"),
+    ("agent_target_watermarks", "channel_id"),
+    ("agent_target_watermarks", "thread_root_id"),
+    ("agent_thread_subscriptions", "channel_id"),
+    ("agent_thread_subscriptions", "last_source_message_id"),
+    ("agent_thread_subscriptions", "thread_root_id"),
+    ("agent_work_items", "agent_id"),
+    ("agent_work_items", "channel_id"),
+    ("agent_work_items", "run_id"),
+    ("agent_work_items", "source_message_id"),
+    ("agent_work_items", "task_id"),
+    ("agent_work_items", "thread_root_id"),
+    ("artifacts", "creator_agent_id"),
+    ("artifacts", "thread_root_id"),
+    ("channel_members", "agent_id"),
+    ("channel_wiki_heads", "head_id"),
+    ("channel_wiki_revisions", "parent_id"),
+    ("channels", "dm_agent_id"),
+    ("decisions", "answer_message_id"),
+    ("decisions", "channel_id"),
+    ("decisions", "requester_agent_id"),
+    ("decisions", "retry_work_item_id"),
+    ("decisions", "task_id"),
+    ("decisions", "thread_root_id"),
+    ("github_resource_threads", "task_id"),
+    ("messages", "sender_agent_id"),
+    ("messages", "thread_root_id"),
+    ("provider_auth_state", "decision_id"),
+    ("reminder_events", "reminder_id"),
+    ("reminders", "channel_id"),
+    ("reminders", "creator_agent_id"),
+    ("reminders", "message_id"),
+    ("reminders", "thread_root_id"),
+    ("supervisor_commands", "agent_id"),
+    ("supervisor_commands", "run_id"),
+    ("supervisor_commands", "work_item_id"),
+    ("tasks", "assignee_agent_id"),
+    ("tasks", "channel_id"),
+];
+
+async fn create_foreign_key_indexes(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    for (table, column) in FOREIGN_KEY_INDEXES {
+        sqlx::query(&format!(
+            "create index if not exists {table}_{column}_fk_idx on {table}({column})"
+        ))
+        .execute(pool)
+        .await?;
+    }
     Ok(())
 }
 
@@ -1296,6 +1370,44 @@ mod tests {
         assert_eq!(
             path.expect("file database path").to_string_lossy(),
             "/tmp/lantor-db-path-test.sqlite"
+        );
+    }
+
+    /// A foreign key's `on delete` action looks up the child rows by the child
+    /// column. Without a full index that leads with that column, SQLite scans
+    /// the whole child table once per deleted parent row, which made deleting
+    /// an agent with a long history take minutes while holding the write lock.
+    #[tokio::test]
+    async fn every_foreign_key_child_column_leads_a_full_index() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let unindexed: Vec<String> = sqlx::query_scalar(
+            r#"
+            select t.name || '.' || fk."from" || ' -> ' || fk."table"
+            from sqlite_master t
+            join pragma_foreign_key_list(t.name) fk
+            where t.type = 'table'
+              and fk.seq = 0
+              and not exists (
+                  select 1
+                  from pragma_index_list(t.name) il
+                  join pragma_index_info(il.name) ii
+                  where il.partial = 0
+                    and ii.seqno = 0
+                    and ii.name = fk."from"
+              )
+            order by 1
+            "#,
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("list foreign keys without an index");
+        drop_test_schema(pool, schema).await;
+        assert!(
+            unindexed.is_empty(),
+            "foreign keys without a full index on the child column:\n{}",
+            unindexed.join("\n")
         );
     }
 
