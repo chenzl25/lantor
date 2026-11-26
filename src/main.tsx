@@ -85,7 +85,8 @@ import { clearWebSignInMarker, isWebSessionExpired, subscribeWebSession } from "
 import { followVisualViewport } from "./visual-viewport";
 import {
   addBackSwipeSample, backSwipeReleaseVelocity, BACK_SWIPE_EDGE_PX, BACK_SWIPE_MAX_VERTICAL_PX,
-  BACK_SWIPE_MIN_HORIZONTAL_PX, BACK_SWIPE_PEEK_PX, BACK_SWIPE_SETTLE_MS, completesBackSwipe, type BackSwipeSample,
+  BACK_SWIPE_MIN_HORIZONTAL_PX, BACK_SWIPE_PEEK_PX, BACK_SWIPE_SETTLE_MS, completesBackSwipe, MOBILE_NAVIGATION_MS,
+  prefersReducedMotion, type BackSwipeSample,
 } from "./mobile-back-swipe";
 import { isServerUnreachable, serverUnreachableMessage, subscribeServerReachability } from "./web-reachability";
 import { useWebOnline } from "./hooks/useWebOnline";
@@ -881,6 +882,9 @@ function App() {
     surface: "sidebar",
     complete: () => {},
   });
+  // Set by the edge-swipe effect: slides the open panel out, then runs the
+  // navigation. Returns false when it cannot, and the caller navigates itself.
+  const slidePanelOutRef = useRef<(navigate: () => void) => boolean>(() => false);
   const [mobileComposerFocused, setMobileComposerFocused] = useState(false);
   const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null);
   const openPushTargetRef = useRef<(target: PushTarget) => void>(() => {});
@@ -2993,20 +2997,31 @@ function App() {
       app = null;
     }
 
-    function settle(complete: boolean) {
+    function settle(complete: boolean, duration = BACK_SWIPE_SETTLE_MS, navigate = () => backSwipeRef.current.complete()) {
       window.removeEventListener("touchmove", onTouchMove, { capture: true });
       window.cancelAnimationFrame(frame);
       frame = 0;
       gesture = null;
-      app?.style.setProperty("--mobile-swipe-duration", `${BACK_SWIPE_SETTLE_MS}ms`);
+      const ms = prefersReducedMotion() ? 0 : duration;
+      app?.style.setProperty("--mobile-swipe-duration", `${ms}ms`);
       setOffset(complete ? window.innerWidth : 0);
       settleTimer = window.setTimeout(() => {
         // Navigate synchronously, so the closed state is on screen before the
         // swipe's own positions are dropped.
-        if (complete) flushSync(() => backSwipeRef.current.complete());
+        if (complete) flushSync(navigate);
         clearSwipe();
-      }, BACK_SWIPE_SETTLE_MS + 40);
+      }, ms + 40);
     }
+
+    // A Back button slides the panel out the way a finished swipe does.
+    slidePanelOutRef.current = (navigate) => {
+      const element = appRef.current;
+      if (!element || !isMobileViewport() || prefersReducedMotion() || gesture || settleTimer) return false;
+      app = element;
+      element.dataset.mobileSwipe = "panel";
+      settle(true, MOBILE_NAVIGATION_MS, navigate);
+      return true;
+    };
 
     function onTouchStart(event: TouchEvent) {
       if (settleTimer) return;
@@ -3074,6 +3089,7 @@ function App() {
       window.removeEventListener("touchstart", onTouchStart, { capture: true });
       window.removeEventListener("touchend", onTouchEnd, { capture: true });
       window.removeEventListener("touchcancel", onTouchCancel, { capture: true });
+      slidePanelOutRef.current = () => false;
       clearSwipe();
     };
   }, []);
@@ -4340,6 +4356,11 @@ function App() {
       return;
     }
     navigateBack(() => dispatchNavigation({ type: "closeAgent" }));
+  }
+
+  // On a phone, the panel slides off before it closes; elsewhere it just closes.
+  function slidePanelOut(close: () => void) {
+    if (!slidePanelOutRef.current(close)) close();
   }
 
   function closeThreadPanel() {
@@ -5616,7 +5637,7 @@ function App() {
           performance={selectedAgentPerformance}
           workItems={selectedAgentWorkItems}
           reminders={data.reminders}
-          onClose={closeSelectedAgent}
+          onClose={() => slidePanelOut(closeSelectedAgent)}
           onDelete={deleteAgent}
           onEdit={(agent) => {
             startEditAgent(agent);
@@ -5662,7 +5683,7 @@ function App() {
           taskTitleDrafts={taskTitleDrafts}
           replyDraft={replyDraft}
           replyAttachments={replyAttachments}
-          onClose={closeThreadPanel}
+          onClose={() => slidePanelOut(closeThreadPanel)}
           setTaskTitleDraft={setTaskTitleDraft}
           saveTaskTitle={saveTaskTitle}
           claimTask={claimTask}

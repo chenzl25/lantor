@@ -2,8 +2,9 @@
 // leave their icons visible, no form control is small enough for iOS to zoom
 // the page, a followed thread stays on its latest reply while the reply box
 // grows, the layout covers what the keyboard leaves visible, a tapped
-// thread message offers Quote, Copy link and Save, and a swipe from the left
-// edge drags the thread back and finishes or snaps back like a native one.
+// thread message offers Quote, Copy link and Save, a swipe from the left edge
+// drags the thread back and finishes or snaps back like a native one, and
+// pages slide in and out like a navigation stack.
 // Run npm run build first. No live workspace data is read or mutated.
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -286,6 +287,41 @@ try {
     await page.waitForFunction(() => document.querySelector(".app").classList.contains("mobile-sidebar-open"));
     await swipeSettled(page);
     assert.equal(await left(page, ".sidebar"), 0, `${name}: Home is in place`);
+
+    // 7. A channel slides in over Home, which waits a third of the way back,
+    //    and a thread slides in over the channel. Back slides each one out
+    //    before it closes.
+    const third = -Math.round(0.3 * 393);
+    const animating = selector => page.locator(selector).first().evaluate(element => element.getAnimations().length > 0);
+    const settledAt = (selector, x) => page.waitForFunction(([selector, x]) => {
+      const element = document.querySelector(selector);
+      return element && (Math.round(element.getBoundingClientRect().left) || 0) === x && element.getAnimations().length === 0;
+    }, [selector, x]).catch(async () => assert.fail(`${name}: ${selector} did not settle at ${x}, it is at ${await left(page, selector)}`));
+    await page.locator(".sidebar .channel-block").getByText("ui-review", { exact: true }).tap();
+    assert.ok(await animating(".conversation"), `${name}: the channel slides in`);
+    await settledAt(".conversation", 0);
+    await settledAt(".sidebar", third);
+    await rootRow.locator(".thread-reply-summary").tap();
+    assert.ok(await animating(".thread"), `${name}: the thread slides in`);
+    await settledAt(".thread", 0);
+    await settledAt(".conversation", third);
+    await thread.getByRole("button", { name: "Back to channel", exact: true }).tap();
+    assert.equal(await page.locator(".thread").count(), 1, `${name}: Back slides the thread out before it closes`);
+    await page.locator(".thread").waitFor({ state: "detached" });
+    await swipeSettled(page);
+    await settledAt(".conversation", 0);
+    await page.locator(".conversation").getByRole("button", { name: "Back", exact: true }).tap();
+    assert.ok(await animating(".sidebar"), `${name}: Home slides back`);
+    await settledAt(".sidebar", 0);
+    //    With reduced motion nothing slides: Back closes the thread at once.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.locator(".sidebar .channel-block").getByText("ui-review", { exact: true }).tap();
+    assert.equal(await animating(".conversation"), false, `${name}: no slide with reduced motion`);
+    await rootRow.locator(".thread-reply-summary").tap();
+    assert.equal(await animating(".thread"), false, `${name}: no slide in with reduced motion`);
+    await thread.getByRole("button", { name: "Back to channel", exact: true }).tap();
+    await page.locator(".thread").waitFor({ state: "detached", timeout: 200 });
+    await page.emulateMedia({ reducedMotion: null });
     assert.deepEqual(errors, [], `${name}: no page errors`);
     await browser.close(); browser = null;
   }
