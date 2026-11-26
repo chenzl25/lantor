@@ -1,7 +1,8 @@
 // Production App against an isolated API, on a phone: the bottom bar badges
 // leave their icons visible, no form control is small enough for iOS to zoom
 // the page, a followed thread stays on its latest reply while the reply box
-// grows, and a tapped thread message offers Quote, Copy link and Save.
+// grows, the layout covers what the keyboard leaves visible, and a tapped
+// thread message offers Quote, Copy link and Save.
 // Run npm run build first. No live workspace data is read or mutated.
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -94,12 +95,36 @@ const waitForThreadBottom = async (page, when) => {
   assert.ok((await threadBottom(page)).hidden <= 0, `${when}: the latest reply stays in view`);
 };
 
+// These engines show no on-screen keyboard. Stand in for Safari's: the visual
+// viewport shrinks by the keyboard and pans down to show the focused field,
+// while the layout viewport keeps its size.
+function fakeKeyboard() {
+  const viewport = new EventTarget();
+  let keyboard = 0, pan = 0;
+  Object.defineProperties(viewport, {
+    width: { get: () => window.innerWidth }, height: { get: () => window.innerHeight - keyboard },
+    offsetLeft: { get: () => 0 }, offsetTop: { get: () => pan }, pageLeft: { get: () => 0 },
+    pageTop: { get: () => pan + window.scrollY }, scale: { get: () => 1 },
+  });
+  Object.defineProperty(window, "visualViewport", { configurable: true, get: () => viewport });
+  window.setKeyboard = (height, panned) => {
+    keyboard = height; pan = panned;
+    viewport.dispatchEvent(new Event("resize"));
+    viewport.dispatchEvent(new Event("scroll"));
+  };
+}
+const box = (page, selector) => page.locator(selector).first().evaluate(element => {
+  const rect = element.getBoundingClientRect();
+  return { top: Math.round(rect.top), bottom: Math.round(rect.bottom) };
+});
+
 let browser;
 try {
   for (const [name, engine] of Object.entries({ chromium, webkit })) {
     state = freshState(); requests = [];
     browser = await engine.launch();
     const context = await browser.newContext({ viewport: { width: 393, height: 852 }, isMobile: true, hasTouch: true, serviceWorkers: "block" });
+    await context.addInitScript(fakeKeyboard);
     const page = await context.newPage(); page.setDefaultTimeout(8000);
     const errors = []; page.on("pageerror", error => errors.push(error.message));
     await page.goto(origin, { waitUntil: "domcontentloaded" });
@@ -165,7 +190,24 @@ try {
     await page.locator(".mention-picker").waitFor({ state: "detached" });
     await replyBox.evaluate(element => element.blur());
 
-    // 4. Tapping a thread message lists its actions; tapping it again puts them away.
+    // 4. With the keyboard up the layout covers what stays visible: the headers
+    //    at its top, the reply boxes right on the keyboard, the latest reply in view.
+    await replyBox.tap();
+    await page.evaluate(() => window.setKeyboard(336, 336));
+    await page.waitForFunction(() => Math.round(document.querySelector(".thread").getBoundingClientRect().top) === 336)
+      .catch(async () => assert.fail(`${name}: the thread stays under the keyboard ${JSON.stringify(await box(page, ".thread"))}`));
+    assert.deepEqual(await box(page, ".thread"), { top: 336, bottom: 852 }, `${name}: the thread fills the visible part`);
+    assert.equal((await box(page, ".thread .reply-composer")).bottom, 852, `${name}: the reply box sits on the keyboard`);
+    assert.equal((await box(page, ".conversation .topbar")).top, 336, `${name}: the channel header stays visible`);
+    assert.equal((await box(page, ".conversation .composer")).bottom, 852, `${name}: the channel composer sits on the keyboard`);
+    await waitForThreadBottom(page, `${name}, keyboard up`);
+    await page.evaluate(() => window.setKeyboard(0, 0));
+    await replyBox.evaluate(element => element.blur());
+    await page.waitForFunction(() => Math.round(document.querySelector(".thread").getBoundingClientRect().bottom) === 852);
+    assert.deepEqual(await box(page, ".thread"), { top: 0, bottom: 852 }, `${name}: the thread fills the screen again`);
+    await waitForThreadBottom(page, `${name}, keyboard down`);
+
+    // 5. Tapping a thread message lists its actions; tapping it again puts them away.
     const row = thread.locator(`[data-message-id="${target.id}"]`);
     const actions = row.locator(".message-tap-actions");
     assert.equal(await page.locator(".message-tap-actions").count(), 0, `${name}: no actions until a message is tapped`);

@@ -34,6 +34,22 @@ close ([WebKit bug 199029](https://bugs.webkit.org/show_bug.cgi?id=199029)).
 Snapshot links in a Home Screen app still open the attachment sheet
 ([attachment delivery](attachment-delivery.md)).
 
+## On-screen keyboard
+
+On iPhone the on-screen keyboard shrinks neither the layout viewport nor
+`100dvh`; Safari pans the visual viewport so the focused field shows, which
+pushed the phone layout's header off screen. `src/visual-viewport.ts` copies
+the visual viewport into CSS variables on the root element:
+`--visual-viewport-height`, `--visual-viewport-top` (Safari's pan) and
+`--keyboard-inset` (the height the keyboard takes). At the phone breakpoint
+the app, its panes, the thread and agent panels, full-screen panels and dialog
+backdrops take that height and top, so the header stays at the top of what is
+visible and the composer sits on the keyboard. A pinch zoom keeps the last
+unzoomed values, and the document is kept scrolled to the top, because the
+phone layout only scrolls inside its panes. The desktop app does not install
+it. `npm run test:phone-controls` stands in for the keyboard by replacing
+`window.visualViewport`, since Playwright engines show no on-screen keyboard.
+
 ## Cache and network behavior
 
 - Only `/` and `/index.html` navigations use the cached shell; hash links continue

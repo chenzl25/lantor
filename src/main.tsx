@@ -81,6 +81,7 @@ import { Sidebar } from "./components/Sidebar";
 import { ThreadPanel } from "./components/ThreadPanel";
 import { WebAppStatus } from "./components/WebAppStatus";
 import { clearWebSignInMarker, isWebSessionExpired, subscribeWebSession } from "./web-session";
+import { followVisualViewport } from "./visual-viewport";
 import { isServerUnreachable, serverUnreachableMessage, subscribeServerReachability } from "./web-reachability";
 import { useWebOnline } from "./hooks/useWebOnline";
 import { useVisibleChannelRead } from "./hooks/useVisibleChannelRead";
@@ -3074,6 +3075,10 @@ function App() {
       window.removeEventListener("touchstart", onTouchStart, { capture: true });
     };
   }, []);
+
+  // The iPhone keyboard pans the page instead of resizing it; the phone layout
+  // sizes itself from the part the keyboard leaves visible instead.
+  useEffect(() => (isTauriRuntime() ? undefined : followVisualViewport()), []);
 
   useEffect(() => {
     function updateComposerFocus() {
