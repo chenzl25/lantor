@@ -1270,9 +1270,42 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .await?;
     backfill_agent_run_usage_from_logs(pool).await?;
     fold_legacy_owner_inbox_dismissals(pool).await?;
+    migrate_legacy_antigravity_models(pool).await?;
     messages_fts::migrate(pool).await?;
     create_foreign_key_indexes(pool).await?;
 
+    Ok(())
+}
+
+/// Splits Antigravity agent rows saved with legacy suffixed model ids such as
+/// `gemini-4-neon-xhigh` into a base model (`gemini-4-neon`) and an explicit
+/// `reasoning_effort` (`xhigh`).
+async fn migrate_legacy_antigravity_models(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        select id, model
+        from agents
+        where lower(runtime) = 'antigravity'
+          and trim(reasoning_effort) = ''
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+    for row in rows {
+        let id: Uuid = row.get("id");
+        let model: String = row.get("model");
+        let (base_model, Some(effort)) =
+            crate::agent_profile::split_antigravity_legacy_model(&model)
+        else {
+            continue;
+        };
+        sqlx::query("update agents set model = $2, reasoning_effort = $3 where id = $1")
+            .bind(id)
+            .bind(base_model)
+            .bind(effort)
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -1669,6 +1702,58 @@ mod tests {
             assert_eq!(read_until("task:a"), "2026-05-01T00:00:00+00:00");
             assert_eq!(read_until("task:b"), "2026-05-03T00:00:00+00:00");
             assert_eq!(read_until("task:c"), "2026-05-04T00:00:00+00:00");
+            Ok(())
+        }
+        .await;
+        drop_test_schema(pool, schema).await;
+        result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_suffixed_antigravity_models_split_into_model_and_effort() {
+        let Some((pool, schema)) = test_pool().await else {
+            return;
+        };
+        let result: Result<(), String> = async {
+            let legacy_id: uuid::Uuid = sqlx::query_scalar(
+                r#"
+                insert into agents (handle, display_name, role, status, runtime, model, reasoning_effort, avatar, description)
+                values ('legacy-neon', 'Neon', 'agent', 'idle', 'antigravity', 'gemini-4-neon-xhigh', '', 'N', 'test')
+                returning id
+                "#,
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            let current_id: uuid::Uuid = sqlx::query_scalar(
+                r#"
+                insert into agents (handle, display_name, role, status, runtime, model, reasoning_effort, avatar, description)
+                values ('current-carbon', 'Carbon', 'agent', 'idle', 'antigravity', 'gemini-4-carbon', 'high', 'C', 'test')
+                returning id
+                "#,
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+
+            migrate(&pool).await.map_err(|err| err.to_string())?;
+            migrate(&pool).await.map_err(|err| err.to_string())?;
+
+            let legacy: (String, String) =
+                sqlx::query_as("select model, reasoning_effort from agents where id = $1")
+                    .bind(legacy_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            assert_eq!(legacy, ("gemini-4-neon".to_owned(), "xhigh".to_owned()));
+
+            let current: (String, String) =
+                sqlx::query_as("select model, reasoning_effort from agents where id = $1")
+                    .bind(current_id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            assert_eq!(current, ("gemini-4-carbon".to_owned(), "high".to_owned()));
             Ok(())
         }
         .await;

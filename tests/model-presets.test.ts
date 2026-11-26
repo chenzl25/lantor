@@ -4,11 +4,14 @@ import test from "node:test";
 import {
   EMPTY_AGENT_FORM,
   RUNTIME_PRESETS,
+  antigravityReasoningEffortsForModel,
   codexReasoningEffortsForModel,
   isRetiredCodexModel,
   modelLabel,
   modelOptionsForRuntime,
+  normalizeAntigravityReasoningEffortForModel,
   normalizeCodexReasoningEffortForModel,
+  splitAntigravityLegacyModel,
 } from "../src/types";
 
 test("GPT-6.2 Astra and Sol presets follow the Codex app-server effort ranges", () => {
@@ -95,11 +98,54 @@ test("Claude Fable preset tracks the latest Fable release", () => {
   assert.equal(modelLabel("claude-fable-5-1"), "Claude Fable 5.1");
 });
 
-test("Antigravity models are agy's ids, labelled with their thinking level", () => {
+test("Antigravity separates base models from per-model thinking effort and handles legacy suffixed ids", () => {
   assert.equal(RUNTIME_PRESETS.antigravity.commandName, "agy");
-  assert.ok(modelOptionsForRuntime("antigravity").includes(RUNTIME_PRESETS.antigravity.defaultModel));
+  assert.equal(RUNTIME_PRESETS.antigravity.defaultModel, "gemini-4-carbon");
+  const models = modelOptionsForRuntime("antigravity");
+  assert.deepEqual(models, [
+    "gemini-4-carbon",
+    "gemini-4-neon",
+    "gemini-4-hydrogen",
+    "gemini-4-argon",
+    "gemini-3.8-flash",
+    "gemini-3.1-pro",
+  ]);
+  assert.equal(modelLabel("gemini-4-carbon"), "Gemini 4 Carbon");
+  assert.equal(modelLabel("gemini-4-neon"), "Gemini 4 Neon");
+  assert.equal(modelLabel("gemini-3.8-flash"), "Gemini 3.8 Flash");
+  assert.equal(modelLabel("gemini-3.1-pro"), "Gemini 3.1 Pro");
   assert.equal(modelLabel("gemini-4-carbon-medium"), "Gemini 4 Carbon (Medium)");
-  assert.equal(modelLabel("gemini-3.8-flash-high"), "Gemini 3.8 Flash (High)");
   assert.equal(modelLabel("gemini-4-neon-xhigh"), "Gemini 4 Neon (Extra High)");
   assert.equal(modelLabel("gemini-pro-orchestrator"), "gemini-pro-orchestrator");
+
+  assert.deepEqual(
+    antigravityReasoningEffortsForModel("gemini-4-neon").map((effort) => effort.value),
+    ["low", "medium", "high", "xhigh"],
+  );
+  assert.deepEqual(
+    antigravityReasoningEffortsForModel("gemini-4-carbon").map((effort) => effort.value),
+    ["low", "medium", "high"],
+  );
+  assert.deepEqual(
+    antigravityReasoningEffortsForModel("gemini-3.1-pro").map((effort) => effort.value),
+    ["low", "high"],
+  );
+  assert.deepEqual(antigravityReasoningEffortsForModel("gemini-pro-orchestrator"), []);
+
+  assert.equal(normalizeAntigravityReasoningEffortForModel("gemini-4-neon", "xhigh"), "xhigh");
+  assert.equal(normalizeAntigravityReasoningEffortForModel("gemini-4-carbon", "xhigh"), "high");
+  assert.equal(normalizeAntigravityReasoningEffortForModel("gemini-3.1-pro", "medium"), "low");
+  assert.equal(normalizeAntigravityReasoningEffortForModel("gemini-3.1-pro", "xhigh"), "high");
+  assert.equal(normalizeAntigravityReasoningEffortForModel("gemini-3.1-pro", ""), "low");
+  assert.equal(normalizeAntigravityReasoningEffortForModel("gemini-4-carbon", ""), "medium");
+  assert.equal(normalizeAntigravityReasoningEffortForModel("gemini-pro-orchestrator", "high"), "");
+
+  assert.deepEqual(splitAntigravityLegacyModel("gemini-4-neon-xhigh"), {
+    model: "gemini-4-neon",
+    effort: "xhigh",
+  });
+  assert.deepEqual(splitAntigravityLegacyModel("gemini-4-neon"), {
+    model: "gemini-4-neon",
+    effort: "",
+  });
 });

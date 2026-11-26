@@ -15,9 +15,9 @@ use crate::usage::RunUsage;
 
 use super::AntigravitySurface;
 
-/// The flags every warm `agy` process starts with, before `--model` and
-/// `--conversation`. `-p=` selects print mode without a prompt argument, so
-/// every prompt comes from stdin.
+/// The flags every warm `agy` process starts with, before `--model`,
+/// `--effort` and `--conversation`. `-p=` selects print mode without a prompt
+/// argument, so every prompt comes from stdin.
 pub(super) const AGY_STREAM_ARGS: &[&str] = &[
     "--input-format",
     "stream-json",
@@ -30,13 +30,36 @@ pub(super) fn agy_stream_key(run_id: Uuid) -> String {
     format!("{run_id}:antigravity-assistant")
 }
 
-pub(super) fn agy_command_text(model: &str) -> String {
+/// Resolves the `--model` and `--effort` flag values passed to `agy`.
+/// Legacy suffixed model ids such as `gemini-4-neon-xhigh` are split into
+/// `(base, effort)` so an explicit effort never conflicts with a suffixed model.
+pub(super) fn agy_model_and_effort(model: &str, reasoning_effort: &str) -> (String, String) {
+    let (base_model, legacy_effort) = crate::agent_profile::split_antigravity_legacy_model(model);
+    let explicit_effort = reasoning_effort.trim();
+    let effort = if !explicit_effort.is_empty() {
+        explicit_effort.to_ascii_lowercase()
+    } else {
+        legacy_effort.unwrap_or_default().to_owned()
+    };
+    (base_model.to_owned(), effort)
+}
+
+pub(super) fn agy_command_text(model: &str, reasoning_effort: &str) -> String {
+    let (model, effort) = agy_model_and_effort(model, reasoning_effort);
     let model_arg = if model.is_empty() {
         String::new()
     } else {
         format!(" --model {model}")
     };
-    format!("agy {}{model_arg} -p=", AGY_STREAM_ARGS.join(" "))
+    let effort_arg = if effort.is_empty() {
+        String::new()
+    } else {
+        format!(" --effort {effort}")
+    };
+    format!(
+        "agy {}{model_arg}{effort_arg} -p=",
+        AGY_STREAM_ARGS.join(" ")
+    )
 }
 
 pub(super) fn agy_user_input(prompt: &str) -> Value {

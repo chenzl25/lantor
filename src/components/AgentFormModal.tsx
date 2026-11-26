@@ -6,10 +6,12 @@ import {
   CLAUDE_REASONING_EFFORTS,
   CODEX_SERVICE_TIERS,
   RuntimeCheck,
+  antigravityReasoningEffortsForModel,
   codexReasoningEffortsForModel,
   isRetiredCodexModel,
   modelLabel,
   modelOptionsForRuntime,
+  normalizeAntigravityReasoningEffortForModel,
   normalizeCodexReasoningEffortForModel,
 } from "../types";
 import { APP_DISPLAY_NAME } from "../branding";
@@ -70,6 +72,8 @@ export function AgentFormModal({
   const nameInputRef = useRef<HTMLInputElement | null>(null);
   const isCodex = form.runtime === "codex";
   const isClaude = form.runtime === "claude";
+  const isAntigravity = form.runtime === "antigravity";
+  const antigravityEfforts = isAntigravity ? antigravityReasoningEffortsForModel(form.model) : [];
   const previewHandle = (form.handle || form.displayName || "agent").trim().replace(/^@/, "") || "agent";
   const previewName = form.displayName.trim() || form.handle.trim().replace(/^@/, "") || "New agent";
   const previewAgent = {
@@ -110,7 +114,9 @@ export function AgentFormModal({
               model,
               reasoningEffort: isCodex
                 ? normalizeCodexReasoningEffortForModel(model, form.reasoningEffort)
-                : form.reasoningEffort,
+                : isAntigravity
+                  ? normalizeAntigravityReasoningEffortForModel(model, form.reasoningEffort)
+                  : form.reasoningEffort,
             });
           }}
         >
@@ -176,6 +182,22 @@ export function AgentFormModal({
       </div>
     </label>
   );
+  const antigravityControls = isAntigravity && antigravityEfforts.length > 0 && (
+    <label className="agent-select-field">
+      <span>Thinking</span>
+      <div className="agent-select-control">
+        <select
+          value={form.reasoningEffort}
+          onChange={(event) => onChange({ ...form, reasoningEffort: event.target.value })}
+        >
+          {antigravityEfforts.map((effort) => (
+            <option key={effort.value} value={effort.value}>{effort.label}</option>
+          ))}
+        </select>
+        <ChevronDown size={16} aria-hidden="true" />
+      </div>
+    </label>
+  );
   const agentPreview = (
     <div className="agent-form-preview">
       <AvatarPicker
@@ -235,6 +257,7 @@ export function AgentFormModal({
               {modelSelect}
               {codexControls}
               {claudeControls}
+              {antigravityControls}
             </div>
             <RuntimePreflight check={runtimeChecks[form.runtime]} />
             <details className="agent-advanced-settings">
@@ -271,6 +294,9 @@ export function AgentFormModal({
             </div>
             {isCodex && <div className="two-col">{codexControls}</div>}
             {isClaude && <div className="two-col">{claudeControls}</div>}
+            {isAntigravity && antigravityEfforts.length > 0 && (
+              <div className="two-col">{antigravityControls}</div>
+            )}
             <RuntimePreflight check={runtimeChecks[form.runtime]} />
             {showNotes && (
               <label>

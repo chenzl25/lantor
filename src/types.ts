@@ -819,28 +819,15 @@ export const RUNTIME_PRESETS: Record<string, { label: string; defaultModel: stri
   },
   antigravity: {
     label: "Antigravity",
-    defaultModel: "gemini-4-carbon-medium",
+    defaultModel: "gemini-4-carbon",
     commandName: "agy",
-    // The ids `agy models` lists; each carries its own thinking level.
     models: [
-      "gemini-4-carbon-low",
-      "gemini-4-carbon-medium",
-      "gemini-4-carbon-high",
-      "gemini-4-neon-low",
-      "gemini-4-neon-medium",
-      "gemini-4-neon-high",
-      "gemini-4-neon-xhigh",
-      "gemini-4-hydrogen-low",
-      "gemini-4-hydrogen-medium",
-      "gemini-4-hydrogen-high",
-      "gemini-4-argon-low",
-      "gemini-4-argon-medium",
-      "gemini-4-argon-high",
-      "gemini-3.8-flash-low",
-      "gemini-3.8-flash-medium",
-      "gemini-3.8-flash-high",
-      "gemini-3.1-pro-low",
-      "gemini-3.1-pro-high",
+      "gemini-4-carbon",
+      "gemini-4-neon",
+      "gemini-4-hydrogen",
+      "gemini-4-argon",
+      "gemini-3.8-flash",
+      "gemini-3.1-pro",
     ],
   },
 };
@@ -940,17 +927,84 @@ const GEMINI_THINKING_LABELS: Record<string, string> = {
   medium: "Medium",
   high: "High",
   xhigh: "Extra High",
+  max: "Max",
 };
 
-/** `gemini-4-carbon-medium` as "Gemini 4 Carbon (Medium)". */
+export const ANTIGRAVITY_REASONING_EFFORTS = [
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra High" },
+] as const;
+
+const ANTIGRAVITY_EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"] as const;
+
+/** Splits legacy suffixed Antigravity ids like `gemini-4-neon-xhigh` into base model and effort. */
+export function splitAntigravityLegacyModel(model: string): { model: string; effort: string } {
+  const trimmed = model.trim();
+  const match = /^(gemini-\d.+)-(low|medium|high|xhigh|max)$/i.exec(trimmed);
+  if (!match) return { model: trimmed, effort: "" };
+  return { model: match[1], effort: match[2].toLowerCase() };
+}
+
+export function antigravityReasoningEffortsForModel(model: string) {
+  const normalizedModel = splitAntigravityLegacyModel(model).model.toLowerCase();
+  if (normalizedModel === "gemini-pro-orchestrator") {
+    return [];
+  }
+  if (normalizedModel === "gemini-3.1-pro") {
+    return ANTIGRAVITY_REASONING_EFFORTS.filter(
+      (effort) => effort.value === "low" || effort.value === "high",
+    );
+  }
+  if (
+    normalizedModel === "gemini-4-carbon" ||
+    normalizedModel === "gemini-4-hydrogen" ||
+    normalizedModel === "gemini-4-argon" ||
+    normalizedModel === "gemini-3.8-flash" ||
+    normalizedModel === "gemini-3.7-flash" ||
+    normalizedModel === "gemini-3.6-flash"
+  ) {
+    return ANTIGRAVITY_REASONING_EFFORTS.filter((effort) => effort.value !== "xhigh");
+  }
+  return [...ANTIGRAVITY_REASONING_EFFORTS];
+}
+
+export function normalizeAntigravityReasoningEffortForModel(model: string, reasoningEffort: string) {
+  const supported = antigravityReasoningEffortsForModel(model);
+  if (supported.length === 0) return "";
+  const normalizedEffort = reasoningEffort.trim().toLowerCase();
+  if (supported.some((effort) => effort.value === normalizedEffort)) {
+    return normalizedEffort;
+  }
+  const requestedIndex = ANTIGRAVITY_EFFORT_ORDER.indexOf(
+    normalizedEffort as (typeof ANTIGRAVITY_EFFORT_ORDER)[number],
+  );
+  if (requestedIndex < 0) {
+    return supported.some((effort) => effort.value === "medium") ? "medium" : supported[0].value;
+  }
+  let chosen = supported[0].value;
+  for (const effort of supported) {
+    const effortIndex = ANTIGRAVITY_EFFORT_ORDER.indexOf(effort.value);
+    if (effortIndex <= requestedIndex) {
+      chosen = effort.value;
+    }
+  }
+  return chosen;
+}
+
+/** `gemini-4-carbon` as "Gemini 4 Carbon", and legacy `gemini-4-carbon-medium` as "Gemini 4 Carbon (Medium)". */
 function geminiModelLabel(model: string) {
-  const match = /^gemini-(.+)-(low|medium|high|xhigh)$/.exec(model);
+  const legacy = splitAntigravityLegacyModel(model);
+  const match = /^gemini-(\d.*)$/.exec(legacy.model);
   if (!match) return null;
   const name = match[1]
     .split("-")
     .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
     .join(" ");
-  return `Gemini ${name} (${GEMINI_THINKING_LABELS[match[2]]})`;
+  return legacy.effort
+    ? `Gemini ${name} (${GEMINI_THINKING_LABELS[legacy.effort]})`
+    : `Gemini ${name}`;
 }
 
 export function modelLabel(model: string) {
