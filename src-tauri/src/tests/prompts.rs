@@ -1,7 +1,8 @@
 use super::{
-    build_codex_streaming_prompt, build_streaming_work_item_prompt, build_work_item_prompt,
-    claude_system_prompt, codex_developer_instructions, ensure_agent_workspace,
-    load_agent_memory_context, prepend_memory_context, AGENT_MEMORY_CONTEXT_LIMIT,
+    antigravity_standing_prompt, build_codex_streaming_prompt, build_streaming_work_item_prompt,
+    build_work_item_prompt, claude_system_prompt, codex_developer_instructions,
+    ensure_agent_workspace, load_agent_memory_context, prepend_memory_context,
+    write_antigravity_instructions, AGENT_MEMORY_CONTEXT_LIMIT, ANTIGRAVITY_INSTRUCTIONS_FILE,
     WORK_ITEM_FINISH_PROMPT,
 };
 use uuid::Uuid;
@@ -231,4 +232,41 @@ fn work_item_prompt_names_github_repositories_after_the_channel() {
         "channel: #lantor-dev\ngithub_repo: chenzl25/lantor (a bare #123 here links to it)\ngithub_names: lantor=chenzl25/lantor, rw=risingwavelabs/risingwave\n"
     ));
     assert!(claude_system_prompt("arch").contains("names from `github_names` in the turn header"));
+}
+
+#[test]
+fn antigravity_instructions_are_written_to_gemini_md_unless_it_is_someone_elses() {
+    let dir = std::env::temp_dir().join(format!("lantor-gemini-md-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).expect("create workspace");
+    let workspace = dir.to_string_lossy().into_owned();
+    let path = dir.join(ANTIGRAVITY_INSTRUCTIONS_FILE);
+
+    assert!(write_antigravity_instructions(&workspace, "Aster").expect("write"));
+    let written = std::fs::read_to_string(&path).expect("read GEMINI.md");
+    assert!(written.starts_with("<!-- Written by Lantor"));
+    assert!(written.contains(&antigravity_standing_prompt("Aster")));
+
+    // Lantor's own file follows the handle it starts with.
+    assert!(write_antigravity_instructions(&workspace, "Birch").expect("rewrite"));
+    let rewritten = std::fs::read_to_string(&path).expect("read GEMINI.md");
+    assert!(rewritten.contains("You are @Birch"));
+
+    // A GEMINI.md the owner wrote stays untouched.
+    std::fs::write(&path, "# My own Gemini notes\n").expect("write own file");
+    assert!(!write_antigravity_instructions(&workspace, "Birch").expect("leave"));
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read GEMINI.md"),
+        "# My own Gemini notes\n"
+    );
+
+    assert!(!write_antigravity_instructions("  ", "Birch").expect("no workspace"));
+    std::fs::remove_dir_all(&dir).expect("remove workspace");
+}
+
+#[test]
+fn antigravity_standing_prompt_says_follow_ups_wait_for_the_turn() {
+    let prompt = antigravity_standing_prompt("Aster");
+    assert!(prompt.contains("You are @Aster"));
+    assert!(prompt.contains("agy's headless stream-json"));
+    assert!(prompt.contains("not delivered into the running turn"));
 }

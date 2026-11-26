@@ -91,6 +91,7 @@ export function AgentFormModal({
         <select value={form.runtime} onChange={(event) => onRuntimeChange(event.target.value)}>
           <option value="codex">Codex</option>
           <option value="claude">Claude</option>
+          <option value="antigravity">Antigravity</option>
         </select>
         <ChevronDown size={16} aria-hidden="true" />
       </div>

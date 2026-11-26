@@ -94,3 +94,12 @@ test("Claude Fable preset tracks the latest Fable release", () => {
   assert.equal(modelLabel("claude-fable-5-2"), "Claude Fable 5.2");
   assert.equal(modelLabel("claude-fable-5-1"), "Claude Fable 5.1");
 });
+
+test("Antigravity models are agy's ids, labelled with their thinking level", () => {
+  assert.equal(RUNTIME_PRESETS.antigravity.commandName, "agy");
+  assert.ok(modelOptionsForRuntime("antigravity").includes(RUNTIME_PRESETS.antigravity.defaultModel));
+  assert.equal(modelLabel("gemini-4-carbon-medium"), "Gemini 4 Carbon (Medium)");
+  assert.equal(modelLabel("gemini-3.8-flash-high"), "Gemini 3.8 Flash (High)");
+  assert.equal(modelLabel("gemini-4-neon-xhigh"), "Gemini 4 Neon (Extra High)");
+  assert.equal(modelLabel("gemini-pro-orchestrator"), "gemini-pro-orchestrator");
+});

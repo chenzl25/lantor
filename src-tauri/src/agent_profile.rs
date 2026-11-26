@@ -180,17 +180,18 @@ fn normalize_reasoning_effort(
     Ok(String::new())
 }
 
-/// Claude Code reads `--model` and `--effort` only when its warm process starts,
-/// so changing either needs a fresh process; the restart resumes the stored
-/// session. Codex sends both with every turn and needs none.
+/// Claude Code and Antigravity's `agy` read `--model` (and Claude's
+/// `--effort`) only when their warm process starts, so changing either needs a
+/// fresh process; the restart resumes the stored session. Codex sends both
+/// with every turn and needs none.
 fn claude_launch_flags_changed(
     stored: &sqlx::sqlite::SqliteRow,
     runtime: &str,
     model: &str,
     reasoning_effort: &str,
 ) -> bool {
-    runtime == "claude"
-        && stored.get::<String, _>("runtime") == "claude"
+    matches!(runtime, "claude" | "antigravity")
+        && stored.get::<String, _>("runtime") == runtime
         && (stored.get::<String, _>("model") != model
             || stored.get::<String, _>("reasoning_effort") != reasoning_effort)
 }

@@ -10,6 +10,7 @@ use tokio::{sync::Semaphore, time::sleep};
 use uuid::Uuid;
 
 use super::{
+    antigravity::{self, WarmAntigravityRegistry, ANTIGRAVITY_RUNTIME},
     claude::{self, WarmClaudeRegistry},
     codex::{self, WarmCodexRegistry},
     lifecycle::{
@@ -103,14 +104,52 @@ pub(crate) async fn load_supervisor_status(pool: &SqlitePool) -> CommandResult<S
     })
 }
 
+/// The warm processes of every streaming runtime, one registry each.
+#[derive(Clone, Default)]
+pub(crate) struct WarmRegistries {
+    pub(crate) codex: WarmCodexRegistry,
+    pub(crate) claude: WarmClaudeRegistry,
+    pub(crate) antigravity: WarmAntigravityRegistry,
+}
+
+impl WarmRegistries {
+    /// Whether the agent's warm process for `runtime` has a turn in progress.
+    async fn owns_turn(&self, runtime: &str, agent_id: Uuid) -> bool {
+        if runtime.eq_ignore_ascii_case("claude") {
+            self.claude.owns_turn(agent_id).await
+        } else if runtime.eq_ignore_ascii_case(ANTIGRAVITY_RUNTIME) {
+            self.antigravity.owns_turn(agent_id).await
+        } else {
+            self.codex.owns_turn(agent_id).await
+        }
+    }
+
+    async fn any_busy(&self) -> bool {
+        self.codex.any_busy().await
+            || self.claude.any_busy().await
+            || self.antigravity.any_busy().await
+    }
+
+    async fn is_empty(&self) -> bool {
+        self.codex.is_empty().await
+            && self.claude.is_empty().await
+            && self.antigravity.is_empty().await
+    }
+
+    async fn stop_idle_processes(&self, pool: &SqlitePool, reason: &str) {
+        self.codex.stop_idle_processes(pool, reason).await;
+        self.claude.stop_idle_processes(pool, reason).await;
+        self.antigravity.stop_idle_processes(pool, reason).await;
+    }
+}
+
 /// The startup sweep, per run and while running: a run still marked live
 /// whose agent has no warm process owning a turn will never be finished by
 /// anyone (its finalization failed, or its process vanished). Close it so the
 /// agent's queue moves again instead of waiting for a supervisor restart.
 pub(crate) async fn close_orphaned_agent_runs(
     pool: &SqlitePool,
-    codex_registry: &WarmCodexRegistry,
-    claude_registry: &WarmClaudeRegistry,
+    registries: &WarmRegistries,
 ) -> CommandResult<()> {
     let rows = sqlx::query(
         r#"
@@ -119,7 +158,7 @@ pub(crate) async fn close_orphaned_agent_runs(
         join agents a on a.id = r.agent_id
         where r.stopped_at is null
           and r.status in ('starting', 'running', 'stopping')
-          and lower(a.runtime) in ('claude', 'codex')
+          and lower(a.runtime) in ('claude', 'codex', 'antigravity')
           and r.started_at < strftime('%Y-%m-%dT%H:%M:%f+00:00','now', $1)
           and not exists (
               select 1 from supervisor_commands c
@@ -135,12 +174,7 @@ pub(crate) async fn close_orphaned_agent_runs(
         let run_id: Uuid = row.get("id");
         let agent_id: Uuid = row.get("agent_id");
         let runtime: String = row.get("runtime");
-        let owned = if runtime == "claude" {
-            claude_registry.owns_turn(agent_id).await
-        } else {
-            codex_registry.owns_turn(agent_id).await
-        };
-        if !owned {
+        if !registries.owns_turn(&runtime, agent_id).await {
             close_orphaned_agent_run(pool, agent_id, run_id).await?;
         }
     }
@@ -471,8 +505,7 @@ pub(crate) async fn run_supervisor() -> CommandResult<()> {
     recover_supervisor_commands_at_startup(&pool).await?;
     let mut self_update = SelfUpdate::for_current_executable();
     record_supervisor_start(&pool, self_update.as_ref()).await?;
-    let codex_registry = WarmCodexRegistry::default();
-    let claude_registry = WarmClaudeRegistry::default();
+    let registries = WarmRegistries::default();
     let command_semaphore = Arc::new(Semaphore::new(SUPERVISOR_COMMAND_CONCURRENCY));
     let mut last_command_cleanup = Instant::now() - Duration::from_secs(3600);
     let mut last_maintenance = Instant::now();
@@ -482,8 +515,7 @@ pub(crate) async fn run_supervisor() -> CommandResult<()> {
     loop {
         match run_supervisor_iteration(
             &pool,
-            &codex_registry,
-            &claude_registry,
+            &registries,
             &command_semaphore,
             self_update.as_mut(),
             &mut last_command_cleanup,
@@ -505,8 +537,7 @@ pub(crate) async fn run_supervisor() -> CommandResult<()> {
                 if let Some(self_update) = self_update.as_mut() {
                     if let Err(err) = hand_over_to_newer_build(
                         &pool,
-                        &codex_registry,
-                        &claude_registry,
+                        &registries,
                         &command_semaphore,
                         self_update,
                     )
@@ -543,8 +574,7 @@ enum SupervisorIteration {
 
 async fn run_supervisor_iteration(
     pool: &SqlitePool,
-    codex_registry: &WarmCodexRegistry,
-    claude_registry: &WarmClaudeRegistry,
+    registries: &WarmRegistries,
     command_semaphore: &Arc<Semaphore>,
     mut self_update: Option<&mut SelfUpdate>,
     last_command_cleanup: &mut Instant,
@@ -558,7 +588,7 @@ async fn run_supervisor_iteration(
     if last_maintenance.elapsed() >= SUPERVISOR_MAINTENANCE_INTERVAL {
         *last_maintenance = Instant::now();
         start_due_provider_probes(pool).await?;
-        close_orphaned_agent_runs(pool, codex_registry, claude_registry).await?;
+        close_orphaned_agent_runs(pool, registries).await?;
         settle_orphaned_streaming_messages(pool).await?;
         if let Some(self_update) = self_update.as_deref_mut() {
             if self_update.check() {
@@ -571,11 +601,11 @@ async fn run_supervisor_iteration(
     if self_update
         .as_deref()
         .is_some_and(|self_update| self_update.pending().is_some())
-        && supervisor_is_idle(pool, codex_registry, claude_registry, command_semaphore).await?
+        && supervisor_is_idle(pool, registries, command_semaphore).await?
     {
         return Ok(SupervisorIteration::NewerBuildCanTakeOver);
     }
-    schedule_queued_work_items(pool, codex_registry, claude_registry).await?;
+    schedule_queued_work_items(pool, registries).await?;
     let mut processed_command = false;
     loop {
         let Ok(permit) = command_semaphore.clone().try_acquire_owned() else {
@@ -587,11 +617,10 @@ async fn run_supervisor_iteration(
         };
         processed_command = true;
         let pool = pool.clone();
-        let codex_registry = codex_registry.clone();
-        let claude_registry = claude_registry.clone();
+        let registries = registries.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            run_supervisor_command(&pool, &codex_registry, &claude_registry, command).await;
+            run_supervisor_command(&pool, &registries, command).await;
         });
     }
 
@@ -607,13 +636,11 @@ async fn run_supervisor_iteration(
 /// count; the next supervisor starts them.
 async fn supervisor_is_idle(
     pool: &SqlitePool,
-    codex_registry: &WarmCodexRegistry,
-    claude_registry: &WarmClaudeRegistry,
+    registries: &WarmRegistries,
     command_semaphore: &Semaphore,
 ) -> CommandResult<bool> {
     if command_semaphore.available_permits() < SUPERVISOR_COMMAND_CONCURRENCY
-        || codex_registry.any_busy().await
-        || claude_registry.any_busy().await
+        || registries.any_busy().await
     {
         return Ok(false);
     }
@@ -644,8 +671,7 @@ async fn supervisor_is_idle(
 /// something started working, the file changed again, or the exec failed.
 async fn hand_over_to_newer_build(
     pool: &SqlitePool,
-    codex_registry: &WarmCodexRegistry,
-    claude_registry: &WarmClaudeRegistry,
+    registries: &WarmRegistries,
     command_semaphore: &Semaphore,
     self_update: &mut SelfUpdate,
 ) -> CommandResult<()> {
@@ -659,20 +685,15 @@ async fn hand_over_to_newer_build(
         .execute(pool)
         .await
         .map_err(to_string)?;
-    codex_registry
-        .stop_idle_processes(pool, "stopped for a newer Lantor build")
-        .await;
-    claude_registry
+    registries
         .stop_idle_processes(pool, "stopped for a newer Lantor build")
         .await;
     let deadline = Instant::now() + SELF_UPDATE_PROCESS_EXIT_WAIT;
-    while !(codex_registry.is_empty().await && claude_registry.is_empty().await)
-        && Instant::now() < deadline
-    {
+    while !registries.is_empty().await && Instant::now() < deadline {
         sleep(Duration::from_millis(100)).await;
     }
     // The next heartbeat sets the status back if this stops here.
-    if !supervisor_is_idle(pool, codex_registry, claude_registry, command_semaphore).await? {
+    if !supervisor_is_idle(pool, registries, command_semaphore).await? {
         return Ok(());
     }
     let error = self_update.exec_pending();
@@ -682,12 +703,11 @@ async fn hand_over_to_newer_build(
 /// Runs a claimed command and records how it ended.
 async fn run_supervisor_command(
     pool: &SqlitePool,
-    codex_registry: &WarmCodexRegistry,
-    claude_registry: &WarmClaudeRegistry,
+    registries: &WarmRegistries,
     command: SupervisorCommand,
 ) {
     let command_id = command.id;
-    let result = process_supervisor_command(pool, codex_registry, claude_registry, command).await;
+    let result = process_supervisor_command(pool, registries, command).await;
     if let Err(err) = finish_supervisor_command(pool, command_id, result.err()).await {
         eprintln!("failed to finish supervisor command {command_id}: {err}");
     }
@@ -695,8 +715,7 @@ async fn run_supervisor_command(
 
 async fn should_schedule_queued_work_item(
     pool: &SqlitePool,
-    registry: &WarmCodexRegistry,
-    claude_registry: &WarmClaudeRegistry,
+    registries: &WarmRegistries,
     agent_id: Uuid,
     channel_id: Option<Uuid>,
     thread_root_id: Option<Uuid>,
@@ -708,7 +727,7 @@ async fn should_schedule_queued_work_item(
     {
         // A follow-up for the running turn's surface joins it; others wait.
         if let Some((active_channel_id, active_thread_root_id)) =
-            claude::steerable_claude_turn_surface(claude_registry, agent_id).await
+            claude::steerable_claude_turn_surface(&registries.claude, agent_id).await
         {
             if same_codex_surface(
                 pool,
@@ -732,7 +751,7 @@ async fn should_schedule_queued_work_item(
     }
 
     let Some((active_channel_id, active_thread_root_id, schedule_state)) =
-        codex::active_codex_turn_surface(registry, agent_id).await
+        codex::active_codex_turn_surface(&registries.codex, agent_id).await
     else {
         return Ok(true);
     };
@@ -740,7 +759,7 @@ async fn should_schedule_queued_work_item(
         CodexActiveTurnScheduleState::ReadyForSteer => {}
         CodexActiveTurnScheduleState::WaitingForTurnId => return Ok(false),
         CodexActiveTurnScheduleState::StuckBeforeTurnId => {
-            codex::reap_stuck_codex_turn(pool, registry, agent_id, "scheduler").await?;
+            codex::reap_stuck_codex_turn(pool, &registries.codex, agent_id, "scheduler").await?;
             return Ok(true);
         }
     }
@@ -756,16 +775,14 @@ async fn should_schedule_queued_work_item(
 
 async fn schedule_queued_work_items(
     pool: &SqlitePool,
-    registry: &WarmCodexRegistry,
-    claude_registry: &WarmClaudeRegistry,
+    registries: &WarmRegistries,
 ) -> CommandResult<()> {
-    schedule_queued_work_items_when(pool, registry, claude_registry, system_in_dark_wake).await
+    schedule_queued_work_items_when(pool, registries, system_in_dark_wake).await
 }
 
 async fn schedule_queued_work_items_when<F, Fut>(
     pool: &SqlitePool,
-    registry: &WarmCodexRegistry,
-    claude_registry: &WarmClaudeRegistry,
+    registries: &WarmRegistries,
     in_dark_wake: F,
 ) -> CommandResult<()>
 where
@@ -809,15 +826,8 @@ where
         let agent_id: Uuid = row.get("agent_id");
         let channel_id: Option<Uuid> = row.get("channel_id");
         let thread_root_id: Option<Uuid> = row.get("thread_root_id");
-        if !should_schedule_queued_work_item(
-            pool,
-            registry,
-            claude_registry,
-            agent_id,
-            channel_id,
-            thread_root_id,
-        )
-        .await?
+        if !should_schedule_queued_work_item(pool, registries, agent_id, channel_id, thread_root_id)
+            .await?
         {
             continue;
         }
@@ -852,8 +862,7 @@ where
 
 async fn process_supervisor_command(
     pool: &SqlitePool,
-    codex_registry: &WarmCodexRegistry,
-    claude_registry: &WarmClaudeRegistry,
+    registries: &WarmRegistries,
     command: SupervisorCommand,
 ) -> CommandResult<()> {
     match command.command_type.as_str() {
@@ -861,27 +870,13 @@ async fn process_supervisor_command(
             let Some(agent_id) = command.agent_id else {
                 return Err("start_agent command missing agent_id".to_owned());
             };
-            supervisor_start_agent(
-                pool,
-                codex_registry,
-                claude_registry,
-                agent_id,
-                command.work_item_id,
-            )
-            .await
+            supervisor_start_agent(pool, registries, agent_id, command.work_item_id).await
         }
         "stop_run" => {
             let Some(run_id) = command.run_id else {
                 return Err("stop_run command missing run_id".to_owned());
             };
-            supervisor_stop_run(
-                pool,
-                codex_registry,
-                claude_registry,
-                run_id,
-                command.work_item_id,
-            )
-            .await
+            supervisor_stop_run(pool, registries, run_id, command.work_item_id).await
         }
         other => Err(format!("unknown supervisor command: {other}")),
     }
@@ -889,8 +884,7 @@ async fn process_supervisor_command(
 
 async fn supervisor_start_agent(
     pool: &SqlitePool,
-    codex_registry: &WarmCodexRegistry,
-    claude_registry: &WarmClaudeRegistry,
+    registries: &WarmRegistries,
     agent_id: Uuid,
     work_item_id: Option<Uuid>,
 ) -> CommandResult<()> {
@@ -973,8 +967,9 @@ async fn supervisor_start_agent(
             return Ok(());
         }
     }
-    let is_warm_streaming_runtime =
-        runtime.eq_ignore_ascii_case("codex") || runtime.eq_ignore_ascii_case("claude");
+    let is_warm_streaming_runtime = runtime.eq_ignore_ascii_case("codex")
+        || runtime.eq_ignore_ascii_case("claude")
+        || runtime.eq_ignore_ascii_case(ANTIGRAVITY_RUNTIME);
     let memory_context = match load_agent_memory_context(&working_directory) {
         Ok(memory_context) => memory_context,
         Err(err) => {
@@ -1101,7 +1096,7 @@ async fn supervisor_start_agent(
     if runtime.eq_ignore_ascii_case("codex") {
         return codex::supervisor_start_codex_streaming_agent(
             pool,
-            codex_registry,
+            &registries.codex,
             agent_id,
             work_item_id,
             handle,
@@ -1120,12 +1115,29 @@ async fn supervisor_start_agent(
     if runtime.eq_ignore_ascii_case("claude") {
         return claude::supervisor_start_claude_streaming_agent(
             pool,
-            claude_registry,
+            &registries.claude,
             agent_id,
             work_item_id,
             handle,
             model,
             reasoning_effort,
+            working_directory,
+            environment_variables,
+            work_item_prompt,
+            rendered_context_max_seq,
+            surface_delivery,
+            memory_context,
+        )
+        .await;
+    }
+    if runtime.eq_ignore_ascii_case(ANTIGRAVITY_RUNTIME) {
+        return antigravity::supervisor_start_antigravity_streaming_agent(
+            pool,
+            &registries.antigravity,
+            agent_id,
+            work_item_id,
+            handle,
+            model,
             working_directory,
             environment_variables,
             work_item_prompt,
@@ -1202,8 +1214,7 @@ async fn finalize_unstoppable_work_item(
 
 async fn supervisor_stop_run(
     pool: &SqlitePool,
-    codex_registry: &WarmCodexRegistry,
-    claude_registry: &WarmClaudeRegistry,
+    registries: &WarmRegistries,
     run_id: Uuid,
     command_work_item_id: Option<Uuid>,
 ) -> CommandResult<()> {
@@ -1270,7 +1281,7 @@ async fn supervisor_stop_run(
     }
 
     if runtime.eq_ignore_ascii_case("codex")
-        && codex::interrupt_warm_codex_run(pool, codex_registry, agent_id, run_id).await?
+        && codex::interrupt_warm_codex_run(pool, &registries.codex, agent_id, run_id).await?
     {
         record_agent_activity(
             pool,
@@ -1285,7 +1296,7 @@ async fn supervisor_stop_run(
     }
 
     if runtime.eq_ignore_ascii_case("claude")
-        && claude::interrupt_warm_claude_run(pool, claude_registry, agent_id, run_id).await?
+        && claude::interrupt_warm_claude_run(pool, &registries.claude, agent_id, run_id).await?
     {
         record_agent_activity(
             pool,
@@ -1368,6 +1379,7 @@ mod tests {
     use super::{
         claim_next_supervisor_command, close_orphaned_agent_runs, load_channel_agent_roster,
         recover_supervisor_commands_at_startup, run_supervisor_command, supervisor_stop_run,
+        WarmRegistries,
     };
     use crate::db::{db_connect_with_url, migrate};
     use crate::runtime::lifecycle::close_orphaned_runs_at_startup;
@@ -1424,8 +1436,7 @@ mod tests {
 
             super::supervisor_start_agent(
                 &pool,
-                &WarmCodexRegistry::default(),
-                &WarmClaudeRegistry::default(),
+                &WarmRegistries::default(),
                 agent_id,
                 Some(work_item_id),
             )
@@ -1493,8 +1504,7 @@ mod tests {
 
             close_orphaned_agent_runs(
                 &pool,
-                &WarmCodexRegistry::default(),
-                &WarmClaudeRegistry::default(),
+                &WarmRegistries::default(),
             )
             .await?;
 
@@ -1927,14 +1937,7 @@ mod tests {
             let (run_id, work_item_id) = insert_live_run(&pool, agent_id, None).await?;
             let cursor = ui_event_cursor(&pool).await?;
 
-            supervisor_stop_run(
-                &pool,
-                &WarmCodexRegistry::default(),
-                &WarmClaudeRegistry::default(),
-                run_id,
-                None,
-            )
-            .await?;
+            supervisor_stop_run(&pool, &WarmRegistries::default(), run_id, None).await?;
 
             assert_eq!(
                 stop_state(&pool, agent_id, run_id, work_item_id).await?,
@@ -1985,8 +1988,7 @@ mod tests {
 
             supervisor_stop_run(
                 &pool,
-                &WarmCodexRegistry::default(),
-                &WarmClaudeRegistry::default(),
+                &WarmRegistries::default(),
                 run_id,
                 Some(work_item_id),
             )
@@ -2033,8 +2035,7 @@ mod tests {
 
             supervisor_stop_run(
                 &pool,
-                &WarmCodexRegistry::default(),
-                &WarmClaudeRegistry::default(),
+                &WarmRegistries::default(),
                 run_id,
                 Some(work_item_id),
             )
@@ -2078,7 +2079,7 @@ mod tests {
                 .join(format!("lantor-missing-{}", Uuid::new_v4().simple()))
                 .to_string_lossy()
                 .into_owned();
-            for runtime in ["claude", "codex"] {
+            for runtime in ["claude", "codex", "antigravity"] {
                 let agent_id = insert_test_agent(&pool, &format!("{runtime}-spawn")).await?;
                 sqlx::query("update agents set runtime = $2 where id = $1")
                     .bind(agent_id)
@@ -2098,6 +2099,22 @@ mod tests {
                         None,
                         runtime.to_owned(),
                         String::new(),
+                        String::new(),
+                        missing_directory.clone(),
+                        String::new(),
+                        String::new(),
+                        0,
+                        super::SurfaceDelivery::default(),
+                        None,
+                    )
+                    .await
+                } else if runtime == "antigravity" {
+                    crate::runtime::antigravity::supervisor_start_antigravity_streaming_agent(
+                        &pool,
+                        &WarmRegistries::default().antigravity,
+                        agent_id,
+                        None,
+                        runtime.to_owned(),
                         String::new(),
                         missing_directory.clone(),
                         String::new(),
@@ -2260,34 +2277,211 @@ mod tests {
                     .map_err(|err| err.to_string())
                 }
             };
-            let codex_registry = WarmCodexRegistry::default();
-            let claude_registry = WarmClaudeRegistry::default();
+            let registries = WarmRegistries::default();
 
             // A dark wake: new requests may still try, retries wait.
-            super::schedule_queued_work_items_when(
-                &pool,
-                &codex_registry,
-                &claude_registry,
-                || async { true },
-            )
-            .await?;
+            super::schedule_queued_work_items_when(&pool, &registries, || async { true }).await?;
             assert_eq!(started(fresh).await?, 1);
             assert_eq!(started(due).await?, 0);
             assert_eq!(started(backing_off).await?, 0);
 
             // The Mac is really awake: the retry that is due starts.
-            super::schedule_queued_work_items_when(
-                &pool,
-                &codex_registry,
-                &claude_registry,
-                || async { false },
-            )
-            .await?;
+            super::schedule_queued_work_items_when(&pool, &registries, || async { false }).await?;
             assert_eq!(started(due).await?, 1);
             assert_eq!(started(backing_off).await?, 0);
             Ok(())
         }
         .await;
+        drop_test_schema(pool, database_path).await;
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    /// The whole path with a stand-in `agy`: a turn streams progress, runs a
+    /// tool and ends with its final answer; the next process resumes the
+    /// conversation, and a conversation agy no longer has starts over.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_antigravity_turn_streams_its_answer_and_the_next_process_resumes_it() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let Some((pool, database_path)) = test_pool().await else {
+            return;
+        };
+        let directory = std::env::temp_dir().join(format!("lantor-agy-{}", Uuid::new_v4()));
+        let result: Result<(), String> = async {
+            let bin = directory.join("bin");
+            std_fs::create_dir_all(&bin).map_err(|err| err.to_string())?;
+            // The second process says the old conversation is gone, as agy does
+            // by starting a new one.
+            let script = r#"#!/bin/sh
+dir="$(dirname "$0")/.."
+count=$(cat "$dir/count" 2>/dev/null || echo 0)
+count=$((count + 1))
+echo "$count" > "$dir/count"
+printf '%s\n' "$*" > "$dir/args-$count"
+if [ "$count" = 1 ]; then id=aaaaaaaa-1111-4111-8111-111111111111; else id=bbbbbbbb-2222-4222-8222-222222222222; fi
+printf '%s\n' "{\"event\":\"init\",\"conversation_id\":\"$id\",\"init\":{\"cwd\":\"$PWD\",\"tools\":[\"run_command\"]}}"
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$dir/input-$count"
+  printf '%s\n' "{\"event\":\"step_update\",\"step_update\":{\"conversation_id\":\"$id\",\"step_index\":0,\"state\":\"DONE\",\"step_type\":\"user_input\"}}"
+  printf '%s\n' "{\"event\":\"step_update\",\"step_update\":{\"conversation_id\":\"$id\",\"step_index\":1,\"state\":\"ACTIVE\",\"step_type\":\"agent_response\",\"text_delta\":\"Checking the logs first.\"}}"
+  printf '%s\n' "{\"event\":\"step_update\",\"step_update\":{\"conversation_id\":\"$id\",\"step_index\":1,\"state\":\"DONE\",\"step_type\":\"agent_response\",\"usage\":{\"input_tokens\":100,\"output_tokens\":10,\"thinking_tokens\":5,\"cache_read_tokens\":0}}}"
+  printf '%s\n' "{\"event\":\"step_update\",\"step_update\":{\"conversation_id\":\"$id\",\"step_index\":2,\"state\":\"ACTIVE\",\"step_type\":\"tool\",\"tool_name\":\"run_command\",\"tool_info\":{\"name\":\"run_command\",\"parameters\":{\"CommandLine\":\"tail app.log\"}}}}"
+  printf '%s\n' "{\"event\":\"step_update\",\"step_update\":{\"conversation_id\":\"$id\",\"step_index\":2,\"state\":\"DONE\",\"step_type\":\"tool\",\"tool_name\":\"run_command\"}}"
+  printf '%s\n' "{\"event\":\"step_update\",\"step_update\":{\"conversation_id\":\"$id\",\"step_index\":3,\"state\":\"ACTIVE\",\"step_type\":\"agent_response\",\"text_delta\":\"The logs \"}}"
+  printf '%s\n' "{\"event\":\"step_update\",\"step_update\":{\"conversation_id\":\"$id\",\"step_index\":3,\"state\":\"ACTIVE\",\"step_type\":\"agent_response\",\"text_delta\":\"are clean.\"}}"
+  printf '%s\n' "{\"event\":\"step_update\",\"step_update\":{\"conversation_id\":\"$id\",\"step_index\":3,\"state\":\"DONE\",\"step_type\":\"agent_response\",\"usage\":{\"input_tokens\":20,\"output_tokens\":4,\"thinking_tokens\":1,\"cache_read_tokens\":90}}}"
+  printf '%s\n' "{\"event\":\"result\",\"result\":{\"conversation_id\":\"$id\",\"status\":\"SUCCESS\",\"response\":\"The logs are clean.\\n\",\"num_turns\":1,\"usage\":{\"input_tokens\":120,\"output_tokens\":14,\"thinking_tokens\":6,\"cache_read_tokens\":90}}}"
+done
+"#;
+            let agy = bin.join("agy");
+            std_fs::write(&agy, script).map_err(|err| err.to_string())?;
+            std_fs::set_permissions(&agy, std_fs::Permissions::from_mode(0o755))
+                .map_err(|err| err.to_string())?;
+
+            let agent_id = insert_test_agent(&pool, "agy-end-to-end").await?;
+            sqlx::query(
+                r#"
+                update agents
+                set runtime = 'antigravity', model = 'gemini-4-carbon-medium',
+                    working_directory = $2, environment_variables = $3
+                where id = $1
+                "#,
+            )
+            .bind(agent_id)
+            .bind(directory.to_string_lossy().into_owned())
+            .bind(format!("PATH={}:/usr/bin:/bin", bin.display()))
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            let channel_id = insert_test_channel(&pool, "agy-end-to-end").await?;
+            let new_request = |title: &'static str| {
+                let pool = pool.clone();
+                async move {
+                    sqlx::query_scalar::<_, Uuid>(
+                        r#"
+                        insert into agent_work_items (agent_id, channel_id, title, context, status)
+                        values ($1, $2, $3, 'context', 'queued')
+                        returning id
+                        "#,
+                    )
+                    .bind(agent_id)
+                    .bind(channel_id)
+                    .bind(title)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|err| err.to_string())
+                }
+            };
+            let wait_until_done = |work_item_id: Uuid| {
+                let pool = pool.clone();
+                async move {
+                    for _ in 0..200 {
+                        let status: String =
+                            sqlx::query_scalar("select status from agent_work_items where id = $1")
+                                .bind(work_item_id)
+                                .fetch_one(&pool)
+                                .await
+                                .map_err(|err| err.to_string())?;
+                        if status == "done" {
+                            return Ok(());
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+                    Err("the request never finished".to_owned())
+                }
+            };
+            let registries = WarmRegistries::default();
+
+            let first = new_request("look at the logs").await?;
+            super::supervisor_start_agent(&pool, &registries, agent_id, Some(first)).await?;
+            wait_until_done(first).await?;
+
+            // Only the final answer stays in the reply; the note before the
+            // tool call became progress.
+            let replies: Vec<(String, String)> = sqlx::query_as(
+                "select body, delivery_state from messages where sender_agent_id = $1 order by seq",
+            )
+            .bind(agent_id)
+            .fetch_all(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            assert_eq!(
+                replies,
+                [("The logs are clean.".to_owned(), "complete".to_owned())]
+            );
+            let (input_tokens, output_tokens, cost_micros): (i64, i64, i64) = sqlx::query_as(
+                "select input_tokens, output_tokens, cost_micros from agent_runs where work_item_id = $1",
+            )
+            .bind(first)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            assert_eq!((input_tokens, output_tokens, cost_micros), (210, 20, 0));
+            let conversation: String = sqlx::query_scalar(
+                "select provider_thread_id from runtime_sessions where agent_id = $1 and runtime = 'antigravity'",
+            )
+            .bind(agent_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            assert_eq!(conversation, "aaaaaaaa-1111-4111-8111-111111111111");
+            let args = std_fs::read_to_string(directory.join("args-1")).map_err(|err| err.to_string())?;
+            assert!(args.contains("--dangerously-skip-permissions"), "{args}");
+            assert!(args.contains("--model gemini-4-carbon-medium"), "{args}");
+            assert!(!args.contains("--conversation"), "{args}");
+            let instructions = std_fs::read_to_string(directory.join("GEMINI.md"))
+                .map_err(|err| err.to_string())?;
+            assert!(instructions.contains("You are @agy-end-to-end"));
+            let first_input = std_fs::read_to_string(directory.join("input-1"))
+                .map_err(|err| err.to_string())?;
+            assert!(first_input.starts_with("{\"event\":\"user\""), "{first_input}");
+            assert!(!first_input.contains("You are @agy-end-to-end"), "the standing prompt is GEMINI.md");
+
+            // A new process resumes the conversation; agy no longer has it and
+            // starts another, which Lantor then records.
+            registries
+                .antigravity
+                .stop_idle_processes(&pool, "test restart")
+                .await;
+            for _ in 0..200 {
+                if registries.antigravity.get(agent_id).await.is_none() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            let second = new_request("and now?").await?;
+            super::supervisor_start_agent(&pool, &registries, agent_id, Some(second)).await?;
+            wait_until_done(second).await?;
+            let args = std_fs::read_to_string(directory.join("args-2")).map_err(|err| err.to_string())?;
+            assert!(
+                args.contains("--conversation aaaaaaaa-1111-4111-8111-111111111111"),
+                "{args}"
+            );
+            let conversation: String = sqlx::query_scalar(
+                "select provider_thread_id from runtime_sessions where agent_id = $1 and runtime = 'antigravity'",
+            )
+            .bind(agent_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            assert_eq!(conversation, "bbbbbbbb-2222-4222-8222-222222222222");
+            let restarted: i64 = sqlx::query_scalar(
+                "select count(*) from agent_activities where agent_id = $1 and title = 'Started a new Antigravity conversation'",
+            )
+            .bind(agent_id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+            assert_eq!(restarted, 1);
+            registries
+                .antigravity
+                .stop_idle_processes(&pool, "test done")
+                .await;
+            Ok(())
+        }
+        .await;
+        let _ = std_fs::remove_dir_all(&directory);
         drop_test_schema(pool, database_path).await;
         assert!(result.is_ok(), "{:?}", result.err());
     }
@@ -2358,8 +2552,7 @@ done
             .fetch_one(&pool)
             .await
             .map_err(|err| err.to_string())?;
-            let codex_registry = WarmCodexRegistry::default();
-            let claude_registry = WarmClaudeRegistry::default();
+            let registries = WarmRegistries::default();
             let wait_for_status = |wanted: &'static str| {
                 let pool = pool.clone();
                 async move {
@@ -2381,8 +2574,7 @@ done
 
             super::supervisor_start_agent(
                 &pool,
-                &codex_registry,
-                &claude_registry,
+                &registries,
                 agent_id,
                 Some(work_item_id),
             )
@@ -2399,14 +2591,14 @@ done
             };
             assert_eq!(replies(pool.clone()).await?, []);
             for _ in 0..200 {
-                if claude_registry.get(agent_id).await.is_none() {
+                if registries.claude.get(agent_id).await.is_none() {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
 
             // Still inside its delay: nothing starts.
-            super::schedule_queued_work_items_when(&pool, &codex_registry, &claude_registry, || async {
+            super::schedule_queued_work_items_when(&pool, &registries, || async {
                 false
             })
             .await?;
@@ -2424,14 +2616,14 @@ done
             .execute(&pool)
             .await
             .map_err(|err| err.to_string())?;
-            super::schedule_queued_work_items_when(&pool, &codex_registry, &claude_registry, || async {
+            super::schedule_queued_work_items_when(&pool, &registries, || async {
                 false
             })
             .await?;
             let command = claim_next_supervisor_command(&pool)
                 .await?
                 .ok_or("the retry must start once its delay passed")?;
-            run_supervisor_command(&pool, &codex_registry, &claude_registry, command).await;
+            run_supervisor_command(&pool, &registries, command).await;
             wait_for_status("done").await?;
 
             assert_eq!(
@@ -2460,8 +2652,7 @@ done
             return;
         };
         let result: Result<(), String> = async {
-            let codex_registry = WarmCodexRegistry::default();
-            let claude_registry = WarmClaudeRegistry::default();
+            let registries = WarmRegistries::default();
             // Two starts are queued; the first ending leaves the second.
             let twice = insert_test_agent(&pool, "twice").await?;
             queue_test_start(&pool, twice, "cancelled").await?;
@@ -2469,12 +2660,12 @@ done
             let first = claim_next_supervisor_command(&pool)
                 .await?
                 .ok_or("no first command")?;
-            run_supervisor_command(&pool, &codex_registry, &claude_registry, first).await;
+            run_supervisor_command(&pool, &registries, first).await;
             assert_eq!(agent_status(&pool, twice).await?, "queued");
             let second = claim_next_supervisor_command(&pool)
                 .await?
                 .ok_or("no second command")?;
-            run_supervisor_command(&pool, &codex_registry, &claude_registry, second).await;
+            run_supervisor_command(&pool, &registries, second).await;
             assert_eq!(agent_status(&pool, twice).await?, "idle");
 
             // A live run settles its agent's status itself when it ends.
@@ -2525,10 +2716,9 @@ done
     }
 
     async fn run_pending_commands(pool: &SqlitePool) -> Result<(), String> {
-        let codex_registry = WarmCodexRegistry::default();
-        let claude_registry = WarmClaudeRegistry::default();
+        let registries = WarmRegistries::default();
         while let Some(command) = claim_next_supervisor_command(pool).await? {
-            run_supervisor_command(pool, &codex_registry, &claude_registry, command).await;
+            run_supervisor_command(pool, &registries, command).await;
         }
         Ok(())
     }

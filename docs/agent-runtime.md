@@ -33,17 +33,57 @@ Dispatch is work-item based:
 - Cancellation marks queued work as cancelled or sends a stop command for a running run.
 - Retry creates a new queued work item instead of mutating historical state.
 
-Warm Codex and Claude runtimes reply with normal assistant text for the current
-channel or thread. Lantor routes that text into the correct chat surface. They
-may also emit standalone `LANTOR_EVENT` control lines for structured side
-effects.
+Warm Codex, Claude and Antigravity runtimes reply with normal assistant text
+for the current channel or thread. Lantor routes that text into the correct
+chat surface. They may also emit standalone `LANTOR_EVENT` control lines for
+structured side effects.
 
-Both warm runtimes keep one long-lived process per agent, and they share its
+The warm runtimes keep one long-lived process per agent, and they share its
 handling in `src-tauri/src/runtime/warm.rs`: the per-agent registry, reusing
 or retiring a process before a start, the stderr log, what happens when the
-process exits, and the idle stop. `claude.rs` and `codex.rs` implement
-`WarmProvider` and keep what depends on their protocol: spawning and the
-handshake, stdout parsing, turns, follow-ups and interrupts.
+process exits, and the idle stop. `claude.rs`, `codex.rs` and
+`antigravity.rs` implement `WarmProvider` and keep what depends on their
+protocol: spawning and the handshake, stdout parsing, turns, follow-ups and
+interrupts. The supervisor holds one registry per runtime in
+`WarmRegistries`.
+
+### Antigravity
+
+Antigravity agents run Google's `agy` CLI in its headless stream-json mode
+(`runtime/antigravity.rs`):
+`agy --input-format stream-json --output-format stream-json
+--dangerously-skip-permissions --model <id> -p=`. Install `agy` and sign in
+to it once interactively; headless mode uses that cached login.
+
+- **Turns.** Each turn is one `{"event":"user",...}` line on stdin. `agy`
+  answers with `step_update` events (the agent's text, each tool call) and a
+  `result` that ends the turn. Shell commands and file edits show as the same
+  activities as on the other runtimes.
+- **Reply.** Text streams into the reply as it arrives. The `result` carries
+  only the final answer, so when the agent wrote notes before a tool call,
+  the finished reply becomes that answer and the notes stay as progress.
+- **No follow-ups into a running turn, no interrupt.** `agy` takes a new
+  prompt only after the turn's `result`, so a message that arrives meanwhile
+  starts the next turn. A stop ends the process; the next start resumes the
+  conversation.
+- **Conversation.** The conversation id from `init` is stored as the
+  agent's runtime session, and a new process resumes it with
+  `--conversation`. When `agy` no longer has that conversation it starts a
+  new one, which Lantor notices from `init`, records, and treats as a new
+  session (an "Started a new Antigravity conversation" activity).
+- **Standing prompt.** `agy` has no system-prompt flag, but it loads
+  `AGENTS.md` and `GEMINI.md` from its working directory on every start.
+  Lantor writes its standing prompt to the workspace's `GEMINI.md`, marked
+  as its own on the first line, and rewrites it at each start; the owner's
+  instructions stay in `AGENTS.md`. A `GEMINI.md` without the marker is left
+  alone, and the first turn of a new conversation carries the standing
+  prompt instead.
+- **Model.** The model id includes its thinking level
+  (`gemini-4-carbon-medium`); `agy models` lists them. Changing the model
+  restarts the process, which resumes the conversation.
+- **Usage.** Token counts come from each step and from the `result`: input,
+  cache reads, and output including thinking. `agy` reports no cost, so the
+  run's cost stays 0, and the plan usage card does not cover Antigravity.
 
 Restart in the agent panel asks for a fresh process. The request is stored on
 the agent (`runtime_restart_requested_at`), so it survives the order in which
@@ -328,10 +368,10 @@ the new build by itself once no agent is working
   carried out, no warm process in a turn. Queued requests do not count. The
   check comes before scheduling, and only this loop starts work, so nothing
   starts in between. Until then the loop works as usual.
-- It then stops its idle Claude and Codex processes, as the ten-minute idle
-  stop does, and executes the new file in place: same process id, arguments
-  and environment. The supervisor lock is close-on-exec, so the new build
-  takes it as it starts. It runs the migrations and starts the queued
+- It then stops its idle Claude, Codex and Antigravity processes, as the
+  ten-minute idle stop does, and executes the new file in place: same process
+  id, arguments and environment. The supervisor lock is close-on-exec, so the
+  new build takes it as it starts. It runs the migrations and starts the queued
   requests; each agent's next turn resumes its session in a new process.
 - A build that cannot be executed is not tried again until the file changes.
   The error is kept for Settings.
@@ -350,8 +390,8 @@ It takes about 70 seconds.
 ## Agent Prompt
 
 A warm runtime gets the standing prompt once, when its process starts
-(`prompts.rs`: the Claude system prompt or the Codex developer
-instructions). Each turn then sends only the wake prompt: the selected inbox
+(`prompts.rs`: the Claude system prompt, the Codex developer instructions,
+or the `GEMINI.md` an Antigravity agent loads; see [Antigravity](#antigravity)). Each turn then sends only the wake prompt: the selected inbox
 item, its channel and thread, the default reply target, and the block of
 recent messages on that surface. Because a session keeps every turn, a rule
 belongs in the standing prompt, stated once, and the wake prompt carries only
