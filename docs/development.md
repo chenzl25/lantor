@@ -144,7 +144,8 @@ installed. Each suite has an npm script, for example:
   bottom bar badges leave their icons visible, the bottom bar and Home have
   no backdrop blur (both are opaque, and a blur behind them costs every frame
   the list scrolls or Home slides), no form control is under 16px
-  (iOS zooms the page for a smaller one), a followed thread stays on its
+  (iOS zooms the page for a smaller one), a thread's replies are asked for
+  when the finger lands on its reply summary, a followed thread stays on its
   latest reply while the reply box grows, the layout covers what the
   on-screen keyboard leaves visible (see
   [`web-app-shell.md`](web-app-shell.md#on-screen-keyboard)), and a tapped

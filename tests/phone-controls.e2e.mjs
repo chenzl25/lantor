@@ -189,11 +189,25 @@ try {
     assert.deepEqual(await smallControls(page), [], `${name}: Tasks`);
     await page.locator(".tabs button").filter({ hasText: "Chat" }).tap();
 
-    // 3. A followed thread stays on its latest reply while the reply box grows
+    // 3. The thread's replies are asked for when the finger lands on its reply
+    //    summary, and opening it on release takes that request.
+    const pageRequests = () => requests.filter(request => request.path === "/api/load_thread_page").length;
+    const pagesBefore = pageRequests();
+    // The list stays hidden for a moment after the Chat tab returns, until its
+    // reading position is restored.
+    await rootRow.locator(".thread-reply-summary").waitFor({ state: "visible" });
+    const summaryBox = await rootRow.locator(".thread-reply-summary").boundingBox();
+    await page.mouse.move(summaryBox.x + summaryBox.width / 2, summaryBox.y + summaryBox.height / 2);
+    await page.mouse.down();
+    for (let tries = 0; tries < 100 && pageRequests() === pagesBefore; tries += 1) await new Promise(done => setTimeout(done, 20));
+    assert.equal(pageRequests(), pagesBefore + 1, `${name}: the replies are asked for when the finger lands`);
+    assert.equal(await page.locator(".thread").count(), 0, `${name}: the thread opens only on release`);
+    await page.mouse.up();
+    //    A followed thread stays on its latest reply while the reply box grows
     //    and while the mention list is open. WebKit does not keep it there itself.
-    await rootRow.locator(".thread-reply-summary").tap();
     const thread = page.locator(".thread");
     await thread.locator(`[data-message-id="${replies.at(-1).id}"]`).waitFor();
+    assert.equal(pageRequests(), pagesBefore + 1, `${name}: opening the thread reuses the request`);
     await waitForThreadBottom(page, `${name}, thread opened`);
     const replyBox = thread.locator(".reply-composer textarea");
     const height = () => replyBox.evaluate(element => element.getBoundingClientRect().height);
