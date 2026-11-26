@@ -57,4 +57,18 @@ Home Screen app has no browser Back. Navigation is in-app:
 - The bottom bar (Home, Activity, Needs you, GitHub, Search) swaps panels in
   place; Home closes the open panel.
 
-`npm run test:navigation` checks these rules in Chromium and WebKit.
+A swipe from the left edge (the first 24px) goes back: it drags the open
+thread or agent panel off to the right over the channel, which slides in from
+a third of the way back, or, with neither open, drags the channel aside to
+Home. The surface follows the finger through CSS variables on the app element
+(`--mobile-swipe-x`, `--mobile-swipe-progress`, `--mobile-swipe-duration`,
+with `data-mobile-swipe` naming the surface), written once per frame without
+rendering React. On release the swipe completes past 28% of the width or with
+a flick of 0.45 px/ms over its last 100 ms, and a flick back towards the edge
+cancels it; otherwise it snaps back. A completed swipe first slides the surface
+the rest of the way and only then navigates, so the panel leaves the screen
+instead of vanishing. Dialogs, a second finger, and a mostly vertical drag
+cancel it. The rules are in `src/mobile-back-swipe.ts`.
+
+`npm run test:navigation` checks these rules in Chromium and WebKit;
+`npm run test:phone-controls` checks the edge swipe.

@@ -20,6 +20,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { Github, Hand, Home, Inbox, Search } from "lucide-react";
 import {
@@ -82,6 +83,10 @@ import { ThreadPanel } from "./components/ThreadPanel";
 import { WebAppStatus } from "./components/WebAppStatus";
 import { clearWebSignInMarker, isWebSessionExpired, subscribeWebSession } from "./web-session";
 import { followVisualViewport } from "./visual-viewport";
+import {
+  addBackSwipeSample, backSwipeReleaseVelocity, BACK_SWIPE_EDGE_PX, BACK_SWIPE_MAX_VERTICAL_PX,
+  BACK_SWIPE_MIN_HORIZONTAL_PX, BACK_SWIPE_PEEK_PX, BACK_SWIPE_SETTLE_MS, completesBackSwipe, type BackSwipeSample,
+} from "./mobile-back-swipe";
 import { isServerUnreachable, serverUnreachableMessage, subscribeServerReachability } from "./web-reachability";
 import { useWebOnline } from "./hooks/useWebOnline";
 import { useVisibleChannelRead } from "./hooks/useVisibleChannelRead";
@@ -274,11 +279,6 @@ const THEME_PREFERENCE_STORAGE_KEY = "lantor.themePreference";
 const CHAT_TEXT_SIZE_STORAGE_KEY = "lantor.chatTextSize";
 const FONT_PRESET_STORAGE_KEY = "lantor.fontPreset";
 const SHOW_IMAGE_THUMBNAILS_STORAGE_KEY = "lantor.showImageThumbnails";
-const MOBILE_EDGE_SWIPE_START_PX = 24;
-const MOBILE_EDGE_SWIPE_OPEN_PX = 72;
-const MOBILE_EDGE_SWIPE_MAX_VERTICAL_PX = 48;
-const MOBILE_SIDEBAR_PEEK_PX = 18;
-const MOBILE_SIDEBAR_FLING_VELOCITY = 0.45;
 const SAVED_MESSAGES_READ_DISMISS_ID = "saved-messages";
 const CHAT_TEXT_SIZE_OPTIONS: ChatTextSize[] = ["compact", "default", "large", "xlarge"];
 const UI_TYPE_SCALE: Record<ChatTextSize, Record<string, string>> = {
@@ -875,8 +875,12 @@ function App() {
   const [fontPreset, setFontPreset] = useState<FontPreset>(() => getStoredFontPreset());
   const [showImageThumbnails, setShowImageThumbnails] = useState(() => getStoredShowImageThumbnails());
   const [mobileSidebarFocus, setMobileSidebarFocus] = useState<"home" | "dms">("home");
-  const [mobileSidebarDragPx, setMobileSidebarDragPx] = useState(0);
-  const [mobileDragSurface, setMobileDragSurface] = useState<"sidebar" | "panel" | null>(null);
+  const appRef = useRef<HTMLElement | null>(null);
+  const backSwipeRef = useRef<{ enabled: boolean; surface: "panel" | "sidebar"; complete: () => void }>({
+    enabled: false,
+    surface: "sidebar",
+    complete: () => {},
+  });
   const [mobileComposerFocused, setMobileComposerFocused] = useState(false);
   const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null);
   const openPushTargetRef = useRef<(target: PushTarget) => void>(() => {});
@@ -2825,7 +2829,6 @@ function App() {
         showMobileSidebar: historyState.showMobileSidebar,
         activeModal: historyState.activeModal,
       });
-      setMobileSidebarDragPx(0);
       setFocusedMessageId(historyState.focusedMessageId ?? null);
     }
 
@@ -2926,140 +2929,154 @@ function App() {
     navigation.history.mode,
   ]);
 
+  const hasOpenBackSwipeBlocker = showChannelAgentsModal ||
+    showChannelSettingsModal ||
+    showCreateAgentModal ||
+    showCreateChannelModal ||
+    showActivityFeedModal ||
+    Boolean(artifactViewer) ||
+    showOwnerProfileModal ||
+    showSettingsModal ||
+    showSavedModal ||
+    showNeedsYouModal ||
+    showGithubInboxModal ||
+    showSearchModal;
+  // Read by the edge-swipe handlers, which stay bound for the app's lifetime
+  // so a swipe survives renders that land while the finger is down.
+  backSwipeRef.current = {
+    enabled: !showMobileSidebar && !hasOpenBackSwipeBlocker,
+    surface: showThread || selectedAgentId ? "panel" : "sidebar",
+    complete: () => {
+      if (selectedAgentId) closeSelectedAgent();
+      else if (showThread) closeThreadPanel();
+      else openMobileSidebarFromContent();
+    },
+  };
+
+  // The swiped surface follows the finger through CSS variables on the app,
+  // written once per frame without rendering React. On release it finishes or
+  // snaps back, and only a finished swipe then navigates, so the panel slides
+  // out instead of vanishing where the finger left it.
   useEffect(() => {
-    const hasOpenModal = showChannelAgentsModal ||
-      showChannelSettingsModal ||
-      showCreateAgentModal ||
-      showCreateChannelModal ||
-      showActivityFeedModal ||
-      Boolean(artifactViewer) ||
-      showOwnerProfileModal ||
-      showSettingsModal ||
-      showSavedModal ||
-      showNeedsYouModal ||
-      showGithubInboxModal ||
-      showSearchModal;
-    const isSidebarSwipe = !showThread && !selectedAgentId;
-    if (!isMobileViewport() || showMobileSidebar || hasOpenModal) return;
+    // The app element mounts after the startup screen; each swipe takes the
+    // one on screen when it starts.
+    let app: HTMLElement | null = null;
+    let gesture: {
+      startX: number;
+      startY: number;
+      lastX: number;
+      offset: number;
+      samples: BackSwipeSample[];
+    } | null = null;
+    let frame = 0;
+    let settleTimer = 0;
 
-    let startX: number | null = null;
-    let startY: number | null = null;
-    let lastX = 0;
-    let lastTime = 0;
-    let tracking = false;
-
-    function mobileSidebarWidth() {
-      return window.innerWidth;
+    function setOffset(offset: number) {
+      if (!app) return;
+      const width = Math.max(1, window.innerWidth);
+      app.style.setProperty("--mobile-swipe-x", `${offset}px`);
+      app.style.setProperty("--mobile-swipe-progress", String(Math.min(1, Math.max(0, offset / width))));
     }
 
-    function resetSwipe() {
+    function clearSwipe() {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(settleTimer);
+      frame = 0;
+      settleTimer = 0;
+      gesture = null;
       window.removeEventListener("touchmove", onTouchMove, { capture: true });
-      startX = null;
-      startY = null;
-      lastX = 0;
-      lastTime = 0;
-      tracking = false;
-      setMobileSidebarDragPx(0);
-      setMobileDragSurface(null);
+      if (!app) return;
+      delete app.dataset.mobileSwipe;
+      for (const property of ["--mobile-swipe-x", "--mobile-swipe-progress", "--mobile-swipe-duration"]) {
+        app.style.removeProperty(property);
+      }
+      app = null;
+    }
+
+    function settle(complete: boolean) {
+      window.removeEventListener("touchmove", onTouchMove, { capture: true });
+      window.cancelAnimationFrame(frame);
+      frame = 0;
+      gesture = null;
+      app?.style.setProperty("--mobile-swipe-duration", `${BACK_SWIPE_SETTLE_MS}ms`);
+      setOffset(complete ? window.innerWidth : 0);
+      settleTimer = window.setTimeout(() => {
+        // Navigate synchronously, so the closed state is on screen before the
+        // swipe's own positions are dropped.
+        if (complete) flushSync(() => backSwipeRef.current.complete());
+        clearSwipe();
+      }, BACK_SWIPE_SETTLE_MS + 40);
     }
 
     function onTouchStart(event: TouchEvent) {
+      if (settleTimer) return;
+      if (gesture) {
+        // A second finger cancels the swipe.
+        settle(false);
+        return;
+      }
       // Portalled dialogs (including image previews) own their gestures. An
       // edge pan inside one must not navigate away from its owning thread/DM.
-      if (activeDialog() || event.touches.length !== 1 || isTextInput(event.target) || isActionControl(event.target)) {
-        resetSwipe();
-        return;
-      }
-
+      if (!isMobileViewport() || !backSwipeRef.current.enabled || activeDialog()
+        || event.touches.length !== 1 || isTextInput(event.target) || isActionControl(event.target)) return;
       const touch = event.touches[0];
-      if (touch.clientX > MOBILE_EDGE_SWIPE_START_PX) {
-        resetSwipe();
-        return;
-      }
-      startX = touch.clientX;
-      startY = touch.clientY;
-      lastX = touch.clientX;
-      lastTime = event.timeStamp;
-      tracking = true;
+      const element = appRef.current;
+      if (touch.clientX > BACK_SWIPE_EDGE_PX || !element) return;
+      app = element;
+      gesture = { startX: touch.clientX, startY: touch.clientY, lastX: touch.clientX, offset: BACK_SWIPE_PEEK_PX, samples: [] };
+      addBackSwipeSample(gesture.samples, { x: touch.clientX, t: event.timeStamp });
       window.addEventListener("touchmove", onTouchMove, { passive: false, capture: true });
-      setMobileDragSurface(isSidebarSwipe ? "sidebar" : "panel");
-      setMobileSidebarDragPx(MOBILE_SIDEBAR_PEEK_PX);
+      element.dataset.mobileSwipe = backSwipeRef.current.surface;
+      element.style.setProperty("--mobile-swipe-duration", "0ms");
+      setOffset(BACK_SWIPE_PEEK_PX);
     }
 
     function onTouchMove(event: TouchEvent) {
+      if (!gesture || event.touches.length !== 1) return;
       if (activeDialog()) {
-        resetSwipe();
+        settle(false);
         return;
       }
-      if (!tracking || startX === null || startY === null || event.touches.length !== 1) return;
       const touch = event.touches[0];
-      const deltaX = touch.clientX - startX;
-      const deltaY = Math.abs(touch.clientY - startY);
-
-      if (deltaY > MOBILE_EDGE_SWIPE_MAX_VERTICAL_PX && Math.abs(deltaX) < MOBILE_EDGE_SWIPE_OPEN_PX) {
-        resetSwipe();
+      const deltaX = touch.clientX - gesture.startX;
+      const deltaY = Math.abs(touch.clientY - gesture.startY);
+      if (deltaY > BACK_SWIPE_MAX_VERTICAL_PX && Math.abs(deltaX) < BACK_SWIPE_MIN_HORIZONTAL_PX) {
+        settle(false);
         return;
       }
-      if (Math.abs(deltaX) > 10) {
-        if (event.cancelable) event.preventDefault();
+      if (Math.abs(deltaX) > 10 && event.cancelable) event.preventDefault();
+      gesture.lastX = touch.clientX;
+      gesture.offset = Math.max(BACK_SWIPE_PEEK_PX, Math.min(window.innerWidth, deltaX));
+      addBackSwipeSample(gesture.samples, { x: touch.clientX, t: event.timeStamp });
+      if (!frame) {
+        frame = window.requestAnimationFrame(() => {
+          frame = 0;
+          if (gesture) setOffset(gesture.offset);
+        });
       }
-
-      const width = mobileSidebarWidth();
-      setMobileSidebarDragPx(Math.max(MOBILE_SIDEBAR_PEEK_PX, Math.min(width, deltaX)));
-      lastX = touch.clientX;
     }
 
     function onTouchEnd(event: TouchEvent) {
-      if (activeDialog() || !tracking || startX === null) {
-        resetSwipe();
-        return;
-      }
+      if (!gesture) return;
+      const distance = Math.max(0, gesture.lastX - gesture.startX);
+      const velocity = backSwipeReleaseVelocity(gesture.samples, event.timeStamp);
+      settle(!activeDialog() && completesBackSwipe(distance, window.innerWidth, velocity));
+    }
 
-      const width = mobileSidebarWidth();
-      const currentPx = Math.max(0, Math.min(width, lastX - startX));
-      const elapsed = Math.max(1, event.timeStamp - lastTime);
-      const velocity = (lastX - startX) / elapsed;
-      const shouldOpen = currentPx >= width * 0.28 || velocity > MOBILE_SIDEBAR_FLING_VELOCITY;
-
-      if (shouldOpen) {
-        if (selectedAgentId) {
-          closeSelectedAgent();
-        } else if (showThread) {
-          closeThreadPanel();
-        } else {
-          openMobileSidebarFromContent();
-        }
-      }
-      resetSwipe();
+    function onTouchCancel() {
+      if (gesture) settle(false);
     }
 
     window.addEventListener("touchstart", onTouchStart, { passive: true, capture: true });
     window.addEventListener("touchend", onTouchEnd, { passive: true, capture: true });
-    window.addEventListener("touchcancel", resetSwipe, { passive: true, capture: true });
+    window.addEventListener("touchcancel", onTouchCancel, { passive: true, capture: true });
     return () => {
       window.removeEventListener("touchstart", onTouchStart, { capture: true });
-      window.removeEventListener("touchmove", onTouchMove, { capture: true });
       window.removeEventListener("touchend", onTouchEnd, { capture: true });
-      window.removeEventListener("touchcancel", resetSwipe, { capture: true });
+      window.removeEventListener("touchcancel", onTouchCancel, { capture: true });
+      clearSwipe();
     };
-  }, [
-    activeThreadId,
-    artifactViewer,
-    selectedAgentId,
-    showChannelAgentsModal,
-    showChannelSettingsModal,
-    showCreateAgentModal,
-    showCreateChannelModal,
-    showActivityFeedModal,
-    showMobileSidebar,
-    showOwnerProfileModal,
-    showSettingsModal,
-    showSavedModal,
-    showNeedsYouModal,
-    showGithubInboxModal,
-    showSearchModal,
-    showThread,
-  ]);
+  }, []);
 
   useEffect(() => {
     function onTouchStart(event: TouchEvent) {
@@ -4132,7 +4149,6 @@ function App() {
     setMobileSidebarFocus("home");
     if (isMobileViewport()) {
       dispatchNavigation({ type: "showHome" });
-      setMobileSidebarDragPx(0);
       return;
     }
     dispatchNavigation({ type: "showSidebar" });
@@ -4148,7 +4164,6 @@ function App() {
 
   function returnToMobileHome() {
     dispatchNavigation({ type: "returnHome" });
-    setMobileSidebarDragPx(0);
     setMobileSidebarFocus("home");
   }
 
@@ -5350,11 +5365,11 @@ function App() {
     <DecisionStoreContext.Provider value={decisionStore}>
     <CliVersionStoreContext.Provider value={cliVersionStore}>
     <main
-      className={`app theme-liquid ${selectedAgent || showThread ? "" : "thread-hidden"} ${selectedAgent || activeThreadId ? "right-panel-active" : ""} ${threadExpanded && showThread && !selectedAgent ? "thread-expanded" : ""} ${showMobileSidebar ? "mobile-sidebar-open" : ""} ${mobileDragSurface === "sidebar" ? "mobile-sidebar-dragging" : ""} ${mobileDragSurface === "panel" ? "mobile-panel-dragging" : ""} ${mobileComposerFocused ? "mobile-composer-focused" : ""}`}
+      ref={appRef}
+      className={`app theme-liquid ${selectedAgent || showThread ? "" : "thread-hidden"} ${selectedAgent || activeThreadId ? "right-panel-active" : ""} ${threadExpanded && showThread && !selectedAgent ? "thread-expanded" : ""} ${showMobileSidebar ? "mobile-sidebar-open" : ""} ${mobileComposerFocused ? "mobile-composer-focused" : ""}`}
       style={{
         "--sidebar-width": `${sidebarWidth}px`,
         "--thread-width": `${selectedAgent ? agentDrawerWidth : threadPanelWidth}px`,
-        "--mobile-sidebar-drag": `${mobileSidebarDragPx}px`,
         ...UI_TYPE_SCALE[chatTextSize],
       } as CSSProperties}
     >
@@ -5383,7 +5398,6 @@ function App() {
         selectChannel={(channelId) => {
           dispatchNavigation({ type: "hideHome" });
           setMobileSidebarFocus("home");
-          setMobileSidebarDragPx(0);
           selectChannel(channelId);
         }}
         openCreateAgentModal={() => {
@@ -5403,7 +5417,6 @@ function App() {
         openAgentDetail={(agent) => {
           const fromHome = isMobileHomeOpen();
           dispatchNavigation({ type: "hideHome" });
-          setMobileSidebarDragPx(0);
           dispatchNavigation({ type: "openAgent", agentId: agent.id, fromHome });
         }}
         openOwnerProfileModal={() => {

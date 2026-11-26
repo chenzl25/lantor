@@ -328,6 +328,7 @@ button,
   --radius-lg: 16px;
   --surface-border: rgba(32, 36, 44, 0.16);
   --surface-shadow: 0 24px 64px rgba(15, 23, 42, 0.18);
+  --mobile-back-swipe-shadow: -10px 0 28px rgba(15, 23, 42, 0.16);
   --surface-profile-hero-bg:
     radial-gradient(circle at 12% 0%, rgba(10, 132, 255, 0.17), transparent 34%),
     radial-gradient(circle at 88% 8%, rgba(52, 199, 89, 0.13), transparent 30%),
@@ -615,6 +616,7 @@ button,
   --unread-ink: var(--ink-primary);
   --surface-border: var(--border-strong);
   --surface-shadow: 0 24px 64px rgba(0, 0, 0, 0.28);
+  --mobile-back-swipe-shadow: -10px 0 28px rgba(0, 0, 0, 0.42);
   --surface-profile-hero-bg:
     radial-gradient(circle at 12% 0%, rgba(105, 170, 252, 0.18), transparent 34%),
     radial-gradient(circle at 88% 8%, rgba(52, 199, 89, 0.12), transparent 30%),
@@ -11969,9 +11971,12 @@ body.resizing-column * {
     transform: translateX(0);
   }
 
-  .app.mobile-sidebar-dragging .sidebar {
-    transform: translateX(calc(-100vw + var(--mobile-sidebar-drag, 0px)));
-    transition: none;
+  /* An edge swipe (src/mobile-back-swipe.ts) sets data-mobile-swipe and the
+     --mobile-swipe-* variables: the offset, its share of the width, and the
+     transition time, 0 while the finger moves the surface. */
+  .app[data-mobile-swipe="sidebar"] .sidebar {
+    transform: translateX(calc(-100vw + var(--mobile-swipe-x, 0px)));
+    transition: transform var(--mobile-swipe-duration, 0ms) ease;
   }
 
   .sidebar-resize-handle,
@@ -12165,9 +12170,16 @@ body.resizing-column * {
     transform: translateX(0);
   }
 
-  .app.mobile-sidebar-dragging .conversation {
-    transform: translateX(calc(-100vw + var(--mobile-sidebar-drag, 0px)));
-    transition: none;
+  .app[data-mobile-swipe="sidebar"] .conversation {
+    transform: translateX(calc(-100vw + var(--mobile-swipe-x, 0px)));
+    transition: transform var(--mobile-swipe-duration, 0ms) ease;
+  }
+
+  /* The channel under a swiped-back panel slides in from a third of the way
+     back, like a native navigation stack. */
+  .app[data-mobile-swipe="panel"].right-panel-active:not(.mobile-sidebar-open) .conversation {
+    transform: translateX(calc(-100vw - 30vw * (1 - var(--mobile-swipe-progress, 0))));
+    transition: transform var(--mobile-swipe-duration, 0ms) ease;
   }
 
   .topbar {
@@ -12602,10 +12614,11 @@ body.resizing-column * {
     overflow: hidden;
   }
 
-  .app.mobile-panel-dragging.right-panel-active .thread,
-  .app.mobile-panel-dragging.right-panel-active .agent-drawer {
-    transform: translateX(var(--mobile-sidebar-drag, 0px));
-    transition: none;
+  .app[data-mobile-swipe="panel"].right-panel-active .thread,
+  .app[data-mobile-swipe="panel"].right-panel-active .agent-drawer {
+    transform: translateX(var(--mobile-swipe-x, 0px));
+    transition: transform var(--mobile-swipe-duration, 0ms) ease;
+    box-shadow: var(--mobile-back-swipe-shadow);
   }
 
   .mobile-bottom-nav {
