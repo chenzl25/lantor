@@ -146,7 +146,9 @@ installed. Each suite has an npm script, for example:
   latest reply while the reply box grows, the layout covers what the
   on-screen keyboard leaves visible (see
   [`web-app-shell.md`](web-app-shell.md#on-screen-keyboard)), and a tapped
-  thread message offers Quote, Copy link and Save.
+  thread message offers Quote, Copy link and Save, and a swipe from the left
+  edge drags the thread back, snaps back or finishes (see
+  [`navigation.md`](navigation.md#phone-navigation)).
 - `npm run test:thread-find` checks that Cmd+F finds text across a long
   thread, including replies that are not loaded and collapsed text (see
   [`bootstrap-payload.md`](bootstrap-payload.md#finding-in-a-thread)).

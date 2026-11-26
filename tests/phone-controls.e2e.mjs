@@ -1,8 +1,9 @@
 // Production App against an isolated API, on a phone: the bottom bar badges
 // leave their icons visible, no form control is small enough for iOS to zoom
 // the page, a followed thread stays on its latest reply while the reply box
-// grows, the layout covers what the keyboard leaves visible, and a tapped
-// thread message offers Quote, Copy link and Save.
+// grows, the layout covers what the keyboard leaves visible, a tapped
+// thread message offers Quote, Copy link and Save, and a swipe from the left
+// edge drags the thread back and finishes or snaps back like a native one.
 // Run npm run build first. No live workspace data is read or mutated.
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -113,6 +114,18 @@ function fakeKeyboard() {
     viewport.dispatchEvent(new Event("scroll"));
   };
 }
+// Touches the app's edge-swipe handlers see; each call is one task, so
+// consecutive calls get increasing timestamps.
+const touches = (page, selector, steps) => page.evaluate(([selector, steps]) => {
+  const target = document.querySelector(selector);
+  for (const [type, x] of steps) {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "touches", { value: type === "touchend" ? [] : [{ clientX: x, clientY: 400 }] });
+    target.dispatchEvent(event);
+  }
+}, [selector, steps]);
+const left = (page, selector) => page.locator(selector).first().evaluate(element => Math.round(element.getBoundingClientRect().left) || 0);
+const swipeSettled = page => page.waitForFunction(() => !document.querySelector(".app").dataset.mobileSwipe);
 const box = (page, selector) => page.locator(selector).first().evaluate(element => {
   const rect = element.getBoundingClientRect();
   return { top: Math.round(rect.top), bottom: Math.round(rect.bottom) };
@@ -233,6 +246,46 @@ try {
     await other.locator(".markdown-body").tap();
     await other.locator(".message-tap-actions").waitFor();
     assert.equal(await page.locator(".message-tap-actions").count(), 1);
+
+    // 6. A swipe from the left edge drags the thread back over the channel,
+    //    which slides in from a third of the way back.
+    const inThread = ".thread .thread-scroll";
+    await touches(page, inThread, [["touchstart", 5]]);
+    await page.waitForTimeout(120); await touches(page, inThread, [["touchmove", 50]]);
+    await page.waitForTimeout(120); await touches(page, inThread, [["touchmove", 95]]);
+    await page.waitForFunction(() => Math.round(document.querySelector(".thread").getBoundingClientRect().left) === 90);
+    const underneath = await left(page, ".conversation");
+    assert.ok(underneath < -60 && underneath > -0.3 * 393, `${name}: the channel slides in under the thread, at ${underneath}`);
+    //    A short drag released after the finger stopped snaps back.
+    await page.waitForTimeout(150); await touches(page, inThread, [["touchend", 95]]);
+    await swipeSettled(page);
+    assert.equal(await left(page, ".thread"), 0, `${name}: a short slow drag snaps back`);
+    //    However far the finger got, a flick back towards the edge cancels.
+    await touches(page, inThread, [["touchstart", 5]]);
+    for (const x of [80, 160, 240]) { await page.waitForTimeout(40); await touches(page, inThread, [["touchmove", x]]); }
+    await page.waitForTimeout(150);
+    for (const x of [220, 190, 160]) await touches(page, inThread, [["touchmove", x]]);
+    await touches(page, inThread, [["touchend", 160]]);
+    await swipeSettled(page);
+    assert.equal(await left(page, ".thread"), 0, `${name}: a flick back keeps the thread open`);
+    //    A quick short flick finishes: the thread slides out, then closes.
+    await touches(page, inThread, [["touchstart", 5]]);
+    await touches(page, inThread, [["touchmove", 30]]);
+    await touches(page, inThread, [["touchmove", 60]]);
+    await touches(page, inThread, [["touchend", 60]]);
+    assert.equal(await page.locator(".thread").count(), 1, `${name}: the thread slides out instead of vanishing`);
+    await page.waitForFunction(() => (document.querySelector(".thread")?.getBoundingClientRect().left ?? 393) > 200);
+    await page.locator(".thread").waitFor({ state: "detached" });
+    await swipeSettled(page);
+    assert.equal(await left(page, ".conversation"), 0, `${name}: the channel is back in place`);
+    //    In a channel, the same swipe goes Home.
+    const inChannel = ".conversation .message-list";
+    await touches(page, inChannel, [["touchstart", 5]]);
+    for (const x of [100, 200, 260]) { await page.waitForTimeout(40); await touches(page, inChannel, [["touchmove", x]]); }
+    await page.waitForTimeout(150); await touches(page, inChannel, [["touchend", 260]]);
+    await page.waitForFunction(() => document.querySelector(".app").classList.contains("mobile-sidebar-open"));
+    await swipeSettled(page);
+    assert.equal(await left(page, ".sidebar"), 0, `${name}: Home is in place`);
     assert.deepEqual(errors, [], `${name}: no page errors`);
     await browser.close(); browser = null;
   }
