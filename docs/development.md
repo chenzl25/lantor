@@ -143,8 +143,10 @@ installed. Each suite has an npm script, for example:
 - `npm run test:phone-controls` checks phone details in Chromium and WebKit:
   bottom bar badges leave their icons visible, no form control is under 16px
   (iOS zooms the page for a smaller one), a followed thread stays on its
-  latest reply while the reply box grows, and a tapped thread message offers
-  Quote, Copy link and Save.
+  latest reply while the reply box grows, the layout covers what the
+  on-screen keyboard leaves visible (see
+  [`web-app-shell.md`](web-app-shell.md#on-screen-keyboard)), and a tapped
+  thread message offers Quote, Copy link and Save.
 - `npm run test:thread-find` checks that Cmd+F finds text across a long
   thread, including replies that are not loaded and collapsed text (see
   [`bootstrap-payload.md`](bootstrap-payload.md#finding-in-a-thread)).

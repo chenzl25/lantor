@@ -11937,12 +11937,15 @@ body.resizing-column * {
     min-height: 100dvh;
   }
 
+  /* The keyboard pans the visual viewport instead of shrinking 100dvh; the
+     layout covers what stays visible (src/visual-viewport.ts). */
   .app,
   .app.thread-hidden {
     grid-template-columns: 100vw 100vw;
     grid-template-rows: minmax(0, 1fr);
     width: 100vw;
-    height: 100dvh;
+    height: var(--visual-viewport-height, 100dvh);
+    margin-top: var(--visual-viewport-top, 0px);
     min-width: 0;
     overflow: hidden;
   }
@@ -11953,7 +11956,7 @@ body.resizing-column * {
     grid-row: 1;
     width: 100vw;
     max-width: none;
-    height: 100dvh;
+    height: var(--visual-viewport-height, 100dvh);
     min-height: 0;
     border-right: 0;
     border-bottom: 0;
@@ -12150,7 +12153,7 @@ body.resizing-column * {
     grid-row: 1;
     width: 100vw;
     grid-template-rows: auto auto minmax(0, 1fr) auto;
-    height: 100dvh;
+    height: var(--visual-viewport-height, 100dvh);
     min-height: 0;
     border-right: 0;
     overscroll-behavior-x: none;
@@ -12494,7 +12497,8 @@ body.resizing-column * {
   .app.mobile-composer-focused .composer,
   .app.mobile-composer-focused .reply-composer {
     margin-bottom: 0;
-    padding-bottom: calc(6px + env(safe-area-inset-bottom));
+    /* With the keyboard up the composer sits on it, not on the home indicator. */
+    padding-bottom: calc(6px + max(0px, env(safe-area-inset-bottom) - var(--keyboard-inset, 0px)));
   }
 
   .composer textarea,
@@ -12581,12 +12585,12 @@ body.resizing-column * {
   .thread,
   .agent-drawer {
     position: fixed;
-    inset: 0;
+    inset: var(--visual-viewport-top, 0px) 0 auto;
     z-index: 60;
     width: auto;
     max-width: 100vw;
     min-width: 0;
-    height: 100dvh;
+    height: var(--visual-viewport-height, 100dvh);
     border-left: 0;
     box-shadow: none;
     transform: translateX(0);
@@ -12963,14 +12967,16 @@ body.resizing-column * {
   .reminder-panel,
   .thread-browser-panel {
     width: 100vw;
-    max-height: 100dvh;
-    height: 100dvh;
+    max-height: var(--visual-viewport-height, 100dvh);
+    height: var(--visual-viewport-height, 100dvh);
     border: 0;
     border-radius: 0;
     box-shadow: none;
   }
 
   .search-backdrop {
+    inset: var(--visual-viewport-top, 0px) 0 auto;
+    height: var(--visual-viewport-height, 100dvh);
     padding: 0;
     place-items: stretch;
     background: #fff;
@@ -13261,11 +13267,11 @@ body.resizing-column * {
 
   .modal-card:has(.settings-panel) {
     max-width: calc(100vw - 28px);
-    max-height: calc(100dvh - 28px);
+    max-height: calc(var(--visual-viewport-height, 100dvh) - 28px);
   }
 
   .modal-card:has(.settings-panel) .modal-body {
-    max-height: calc(100dvh - 104px);
+    max-height: calc(var(--visual-viewport-height, 100dvh) - 104px);
     padding: 16px;
   }
 
@@ -13275,6 +13281,8 @@ body.resizing-column * {
      WKWebView even though React state updates instantly. Desktop keeps the
      frosted look. */
   .modal-backdrop {
+    inset: var(--visual-viewport-top, 0px) 0 auto;
+    height: var(--visual-viewport-height, 100dvh);
     background: var(--modal-mobile-backdrop-bg);
     backdrop-filter: none;
   }
