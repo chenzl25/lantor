@@ -528,6 +528,7 @@ pub(crate) async fn check_runtime_in_env(runtime: String) -> CommandResult<Runti
     let command = match runtime.as_str() {
         "codex" => "codex",
         "claude" => "claude",
+        "antigravity" => "agy",
         _ => {
             return Ok(RuntimeCheck {
                 runtime,

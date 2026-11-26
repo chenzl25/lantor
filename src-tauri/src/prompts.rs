@@ -362,6 +362,53 @@ pub(crate) fn claude_system_prompt(handle: &str) -> String {
     )
 }
 
+pub(crate) fn build_antigravity_streaming_prompt(prompt: &str) -> String {
+    build_claude_streaming_prompt(prompt)
+}
+
+pub(crate) fn antigravity_standing_prompt(handle: &str) -> String {
+    build_runtime_standing_prompt(
+        handle,
+        "Lantor is connected to Antigravity through agy's headless stream-json mode and streams your assistant text into chat automatically.\n\
+         Antigravity turn lifecycle: Lantor completes the current request when agy emits its result event, and only your final answer stays in the reply; notes you write between tool calls appear as progress. Messages that arrive while you work are not delivered into the running turn; they start the next one. Finish verification and deliver the result before returning. Use Lantor reminders for requested future follow-up.",
+    )
+}
+
+/// The file `agy` loads its workspace instructions from, beside the
+/// workspace's `AGENTS.md`.
+pub(crate) const ANTIGRAVITY_INSTRUCTIONS_FILE: &str = "GEMINI.md";
+
+/// First line of a `GEMINI.md` that Lantor owns and may rewrite.
+const ANTIGRAVITY_INSTRUCTIONS_MARKER: &str = "<!-- Written by Lantor for its Antigravity runtime and rewritten when the agent starts. Put your own instructions in AGENTS.md. -->";
+
+/// Writes Lantor's standing prompt to the workspace's `GEMINI.md`, which
+/// `agy` loads on every start, so the prompt stays current and survives the
+/// conversation's own compaction. Returns false, writing nothing, when there
+/// is no workspace or its `GEMINI.md` is someone else's.
+pub(crate) fn write_antigravity_instructions(
+    working_directory: &str,
+    handle: &str,
+) -> CommandResult<bool> {
+    let working_directory = working_directory.trim();
+    if working_directory.is_empty() {
+        return Ok(false);
+    }
+    let path = PathBuf::from(working_directory).join(ANTIGRAVITY_INSTRUCTIONS_FILE);
+    let content = format!(
+        "{ANTIGRAVITY_INSTRUCTIONS_MARKER}\n\n{}\n",
+        antigravity_standing_prompt(handle)
+    );
+    match fs::read_to_string(&path) {
+        Ok(existing) if existing == content => return Ok(true),
+        Ok(existing) if !existing.starts_with(ANTIGRAVITY_INSTRUCTIONS_MARKER) => return Ok(false),
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.to_string()),
+    }
+    fs::write(&path, content).map_err(|err| err.to_string())?;
+    Ok(true)
+}
+
 #[cfg(test)]
 #[path = "tests/prompts.rs"]
 mod relocated_tests;

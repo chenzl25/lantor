@@ -817,6 +817,32 @@ export const RUNTIME_PRESETS: Record<string, { label: string; defaultModel: stri
     commandName: "claude",
     models: ["fable", "opus", "sonnet", "haiku"],
   },
+  antigravity: {
+    label: "Antigravity",
+    defaultModel: "gemini-4-carbon-medium",
+    commandName: "agy",
+    // The ids `agy models` lists; each carries its own thinking level.
+    models: [
+      "gemini-4-carbon-low",
+      "gemini-4-carbon-medium",
+      "gemini-4-carbon-high",
+      "gemini-4-neon-low",
+      "gemini-4-neon-medium",
+      "gemini-4-neon-high",
+      "gemini-4-neon-xhigh",
+      "gemini-4-hydrogen-low",
+      "gemini-4-hydrogen-medium",
+      "gemini-4-hydrogen-high",
+      "gemini-4-argon-low",
+      "gemini-4-argon-medium",
+      "gemini-4-argon-high",
+      "gemini-3.8-flash-low",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-high",
+      "gemini-3.1-pro-low",
+      "gemini-3.1-pro-high",
+    ],
+  },
 };
 
 const MODEL_LABELS: Record<string, string> = {
@@ -909,6 +935,24 @@ export function isRetiredCodexModel(model: string) {
   return generation !== null && Number(generation[1]) < 6;
 }
 
+const GEMINI_THINKING_LABELS: Record<string, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+};
+
+/** `gemini-4-carbon-medium` as "Gemini 4 Carbon (Medium)". */
+function geminiModelLabel(model: string) {
+  const match = /^gemini-(.+)-(low|medium|high|xhigh)$/.exec(model);
+  if (!match) return null;
+  const name = match[1]
+    .split("-")
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+  return `Gemini ${name} (${GEMINI_THINKING_LABELS[match[2]]})`;
+}
+
 export function modelLabel(model: string) {
-  return MODEL_LABELS[model] ?? model;
+  return MODEL_LABELS[model] ?? geminiModelLabel(model) ?? model;
 }

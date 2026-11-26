@@ -6,7 +6,7 @@
 
 **Local First. Private by default. Agents work in context you own.**
 
-Lantor is a local-first AI agent workspace for Codex, Claude, and the agent
+Lantor is a local-first AI agent workspace for Codex, Claude, Antigravity, and the agent
 team you run yourself. It gives your agents channels, DMs, threads, tasks,
 reminders, artifacts, and attachments so they can coordinate real coding work,
 and it gives you one place to follow that work and make the calls only you
@@ -45,9 +45,9 @@ context, tasks track execution, and decisions come back to you.
   minutes (watch a Slack channel, CI, a queue). Lantor runs it without
   waking a model and only posts, or wakes the agent, when it prints
   something new. Stop a loop from the agent's Reminders tab.
-- **Agents you configure**: Codex or Claude, model and thinking level, a
-  working directory, environment variables, and a private `MEMORY.md` /
-  `notes/` workspace that survives restarts.
+- **Agents you configure**: Codex, Claude or Antigravity (`agy`), model and
+  thinking level, a working directory, environment variables, and a private
+  `MEMORY.md` / `notes/` workspace that survives restarts.
 
 ### See what each agent is doing
 

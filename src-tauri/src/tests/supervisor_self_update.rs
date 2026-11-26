@@ -12,14 +12,10 @@ use tokio::{sync::Semaphore, time::sleep};
 use uuid::Uuid;
 
 use super::{
-    run_supervisor_iteration, supervisor_is_idle, SupervisorIteration,
+    run_supervisor_iteration, supervisor_is_idle, SupervisorIteration, WarmRegistries,
     SUPERVISOR_COMMAND_CONCURRENCY,
 };
-use crate::runtime::{
-    claude::WarmClaudeRegistry,
-    codex::WarmCodexRegistry,
-    self_update::{ExecutableFile, SelfUpdate},
-};
+use crate::runtime::self_update::{ExecutableFile, SelfUpdate};
 use crate::test_support::{drop_test_schema, insert_test_agent, test_pool};
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -74,13 +70,7 @@ async fn start_commands(pool: &SqlitePool) -> Result<i64, String> {
 }
 
 async fn is_idle(pool: &SqlitePool, commands: &Semaphore) -> Result<bool, String> {
-    supervisor_is_idle(
-        pool,
-        &WarmCodexRegistry::default(),
-        &WarmClaudeRegistry::default(),
-        commands,
-    )
-    .await
+    supervisor_is_idle(pool, &WarmRegistries::default(), commands).await
 }
 
 /// One pass of the supervisor loop, with no maintenance due.
@@ -91,8 +81,7 @@ async fn pass(
 ) -> Result<SupervisorIteration, String> {
     run_supervisor_iteration(
         pool,
-        &WarmCodexRegistry::default(),
-        &WarmClaudeRegistry::default(),
+        &WarmRegistries::default(),
         commands,
         Some(update),
         &mut Instant::now(),
