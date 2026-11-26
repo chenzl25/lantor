@@ -13,8 +13,14 @@ export const BACK_SWIPE_PEEK_PX = 18;
 export const BACK_SWIPE_COMPLETE_FRACTION = 0.28;
 /** A flick at least this fast, in px/ms, completes or cancels it. */
 export const BACK_SWIPE_FLING_PX_PER_MS = 0.45;
-/** How long the surface takes to finish or snap back; matches the CSS. */
+/** How long the surface takes to finish or snap back after a swipe. */
 export const BACK_SWIPE_SETTLE_MS = 180;
+/** How long a page takes to slide in or out; matches --mobile-nav-duration. */
+export const MOBILE_NAVIGATION_MS = 300;
+
+export function prefersReducedMotion() {
+  return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+}
 const VELOCITY_WINDOW_MS = 100;
 const KEPT_SAMPLES = 8;
 

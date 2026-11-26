@@ -11845,6 +11845,19 @@ body.resizing-column * {
   white-space: pre-wrap;
 }
 
+@keyframes mobile-panel-push {
+  from {
+    transform: translateX(100%);
+    box-shadow: var(--mobile-back-swipe-shadow);
+  }
+
+  to {
+    transform: translateX(0);
+    box-shadow: var(--mobile-back-swipe-shadow);
+  }
+}
+
+
 @media (min-width: 761px) and (max-width: 1100px) {
   .app,
   .app.thread-hidden {
@@ -11943,6 +11956,9 @@ body.resizing-column * {
      layout covers what stays visible (src/visual-viewport.ts). */
   .app,
   .app.thread-hidden {
+    /* Navigating on a phone moves whole pages, with one timing for all. */
+    --mobile-nav-duration: 300ms;
+    --mobile-nav-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
     grid-template-columns: 100vw 100vw;
     grid-template-rows: minmax(0, 1fr);
     width: 100vw;
@@ -11963,8 +11979,9 @@ body.resizing-column * {
     border-right: 0;
     border-bottom: 0;
     box-shadow: none;
-    transform: translateX(-100vw);
-    transition: transform 180ms ease;
+    /* Under the channel, Home waits a third of the way back. */
+    transform: translateX(-30vw);
+    transition: transform var(--mobile-nav-duration) var(--mobile-nav-ease);
   }
 
   .app.mobile-sidebar-open .sidebar {
@@ -11975,8 +11992,8 @@ body.resizing-column * {
      --mobile-swipe-* variables: the offset, its share of the width, and the
      transition time, 0 while the finger moves the surface. */
   .app[data-mobile-swipe="sidebar"] .sidebar {
-    transform: translateX(calc(-100vw + var(--mobile-swipe-x, 0px)));
-    transition: transform var(--mobile-swipe-duration, 0ms) ease;
+    transform: translateX(calc(-30vw * (1 - var(--mobile-swipe-progress, 0))));
+    transition: transform var(--mobile-swipe-duration, 0ms) var(--mobile-nav-ease);
   }
 
   .sidebar-resize-handle,
@@ -12163,23 +12180,29 @@ body.resizing-column * {
     border-right: 0;
     overscroll-behavior-x: none;
     transform: translateX(-100vw);
-    transition: transform 180ms ease;
+    transition: transform var(--mobile-nav-duration) var(--mobile-nav-ease);
   }
 
   .app.mobile-sidebar-open .conversation {
     transform: translateX(0);
   }
 
+  /* Under an open thread or agent panel, the channel waits a third of the
+     way back too. */
+  .app.right-panel-active:not(.thread-hidden):not(.mobile-sidebar-open) .conversation {
+    transform: translateX(-130vw);
+  }
+
   .app[data-mobile-swipe="sidebar"] .conversation {
     transform: translateX(calc(-100vw + var(--mobile-swipe-x, 0px)));
-    transition: transform var(--mobile-swipe-duration, 0ms) ease;
+    transition: transform var(--mobile-swipe-duration, 0ms) var(--mobile-nav-ease);
   }
 
   /* The channel under a swiped-back panel slides in from a third of the way
      back, like a native navigation stack. */
   .app[data-mobile-swipe="panel"].right-panel-active:not(.mobile-sidebar-open) .conversation {
     transform: translateX(calc(-100vw - 30vw * (1 - var(--mobile-swipe-progress, 0))));
-    transition: transform var(--mobile-swipe-duration, 0ms) ease;
+    transition: transform var(--mobile-swipe-duration, 0ms) var(--mobile-nav-ease);
   }
 
   .topbar {
@@ -12606,7 +12629,9 @@ body.resizing-column * {
     border-left: 0;
     box-shadow: none;
     transform: translateX(0);
-    transition: transform 180ms ease;
+    transition: transform var(--mobile-nav-duration) var(--mobile-nav-ease);
+    /* A panel slides in over the channel when it opens. */
+    animation: mobile-panel-push var(--mobile-nav-duration) var(--mobile-nav-ease);
   }
 
   .thread {
@@ -12617,7 +12642,7 @@ body.resizing-column * {
   .app[data-mobile-swipe="panel"].right-panel-active .thread,
   .app[data-mobile-swipe="panel"].right-panel-active .agent-drawer {
     transform: translateX(var(--mobile-swipe-x, 0px));
-    transition: transform var(--mobile-swipe-duration, 0ms) ease;
+    transition: transform var(--mobile-swipe-duration, 0ms) var(--mobile-nav-ease);
     box-shadow: var(--mobile-back-swipe-shadow);
   }
 
@@ -13392,6 +13417,18 @@ body.resizing-column * {
 
   .github-issue-investigate-copy {
     align-items: flex-start;
+  }
+}
+
+@media (max-width: 760px) and (prefers-reduced-motion: reduce) {
+  .app,
+  .app.thread-hidden {
+    --mobile-nav-duration: 0ms;
+  }
+
+  .thread,
+  .agent-drawer {
+    animation: none;
   }
 }
 

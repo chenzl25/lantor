@@ -57,6 +57,15 @@ Home Screen app has no browser Back. Navigation is in-app:
 - The bottom bar (Home, Activity, Needs you, GitHub, Search) swaps panels in
   place; Home closes the open panel.
 
+Pages move like a navigation stack, all with one timing
+(`--mobile-nav-duration`, 300ms, and `--mobile-nav-ease`): a channel slides
+in over Home, which waits a third of the way back under it, and a thread or
+agent panel slides in over the channel, which waits a third of the way back
+in turn. Home and the channel stay mounted, so their CSS transitions also
+cover the way back. A thread or agent panel unmounts when it closes, so its
+Back button first slides it out the way a finished swipe does, and closes it
+afterwards. With reduced motion every move is instant.
+
 A swipe from the left edge (the first 24px) goes back: it drags the open
 thread or agent panel off to the right over the channel, which slides in from
 a third of the way back, or, with neither open, drags the channel aside to

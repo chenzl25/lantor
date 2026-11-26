@@ -147,7 +147,8 @@ installed. Each suite has an npm script, for example:
   on-screen keyboard leaves visible (see
   [`web-app-shell.md`](web-app-shell.md#on-screen-keyboard)), and a tapped
   thread message offers Quote, Copy link and Save, and a swipe from the left
-  edge drags the thread back, snaps back or finishes (see
+  edge drags the thread back, snaps back or finishes, and pages slide in and
+  out like a navigation stack (see
   [`navigation.md`](navigation.md#phone-navigation)).
 - `npm run test:thread-find` checks that Cmd+F finds text across a long
   thread, including replies that are not loaded and collapsed text (see
