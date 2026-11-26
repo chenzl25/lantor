@@ -52,8 +52,9 @@ interrupts. The supervisor holds one registry per runtime in
 Antigravity agents run Google's `agy` CLI in its headless stream-json mode
 (`runtime/antigravity.rs`):
 `agy --input-format stream-json --output-format stream-json
---dangerously-skip-permissions --model <id> -p=`. Install `agy` and sign in
-to it once interactively; headless mode uses that cached login.
+--dangerously-skip-permissions --model <id> [--effort <level>] -p=`. Install
+`agy` and sign in to it once interactively; headless mode uses that cached
+login.
 
 - **Turns.** Each turn is one `{"event":"user",...}` line on stdin. `agy`
   answers with `step_update` events (the agent's text, each tool call) and a
@@ -78,9 +79,14 @@ to it once interactively; headless mode uses that cached login.
   instructions stay in `AGENTS.md`. A `GEMINI.md` without the marker is left
   alone, and the first turn of a new conversation carries the standing
   prompt instead.
-- **Model.** The model id includes its thinking level
-  (`gemini-4-carbon-medium`); `agy models` lists them. Changing the model
-  restarts the process, which resumes the conversation.
+- **Model and effort.** Profiles pick a base model (`gemini-4-carbon`,
+  `gemini-4-neon`, `gemini-4-hydrogen`, `gemini-4-argon`, `gemini-3.8-flash`,
+  `gemini-3.1-pro`) and a separate thinking effort (`--effort`), limited to
+  each model's supported range (`low` through `xhigh` for Neon, `low` and
+  `high` for 3.1 Pro, `low` through `high` for the rest). Legacy profiles
+  saved with a suffixed id such as `gemini-4-neon-xhigh` are split into base
+  model and effort automatically. Changing either model or effort restarts the
+  process, which resumes the conversation.
 - **Usage.** Token counts come from each step and from the `result`: input,
   cache reads, and output including thinking. `agy` reports no cost, so the
   run's cost stays 0, and the plan usage card does not cover Antigravity.

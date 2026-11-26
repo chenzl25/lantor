@@ -1062,7 +1062,12 @@ pub(crate) async fn agent_context_agent_inspect(
                 };
                 format!("claude_options=effort:{effort}")
             } else if runtime.eq_ignore_ascii_case("antigravity") {
-                "antigravity_options=model only".to_owned()
+                let effort = if reasoning_effort.trim().is_empty() {
+                    "default".to_owned()
+                } else {
+                    reasoning_effort
+                };
+                format!("antigravity_options=effort:{effort}")
             } else {
                 format!(
                     "codex_options=reasoning_effort:{} service_tier:{}",

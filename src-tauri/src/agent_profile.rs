@@ -124,6 +124,90 @@ pub(crate) async fn update_owner_profile_in_pool(
     Ok(())
 }
 
+/// Splits a legacy suffixed Antigravity model id such as
+/// `gemini-4-neon-xhigh` into its base model and effort tier.
+pub(crate) fn split_antigravity_legacy_model(model: &str) -> (&str, Option<&'static str>) {
+    let trimmed = model.trim();
+    let Some((base, suffix)) = trimmed.rsplit_once('-') else {
+        return (trimmed, None);
+    };
+    let is_versioned_gemini = base
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("gemini-"))
+        && base.as_bytes().get(7).is_some_and(u8::is_ascii_digit);
+    if !is_versioned_gemini {
+        return (trimmed, None);
+    }
+    let effort = match suffix.to_ascii_lowercase().as_str() {
+        "low" => "low",
+        "medium" => "medium",
+        "high" => "high",
+        "xhigh" => "xhigh",
+        "max" => "max",
+        _ => return (trimmed, None),
+    };
+    (base, Some(effort))
+}
+
+fn normalize_antigravity_model_and_effort(
+    model: &str,
+    value: Option<&str>,
+) -> CommandResult<(String, String)> {
+    let (base_model, legacy_effort) = split_antigravity_legacy_model(model);
+    let normalized_model = base_model.to_ascii_lowercase();
+    let requested = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+        .or_else(|| legacy_effort.map(str::to_owned));
+    let effort = match normalized_model.as_str() {
+        "gemini-pro-orchestrator" => match requested.as_deref() {
+            None => String::new(),
+            Some(effort) => {
+                return Err(format!(
+                    "Antigravity model {normalized_model} does not support reasoning effort {effort}"
+                ));
+            }
+        },
+        "gemini-3.1-pro" => match requested.as_deref().unwrap_or("low") {
+            "low" => "low".to_owned(),
+            "high" => "high".to_owned(),
+            effort @ ("medium" | "xhigh" | "max") => {
+                return Err(format!(
+                    "Antigravity model {normalized_model} does not support reasoning effort {effort}"
+                ));
+            }
+            effort => return Err(format!("invalid Antigravity effort: {effort}")),
+        },
+        "gemini-4-neon" => match requested.as_deref().unwrap_or("medium") {
+            effort @ ("low" | "medium" | "high" | "xhigh") => effort.to_owned(),
+            effort @ "max" => {
+                return Err(format!(
+                    "Antigravity model {normalized_model} does not support reasoning effort {effort}"
+                ));
+            }
+            effort => return Err(format!("invalid Antigravity effort: {effort}")),
+        },
+        "gemini-4-carbon" | "gemini-4-hydrogen" | "gemini-4-argon" | "gemini-3.8-flash"
+        | "gemini-3.7-flash" | "gemini-3.6-flash" => match requested.as_deref().unwrap_or("medium")
+        {
+            effort @ ("low" | "medium" | "high") => effort.to_owned(),
+            effort @ ("xhigh" | "max") => {
+                return Err(format!(
+                    "Antigravity model {normalized_model} does not support reasoning effort {effort}"
+                ));
+            }
+            effort => return Err(format!("invalid Antigravity effort: {effort}")),
+        },
+        _ => match requested.as_deref() {
+            None => String::new(),
+            Some(effort @ ("low" | "medium" | "high" | "xhigh" | "max")) => effort.to_owned(),
+            Some(effort) => return Err(format!("invalid Antigravity effort: {effort}")),
+        },
+    };
+    Ok((base_model.to_owned(), effort))
+}
+
 fn normalize_reasoning_effort(
     runtime: &str,
     model: &str,
@@ -177,13 +261,16 @@ fn normalize_reasoning_effort(
             _ => Err(format!("invalid Claude effort: {effort}")),
         };
     }
+    if runtime.eq_ignore_ascii_case("antigravity") {
+        return normalize_antigravity_model_and_effort(model, value).map(|(_, effort)| effort);
+    }
     Ok(String::new())
 }
 
-/// Claude Code and Antigravity's `agy` read `--model` (and Claude's
-/// `--effort`) only when their warm process starts, so changing either needs a
-/// fresh process; the restart resumes the stored session. Codex sends both
-/// with every turn and needs none.
+/// Claude Code and Antigravity's `agy` read `--model` and `--effort` only when
+/// their warm process starts, so changing either needs a fresh process; the
+/// restart resumes the stored session. Codex sends both with every turn and
+/// needs none.
 fn claude_launch_flags_changed(
     stored: &sqlx::sqlite::SqliteRow,
     runtime: &str,
@@ -265,8 +352,15 @@ pub(crate) async fn create_agent_in_pool(
     let working_directory = expand_home_path(&working_directory);
     ensure_agent_workspace(&working_directory, normalized_handle)?;
     let runtime = runtime.trim();
-    let model = model.trim();
-    let reasoning_effort = normalize_reasoning_effort(runtime, model, reasoning_effort.as_deref())?;
+    let (model, reasoning_effort) = if runtime.eq_ignore_ascii_case("antigravity") {
+        normalize_antigravity_model_and_effort(&model, reasoning_effort.as_deref())?
+    } else {
+        let model = model.trim().to_owned();
+        let reasoning_effort =
+            normalize_reasoning_effort(runtime, &model, reasoning_effort.as_deref())?;
+        (model, reasoning_effort)
+    };
+    let model = model.as_str();
     let service_tier = normalize_service_tier(runtime, service_tier.as_deref())?;
     let environment_variables =
         normalize_agent_environment_variables(environment_variables.as_deref())?;
@@ -409,8 +503,15 @@ pub(crate) async fn update_agent_in_pool(
     let working_directory = expand_home_path(&working_directory);
     ensure_agent_workspace(&working_directory, normalized_handle)?;
     let runtime = runtime.trim();
-    let model = model.trim();
-    let reasoning_effort = normalize_reasoning_effort(runtime, model, reasoning_effort.as_deref())?;
+    let (model, reasoning_effort) = if runtime.eq_ignore_ascii_case("antigravity") {
+        normalize_antigravity_model_and_effort(&model, reasoning_effort.as_deref())?
+    } else {
+        let model = model.trim().to_owned();
+        let reasoning_effort =
+            normalize_reasoning_effort(runtime, &model, reasoning_effort.as_deref())?;
+        (model, reasoning_effort)
+    };
+    let model = model.as_str();
     let service_tier = normalize_service_tier(runtime, service_tier.as_deref())?;
     let environment_variables =
         normalize_agent_environment_variables(environment_variables.as_deref())?;
@@ -737,7 +838,10 @@ async fn load_agents_with_details(
 
 #[cfg(test)]
 mod tests {
-    use super::{delete_agent_in_pool, normalize_reasoning_effort, update_agent_in_pool};
+    use super::{
+        delete_agent_in_pool, normalize_antigravity_model_and_effort, normalize_reasoning_effort,
+        split_antigravity_legacy_model, update_agent_in_pool,
+    };
     use crate::attachments::write_attachment_file;
     use crate::db::{db_connect_with_url, migrate};
     use sqlx::{Row, SqlitePool};
@@ -1041,10 +1145,114 @@ mod tests {
 
             save_agent(&pool, agent_id, "claude", "fable", "max", "renamed").await?;
             assert!(take_restart_request(&pool, agent_id).await?);
+
+            // Switching to Antigravity starts its own process; later model or
+            // effort changes restart it so `agy` picks up the new launch flags.
+            save_agent(
+                &pool,
+                agent_id,
+                "antigravity",
+                "gemini-4-neon",
+                "high",
+                "renamed",
+            )
+            .await?;
+            assert!(!take_restart_request(&pool, agent_id).await?);
+
+            save_agent(
+                &pool,
+                agent_id,
+                "antigravity",
+                "gemini-4-neon",
+                "high",
+                "same flags",
+            )
+            .await?;
+            assert!(!take_restart_request(&pool, agent_id).await?);
+
+            save_agent(
+                &pool,
+                agent_id,
+                "antigravity",
+                "gemini-4-neon",
+                "xhigh",
+                "same flags",
+            )
+            .await?;
+            assert!(take_restart_request(&pool, agent_id).await?);
+
+            save_agent(
+                &pool,
+                agent_id,
+                "antigravity",
+                "gemini-4-carbon",
+                "high",
+                "same flags",
+            )
+            .await?;
+            assert!(take_restart_request(&pool, agent_id).await?);
             Ok(())
         }
         .await;
         drop_test_schema(pool, schema).await;
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn antigravity_model_and_effort_follow_model_capability() {
+        assert_eq!(
+            split_antigravity_legacy_model("gemini-4-neon-xhigh"),
+            ("gemini-4-neon", Some("xhigh"))
+        );
+        assert_eq!(
+            split_antigravity_legacy_model("gemini-3.1-pro-low"),
+            ("gemini-3.1-pro", Some("low"))
+        );
+        assert_eq!(
+            split_antigravity_legacy_model("gemini-4-carbon"),
+            ("gemini-4-carbon", None)
+        );
+        assert_eq!(
+            split_antigravity_legacy_model("gemini-pro-orchestrator"),
+            ("gemini-pro-orchestrator", None)
+        );
+
+        for (model, effort, expected_model, expected_effort) in [
+            ("gemini-4-neon", Some("xhigh"), "gemini-4-neon", "xhigh"),
+            ("gemini-4-neon", None, "gemini-4-neon", "medium"),
+            ("gemini-4-neon-xhigh", None, "gemini-4-neon", "xhigh"),
+            ("gemini-4-neon-xhigh", Some("low"), "gemini-4-neon", "low"),
+            ("gemini-4-carbon", Some("high"), "gemini-4-carbon", "high"),
+            ("gemini-3.1-pro", None, "gemini-3.1-pro", "low"),
+            ("gemini-3.1-pro", Some("high"), "gemini-3.1-pro", "high"),
+            (
+                "gemini-pro-orchestrator",
+                None,
+                "gemini-pro-orchestrator",
+                "",
+            ),
+            ("gemini-5-custom", Some("max"), "gemini-5-custom", "max"),
+        ] {
+            assert_eq!(
+                normalize_antigravity_model_and_effort(model, effort),
+                Ok((expected_model.to_owned(), expected_effort.to_owned())),
+                "{model} + {effort:?}"
+            );
+        }
+
+        for (model, effort) in [
+            ("gemini-4-neon", "max"),
+            ("gemini-4-carbon", "xhigh"),
+            ("gemini-3.8-flash", "xhigh"),
+            ("gemini-3.1-pro", "medium"),
+            ("gemini-3.1-pro", "xhigh"),
+            ("gemini-pro-orchestrator", "low"),
+            ("gemini-4-neon", "turbo"),
+        ] {
+            assert!(
+                normalize_antigravity_model_and_effort(model, Some(effort)).is_err(),
+                "{model} should reject {effort}"
+            );
+        }
     }
 }

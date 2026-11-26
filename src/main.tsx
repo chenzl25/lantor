@@ -111,8 +111,10 @@ import {
   ActivityFeedItem,
   Message,
   MessageAttachment,
+  normalizeAntigravityReasoningEffortForModel,
   normalizeCodexReasoningEffortForModel,
   RUNTIME_PRESETS,
+  splitAntigravityLegacyModel,
   Reminder,
   RuntimeCheck,
   SavedMessage,
@@ -4569,7 +4571,9 @@ function App() {
       model,
       reasoningEffort: runtime === "codex"
         ? normalizeCodexReasoningEffortForModel(model, agentDraft.reasoningEffort || "medium")
-        : "",
+        : runtime === "antigravity"
+          ? normalizeAntigravityReasoningEffortForModel(model, agentDraft.reasoningEffort || "medium")
+          : "",
       serviceTier: runtime === "codex" ? agentDraft.serviceTier : "",
     });
   }
@@ -4588,7 +4592,9 @@ function App() {
       model,
       reasoningEffort: runtime === "codex"
         ? normalizeCodexReasoningEffortForModel(model, agentEdit.reasoningEffort || "medium")
-        : "",
+        : runtime === "antigravity"
+          ? normalizeAntigravityReasoningEffortForModel(model, agentEdit.reasoningEffort || "medium")
+          : "",
       serviceTier: runtime === "codex" ? agentEdit.serviceTier : "",
     });
   }
@@ -4598,6 +4604,10 @@ function App() {
       try { agent = (await hydrateAgentDetail(agent.id)).agent; }
       catch (err) { setAppError(errorMessage(err, "Couldn’t load agent")); return; }
     }
+    const legacyAntigravity = agent.runtime === "antigravity"
+      ? splitAntigravityLegacyModel(agent.model)
+      : null;
+    const model = legacyAntigravity ? legacyAntigravity.model : agent.model;
     setEditingAgentId(agent.id);
     setAgentEdit({
       handle: agent.handle,
@@ -4605,10 +4615,15 @@ function App() {
       role: agent.role || "agent",
       avatar: agent.avatar || "",
       runtime: agent.runtime,
-      model: agent.model,
+      model,
       reasoningEffort: agent.runtime === "codex"
-        ? normalizeCodexReasoningEffortForModel(agent.model, agent.reasoning_effort || "medium")
-        : agent.reasoning_effort || "",
+        ? normalizeCodexReasoningEffortForModel(model, agent.reasoning_effort || "medium")
+        : agent.runtime === "antigravity"
+          ? normalizeAntigravityReasoningEffortForModel(
+              model,
+              agent.reasoning_effort || legacyAntigravity?.effort || "",
+            )
+          : agent.reasoning_effort || "",
       serviceTier: agent.service_tier || "",
       description: agent.description,
       launchCommand: agent.launch_command,

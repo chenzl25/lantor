@@ -89,6 +89,28 @@ try {
     const newModel = newAgent.getByRole("combobox", { name: /^Model/ });
     assert.equal(await newModel.inputValue(), "gpt-6-sol");
     assert.deepEqual(await newModel.locator("option").evaluateAll(options => options.map(option => option.value)), currentModels);
+    // Antigravity exposes base models alongside a per-model Thinking selector.
+    const newRuntime = newAgent.getByRole("combobox", { name: /^Runs on/ });
+    await newRuntime.selectOption("antigravity");
+    assert.equal(await newModel.inputValue(), "gemini-4-carbon");
+    const newThinking = newAgent.getByRole("combobox", { name: /^Thinking/ });
+    assert.equal(await newThinking.inputValue(), "medium");
+    assert.deepEqual(
+      await newThinking.locator("option").evaluateAll(options => options.map(option => option.value)),
+      ["low", "medium", "high"],
+    );
+    await newModel.selectOption("gemini-4-neon");
+    assert.deepEqual(
+      await newThinking.locator("option").evaluateAll(options => options.map(option => option.value)),
+      ["low", "medium", "high", "xhigh"],
+    );
+    await newThinking.selectOption("xhigh");
+    await newModel.selectOption("gemini-3.1-pro");
+    assert.equal(await newThinking.inputValue(), "high", "switching from Neon Extra High to 3.1 Pro clamps to High");
+    assert.deepEqual(
+      await newThinking.locator("option").evaluateAll(options => options.map(option => option.value)),
+      ["low", "high"],
+    );
     await newAgent.getByRole("button", { name: "Cancel", exact: true }).click();
     await page.getByRole("button", { name: "@Hancock’s profile", exact: true }).click();
     await page.getByRole("button", { name: "Edit @Hancock", exact: true }).click();

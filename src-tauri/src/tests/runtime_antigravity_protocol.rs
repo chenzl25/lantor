@@ -1,8 +1,8 @@
 use serde_json::json;
 
 use super::{
-    agy_init_conversation_id, agy_step_usage, agy_text_delta, agy_tool_started, agy_turn_result,
-    agy_user_input, AgyTurnResult,
+    agy_command_text, agy_init_conversation_id, agy_model_and_effort, agy_step_usage,
+    agy_text_delta, agy_tool_started, agy_turn_result, agy_user_input, AgyTurnResult,
 };
 use crate::usage::RunUsage;
 
@@ -13,6 +13,34 @@ fn a_prompt_is_one_user_event() {
     assert_eq!(
         agy_user_input("hello"),
         json!({ "event": "user", "message": { "content": "hello" } })
+    );
+}
+
+#[test]
+fn model_and_effort_flags_split_legacy_suffixes_and_avoid_conflicts() {
+    assert_eq!(
+        agy_model_and_effort("gemini-4-neon", "xhigh"),
+        ("gemini-4-neon".to_owned(), "xhigh".to_owned())
+    );
+    assert_eq!(
+        agy_model_and_effort("gemini-4-neon-xhigh", ""),
+        ("gemini-4-neon".to_owned(), "xhigh".to_owned())
+    );
+    assert_eq!(
+        agy_model_and_effort("gemini-4-neon-xhigh", "low"),
+        ("gemini-4-neon".to_owned(), "low".to_owned())
+    );
+    assert_eq!(
+        agy_model_and_effort("gemini-pro-orchestrator", ""),
+        ("gemini-pro-orchestrator".to_owned(), String::new())
+    );
+    assert_eq!(
+        agy_command_text("gemini-4-neon", "xhigh"),
+        "agy --input-format stream-json --output-format stream-json --dangerously-skip-permissions --model gemini-4-neon --effort xhigh -p="
+    );
+    assert_eq!(
+        agy_command_text("gemini-pro-orchestrator", ""),
+        "agy --input-format stream-json --output-format stream-json --dangerously-skip-permissions --model gemini-pro-orchestrator -p="
     );
 }
 

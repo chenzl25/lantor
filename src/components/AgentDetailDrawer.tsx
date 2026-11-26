@@ -10,6 +10,7 @@ import {
   AgentWorkspaceEntry,
   AgentWorkspaceFile,
   AgentWorkspaceListing,
+  ANTIGRAVITY_REASONING_EFFORTS,
   Channel,
   CLAUDE_REASONING_EFFORTS,
   CODEX_REASONING_EFFORTS,
@@ -18,6 +19,7 @@ import {
   Reminder,
   RUNTIME_PRESETS,
   modelLabel,
+  splitAntigravityLegacyModel,
 } from "../types";
 import { AgentAvatar } from "./AgentAvatar";
 import { AgentCliVersion } from "./AgentCliVersion";
@@ -418,7 +420,22 @@ function claudeEffortLabel(value: string) {
   return CLAUDE_REASONING_EFFORTS.find((effort) => effort.value === value)?.label ?? (value || "Default");
 }
 
+function antigravityEffortLabel(value: string) {
+  return ANTIGRAVITY_REASONING_EFFORTS.find((effort) => effort.value === value)?.label ?? value;
+}
+
+function effectiveAntigravityModelAndEffort(agent: Pick<Agent, "model" | "reasoning_effort">) {
+  const legacy = splitAntigravityLegacyModel(agent.model);
+  const effort = agent.reasoning_effort.trim() || legacy.effort;
+  return { model: legacy.model, effort };
+}
+
 function agentModelSummary(agent: Agent) {
+  if (agent.runtime === "antigravity") {
+    const { model, effort } = effectiveAntigravityModelAndEffort(agent);
+    const base = `${runtimeLabel(agent.runtime)} · ${modelLabel(model)}`;
+    return effort ? `${base} · ${antigravityEffortLabel(effort)} thinking` : base;
+  }
   const base = `${runtimeLabel(agent.runtime)} · ${modelLabel(agent.model)}`;
   if (agent.runtime === "codex") {
     return `${base} · ${codexReasoningEffortLabel(agent.reasoning_effort)} intelligence · ${codexServiceTierLabel(agent.service_tier)} speed`;
@@ -623,6 +640,8 @@ export function AgentDetailDrawer({
   function renderProfilePanel() {
     const isCodex = agent.runtime === "codex";
     const isClaude = agent.runtime === "claude";
+    const isAntigravity = agent.runtime === "antigravity";
+    const antigravity = isAntigravity ? effectiveAntigravityModelAndEffort(agent) : null;
     return (
       <>
         <section className="detail-section model-section">
@@ -637,7 +656,7 @@ export function AgentDetailDrawer({
             </div>
             <div>
               <span>Model</span>
-              <code>{modelLabel(agent.model)}</code>
+              <code>{modelLabel(antigravity ? antigravity.model : agent.model)}</code>
             </div>
             {isCodex && (
               <>
@@ -655,6 +674,12 @@ export function AgentDetailDrawer({
               <div>
                 <span>Thinking</span>
                 <code>{claudeEffortLabel(agent.reasoning_effort)}</code>
+              </div>
+            )}
+            {antigravity?.effort && (
+              <div>
+                <span>Thinking</span>
+                <code>{antigravityEffortLabel(antigravity.effort)}</code>
               </div>
             )}
           </div>

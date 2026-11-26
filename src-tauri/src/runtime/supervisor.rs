@@ -1138,6 +1138,7 @@ async fn supervisor_start_agent(
             work_item_id,
             handle,
             model,
+            reasoning_effort,
             working_directory,
             environment_variables,
             work_item_prompt,
@@ -2116,6 +2117,7 @@ mod tests {
                         None,
                         runtime.to_owned(),
                         String::new(),
+                        String::new(),
                         missing_directory.clone(),
                         String::new(),
                         String::new(),
@@ -2343,7 +2345,7 @@ done
             sqlx::query(
                 r#"
                 update agents
-                set runtime = 'antigravity', model = 'gemini-4-carbon-medium',
+                set runtime = 'antigravity', model = 'gemini-4-carbon', reasoning_effort = 'high',
                     working_directory = $2, environment_variables = $3
                 where id = $1
                 "#,
@@ -2428,7 +2430,8 @@ done
             assert_eq!(conversation, "aaaaaaaa-1111-4111-8111-111111111111");
             let args = std_fs::read_to_string(directory.join("args-1")).map_err(|err| err.to_string())?;
             assert!(args.contains("--dangerously-skip-permissions"), "{args}");
-            assert!(args.contains("--model gemini-4-carbon-medium"), "{args}");
+            assert!(args.contains("--model gemini-4-carbon"), "{args}");
+            assert!(args.contains("--effort high"), "{args}");
             assert!(!args.contains("--conversation"), "{args}");
             let instructions = std_fs::read_to_string(directory.join("GEMINI.md"))
                 .map_err(|err| err.to_string())?;

@@ -57,9 +57,9 @@ mod protocol;
 mod turn;
 
 use protocol::{
-    agy_command_text, agy_init_conversation_id, agy_step_usage, agy_stream_key,
-    agy_surface_boundary_marker, agy_text_delta, agy_tool_started, agy_turn_result, agy_user_input,
-    agy_write_input, AGY_STREAM_ARGS,
+    agy_command_text, agy_init_conversation_id, agy_model_and_effort, agy_step_usage,
+    agy_stream_key, agy_surface_boundary_marker, agy_text_delta, agy_tool_started, agy_turn_result,
+    agy_user_input, agy_write_input, AGY_STREAM_ARGS,
 };
 use turn::finish_warm_antigravity_turn;
 
@@ -166,6 +166,7 @@ pub(super) struct AntigravitySurface {
 struct AntigravityRuntimeConfig<'a> {
     handle: &'a str,
     model: &'a str,
+    reasoning_effort: &'a str,
     working_directory: &'a str,
     environment_variables: &'a str,
 }
@@ -258,8 +259,12 @@ async fn spawn_warm_antigravity_runtime(
 
     let mut command = Command::new(AGY_COMMAND);
     command.args(AGY_STREAM_ARGS);
-    if !config.model.is_empty() {
-        command.arg("--model").arg(config.model);
+    let (model, effort) = agy_model_and_effort(config.model, config.reasoning_effort);
+    if !model.is_empty() {
+        command.arg("--model").arg(&model);
+    }
+    if !effort.is_empty() {
+        command.arg("--effort").arg(&effort);
     }
     if let Some(conversation_id) = &conversation_id {
         command.arg("--conversation").arg(conversation_id);
@@ -398,6 +403,7 @@ pub(crate) async fn supervisor_start_antigravity_streaming_agent(
     work_item_id: Option<Uuid>,
     handle: String,
     model: String,
+    reasoning_effort: String,
     working_directory: String,
     environment_variables: String,
     work_item_prompt: String,
@@ -407,7 +413,8 @@ pub(crate) async fn supervisor_start_antigravity_streaming_agent(
 ) -> CommandResult<()> {
     let prompt = build_antigravity_streaming_prompt(&work_item_prompt);
     let model = model.trim().to_owned();
-    let command_text = agy_command_text(&model);
+    let reasoning_effort = reasoning_effort.trim().to_owned();
+    let command_text = agy_command_text(&model, &reasoning_effort);
     let runtime = match get_or_spawn_warm_antigravity_runtime(
         pool,
         registry,
@@ -415,6 +422,7 @@ pub(crate) async fn supervisor_start_antigravity_streaming_agent(
         AntigravityRuntimeConfig {
             handle: &handle,
             model: &model,
+            reasoning_effort: &reasoning_effort,
             working_directory: &working_directory,
             environment_variables: &environment_variables,
         },
