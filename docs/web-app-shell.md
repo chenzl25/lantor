@@ -50,6 +50,37 @@ phone layout only scrolls inside its panes. The desktop app does not install
 it. `npm run test:phone-controls` stands in for the keyboard by replacing
 `window.visualViewport`, since Playwright engines show no on-screen keyboard.
 
+## Resume copy on phones
+
+iOS discards a Home Screen app's page while it sits in the background, and
+returning to it reloads the page. The app installed on a phone's Home Screen
+(standalone display mode, phone breakpoint, production build) therefore keeps
+a copy of the workspace it showed last in IndexedDB (`src/resume-cache.ts`):
+
+- **What it keeps:** every bootstrap collection, but messages only for the ten
+  channels and ten threads opened most recently (a channel's newest 30
+  top-level messages, a thread's root and newest 50 replies). Unsent messages
+  and local file previews are left out. It also keeps the view (channel,
+  thread, Home) and those channels' reading positions.
+- **When it saves:** two seconds after the workspace or the view last
+  changed, and at once when the page is hidden, since iOS may discard it then.
+  Nothing is saved before the page's first bootstrap.
+- **On reload:** the copy is drawn at once while the bootstrap is on its
+  way. Saved within the hour, it also reopens the same channel, thread and
+  reading position; a thread reopened this way slides in as on any opening.
+  The first bootstrap replaces the copy. Because the event stream cannot
+  report what changed while the page was gone, that bootstrap drops every
+  message from the copy that neither it nor a page loaded since returned.
+  Until then a failed bootstrap keeps retrying as on a first load.
+- **Limits:** a copy older than seven days, or written by another build, is
+  deleted unread. An expired session (a 401 from Cloudflare Access) deletes
+  it, and takes it off the screen if no bootstrap has replaced it. A browser
+  tab and the desktop app keep no copy.
+
+WebKit exempts a Home Screen app's own storage from Safari's seven-day removal
+of script-written storage, but the browser may still drop it under storage
+pressure, so the copy is only a cache; the server stays authoritative.
+
 ## Cache and network behavior
 
 - Only `/` and `/index.html` navigations use the cached shell; hash links continue
@@ -59,7 +90,9 @@ it. `npm run test:phone-controls` stands in for the keyboard by replacing
   requests also bypass it. There are no runtime cache writes.
 - Workspace messages, credentials, attachments and API responses are never
   stored by this worker. An offline cold launch shows the Lantor shell and an
-  offline notice, without workspace data. Returning online retries the initial
+  offline notice, without workspace data, except in the phone's Home Screen
+  app, which keeps its own copy of the last workspace
+  ([resume copy](#resume-copy-on-phones)). Returning online retries the initial
   bootstrap; an already loaded workspace retains its existing SSE reconnect
   and cursor replay behavior.
 - Source maps, compression sidecars and unversioned public files are excluded.
