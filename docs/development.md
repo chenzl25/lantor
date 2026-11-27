@@ -141,7 +141,9 @@ installed. Each suite has an npm script, for example:
   replies and loads earlier ones without moving the replies on screen (see
   [`bootstrap-payload.md`](bootstrap-payload.md#thread-pages)).
 - `npm run test:phone-controls` checks phone details in Chromium and WebKit:
-  bottom bar badges leave their icons visible, no form control is under 16px
+  bottom bar badges leave their icons visible, the bottom bar and Home have
+  no backdrop blur (both are opaque, and a blur behind them costs every frame
+  the list scrolls or Home slides), no form control is under 16px
   (iOS zooms the page for a smaller one), a followed thread stays on its
   latest reply while the reply box grows, the layout covers what the
   on-screen keyboard leaves visible (see

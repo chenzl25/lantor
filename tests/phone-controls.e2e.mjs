@@ -156,6 +156,12 @@ try {
     assert.deepEqual(badges.map(badge => badge.label), ["1Needs you", "3GitHub"], `${name}: both counts show`);
     for (const badge of badges) assert.ok(badge.covered < 0.3, `${name}: the ${badge.label} badge covers ${Math.round(badge.covered * 100)}% of its icon`);
 
+    //    The bar and Home are opaque, so nothing is blurred behind them while
+    //    the list scrolls under the bar or Home slides.
+    const blur = selector => page.locator(selector).first().evaluate(element => getComputedStyle(element).backdropFilter);
+    assert.equal(await blur(".mobile-bottom-nav"), "none", `${name}: the bottom bar blurs nothing behind it`);
+    assert.equal(await blur(".sidebar"), "none", `${name}: Home blurs nothing behind it`);
+
     // 2. No dialog or tab has a form control under 16px.
     const openDialog = async (trigger, title) => { await trigger.tap(); const dialog = page.getByRole("dialog", { name: title, exact: true }); await dialog.waitFor(); return dialog; };
     const closeDialog = async dialog => { await page.keyboard.press("Escape"); await dialog.waitFor({ state: "detached" }); };
@@ -339,6 +345,7 @@ try {
   await row.locator(".markdown-body").click();
   await page.locator(`.thread [data-message-id="${target.id}"].tap-focused`).waitFor();
   assert.equal(await page.locator(".message-tap-actions").count(), 0, "desktop shows no tap actions");
+  assert.notEqual(await page.locator(".sidebar").evaluate(element => getComputedStyle(element).backdropFilter), "none", "the desktop sidebar keeps its frosted look");
   console.log("phone controls: ok");
 } finally {
   await browser?.close();

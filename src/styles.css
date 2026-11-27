@@ -11968,7 +11968,11 @@ body.resizing-column * {
     overflow: hidden;
   }
 
+  /* The bottom bar and Home are opaque on a phone, so a backdrop blur shows
+     nothing there; it only made WebKit blur what lies behind them on every
+     frame the list scrolls under the bar or Home slides. */
   .sidebar {
+    backdrop-filter: none;
     position: relative;
     grid-column: 1;
     grid-row: 1;
@@ -12662,7 +12666,6 @@ body.resizing-column * {
     box-shadow:
       0 16px 40px rgba(20, 23, 31, 0.18),
       0 2px 8px rgba(20, 23, 31, 0.08);
-    backdrop-filter: blur(24px) saturate(1.16);
   }
 
   .app.mobile-composer-focused .mobile-bottom-nav {
