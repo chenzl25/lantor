@@ -83,6 +83,7 @@ import { ThreadPanel } from "./components/ThreadPanel";
 import { WebAppStatus } from "./components/WebAppStatus";
 import { clearWebSignInMarker, isWebSessionExpired, subscribeWebSession } from "./web-session";
 import { followVisualViewport } from "./visual-viewport";
+import { ThreadPagePrefetches } from "./thread-page-prefetch";
 import {
   addBackSwipeSample, backSwipeReleaseVelocity, BACK_SWIPE_EDGE_PX, BACK_SWIPE_MAX_VERTICAL_PX,
   BACK_SWIPE_MIN_HORIZONTAL_PX, BACK_SWIPE_PEEK_PX, BACK_SWIPE_SETTLE_MS, completesBackSwipe, MOBILE_NAVIGATION_MS,
@@ -1008,6 +1009,9 @@ function App() {
   const loadingThreadIdsRef = useRef(new Set<string>());
   const [threadReplyStarts, setThreadReplyStarts] = useState<Record<string, ThreadReplyStart>>({});
   const threadReplyStartsRef = useRef(threadReplyStarts);
+  const threadPagePrefetchesRef = useRef(new ThreadPagePrefetches<ThreadMessagePage, ReadonlyMap<string, Message>>());
+  const latestMessagesRef = useRef<Message[] | undefined>(undefined);
+  latestMessagesRef.current = data?.messages;
   const [loadingEarlierRepliesThreadId, setLoadingEarlierRepliesThreadId] = useState<string | null>(null);
   const loadingEarlierRepliesThreadIdRef = useRef<string | null>(null);
   const threadJumpRequestRef = useRef<string | null>(null);
@@ -1535,13 +1539,34 @@ function App() {
     }
   }
 
+  // A thread opens when the finger lifts off its reply summary; ask for its
+  // newest replies when the finger lands, and let opening it take that request.
+  useEffect(() => {
+    function onPointerDown(event: PointerEvent) {
+      if (!event.isPrimary || event.button !== 0 || !(event.target instanceof Element)) return;
+      const threadId = event.target.closest(".thread-reply-summary")?.closest("[data-message-id]")?.getAttribute("data-message-id");
+      if (!threadId) return;
+      const request = threadPageRequest(threadId, threadReplyStartsRef.current[threadId]);
+      threadPagePrefetchesRef.current.start(
+        threadId,
+        request,
+        () => new Map(latestMessagesRef.current?.map((row) => [row.id, row])),
+        () => apiInvoke("load_thread_page", request),
+      );
+    }
+    document.addEventListener("pointerdown", onPointerDown, { capture: true, passive: true });
+    return () => document.removeEventListener("pointerdown", onPointerDown, { capture: true });
+  }, []);
+
   useEffect(() => {
     if (!showThread || !activeThreadId) return;
     let cancelled = false;
     const threadId = activeThreadId;
-    const baseline = new Map(data?.messages.map((row) => [row.id, row]));
+    const request = threadPageRequest(threadId, threadReplyStartsRef.current[threadId]);
+    const prefetched = threadPagePrefetchesRef.current.take(threadId, request);
+    const baseline = prefetched?.baseline ?? new Map(data?.messages.map((row) => [row.id, row]));
     loadingThreadIdsRef.current.add(threadId);
-    void apiInvoke("load_thread_page", threadPageRequest(threadId, threadReplyStartsRef.current[threadId])).then((page) => {
+    void (prefetched?.page ?? apiInvoke("load_thread_page", request)).then((page) => {
       if (cancelled) return;
       applyThreadPage(threadId, page, baseline);
       requestUiState(["thread_activities", "read_inbox_items", "dismissed_inbox_items"]);

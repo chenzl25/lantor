@@ -25,7 +25,11 @@ Migration converts a legacy timestamp marker only when its read set can be repre
 
 Opening a thread requests `load_thread_page` with `limit: 50`: the root plus its
 50 newest replies, with `has_more` and `next_before_seq` (the oldest returned
-reply's sequence). The thread shows the total reply count from its thread
+reply's sequence). A pointer landing on a message's reply summary
+starts that request already (`src/thread-page-prefetch.ts`), since the thread
+opens only when it lifts; opening the thread takes the request if it has the
+same arguments and is under 5 seconds old, and the page applies against the
+messages held when it was asked for. The thread shows the total reply count from its thread
 activity, and **Show earlier replies** above the oldest loaded reply. Scrolling
 up loads the previous page (`beforeSeq`) once that button is within one screen
 of the top, keeping the reply that was first where it was on screen. The limit
