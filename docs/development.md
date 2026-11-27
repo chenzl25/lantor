@@ -140,6 +140,12 @@ installed. Each suite has an npm script, for example:
 - `npm run test:thread-pages` checks that a long thread opens with its newest
   replies and loads earlier ones without moving the replies on screen (see
   [`bootstrap-payload.md`](bootstrap-payload.md#thread-pages)).
+- `npm run test:resume-cache` checks the phone's resume copy in Chromium and
+  WebKit: a reload of the Home Screen app draws the last workspace with the
+  same thread open before the bootstrap answers, and the bootstrap replaces
+  it; a Safari tab and a desktop keep no copy; a week-old copy or another
+  build's is not shown; an expired session clears it (see
+  [`web-app-shell.md`](web-app-shell.md#resume-copy-on-phones)).
 - `npm run test:phone-controls` checks phone details in Chromium and WebKit:
   bottom bar badges leave their icons visible, the bottom bar and Home have
   no backdrop blur (both are opaque, and a blur behind them costs every frame

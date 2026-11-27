@@ -85,6 +85,12 @@ import { clearWebSignInMarker, isWebSessionExpired, subscribeWebSession } from "
 import { followVisualViewport } from "./visual-viewport";
 import { ThreadPagePrefetches } from "./thread-page-prefetch";
 import {
+  appShellVersion, clearResumeSnapshot, isHomeScreenApp, loadResumeSnapshot, rememberRecent, saveResumeSnapshot,
+  workspaceForResume,
+  type ResumeRecent,
+} from "./resume-cache";
+import { channelPositionsSnapshot, restoreChannelPositions } from "./channel-reading-position";
+import {
   addBackSwipeSample, backSwipeReleaseVelocity, BACK_SWIPE_EDGE_PX, BACK_SWIPE_MAX_VERTICAL_PX,
   BACK_SWIPE_MIN_HORIZONTAL_PX, BACK_SWIPE_PEEK_PX, BACK_SWIPE_SETTLE_MS, completesBackSwipe, MOBILE_NAVIGATION_MS,
   prefersReducedMotion, type BackSwipeSample,
@@ -1011,6 +1017,15 @@ function App() {
   const threadReplyStartsRef = useRef(threadReplyStarts);
   const threadPagePrefetchesRef = useRef(new ThreadPagePrefetches<ThreadMessagePage, ReadonlyMap<string, Message>>());
   const latestMessagesRef = useRef<Message[] | undefined>(undefined);
+  // The workspace on screen came from the phone's resume copy, and no
+  // bootstrap has replaced it yet (src/resume-cache.ts).
+  const [showingResumeCopy, setShowingResumeCopy] = useState(false);
+  const bootstrappedRef = useRef(false);
+  const resumeRecentRef = useRef<ResumeRecent>({ channelIds: [], threadIds: [] });
+  // Messages drawn from the copy that no page has loaded again since. The event
+  // stream never reports what changed while the page was gone, so the first
+  // bootstrap drops those it does not return.
+  const resumeCopyMessageIdsRef = useRef(new Set<string>());
   latestMessagesRef.current = data?.messages;
   const [loadingEarlierRepliesThreadId, setLoadingEarlierRepliesThreadId] = useState<string | null>(null);
   const loadingEarlierRepliesThreadIdRef = useRef<string | null>(null);
@@ -1299,7 +1314,14 @@ function App() {
         tasks: refreshed.tasks.length,
       };
     }
-    setData((current) => {
+    bootstrappedRef.current = true;
+    setShowingResumeCopy(false);
+    const unconfirmedResumeIds = resumeCopyMessageIdsRef.current;
+    resumeCopyMessageIdsRef.current = new Set();
+    setData((latest) => {
+      const current = latest && unconfirmedResumeIds.size
+        ? { ...latest, messages: latest.messages.filter((message) => !unconfirmedResumeIds.has(message.id)) }
+        : latest;
       const reconciled = reconcileHydration(current, refreshed, {
         ...hydration,
         snapshotInvalidated:
@@ -1499,6 +1521,7 @@ function App() {
       acknowledgeOptimisticMessage(message);
       knownMessageIdsRef.current?.add(message.id);
       loadedHistoricalMessageIdsRef.current.add(message.id);
+      resumeCopyMessageIdsRef.current.delete(message.id);
     }
     threadReplyStartsRef.current = {
       ...threadReplyStartsRef.current,
@@ -1538,6 +1561,61 @@ function App() {
       }
     }
   }
+
+  useEffect(() => {
+    resumeRecentRef.current = {
+      channelIds: rememberRecent(resumeRecentRef.current.channelIds, activeChannelId),
+      threadIds: showThread
+        ? rememberRecent(resumeRecentRef.current.threadIds, activeThreadId)
+        : resumeRecentRef.current.threadIds,
+    };
+  }, [activeChannelId, activeThreadId, showThread]);
+
+  // Keep the phone's resume copy current: shortly after the workspace or view
+  // changes, and at once when the page is hidden, since iOS may discard it then.
+  const saveResumeCopyRef = useRef<() => void>(() => {});
+  saveResumeCopyRef.current = () => {
+    const version = appShellVersion();
+    if (!version || !data || !bootstrappedRef.current || isTauriRuntime() || !isMobileViewport() || !isHomeScreenApp()
+      || isWebSessionExpired()) return;
+    const recent = resumeRecentRef.current;
+    const recentChannels = new Set(recent.channelIds);
+    saveResumeSnapshot({
+      version,
+      savedAt: Date.now(),
+      data: workspaceForResume(data, recent),
+      recent,
+      view: { activeChannelId, activeThreadId, threadOpen: showThread, homeOpen: showMobileSidebar },
+      positions: channelPositionsSnapshot().filter(([channelId]) => recentChannels.has(channelId)),
+    }).catch(() => {});
+  };
+  useEffect(() => {
+    if (!data || !bootstrappedRef.current) return;
+    const timer = window.setTimeout(() => saveResumeCopyRef.current(), 2_000);
+    return () => window.clearTimeout(timer);
+  }, [data, activeChannelId, activeThreadId, showThread, showMobileSidebar]);
+  useEffect(() => {
+    const saveWhenHidden = () => {
+      if (document.visibilityState === "hidden") saveResumeCopyRef.current();
+    };
+    const saveOnPageHide = () => saveResumeCopyRef.current();
+    document.addEventListener("visibilitychange", saveWhenHidden);
+    window.addEventListener("pagehide", saveOnPageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", saveWhenHidden);
+      window.removeEventListener("pagehide", saveOnPageHide);
+    };
+  }, []);
+  // A signed-out phone keeps no workspace: drop the copy, and the screen too
+  // if it still shows only the copy.
+  useEffect(() => subscribeWebSession(() => {
+    if (!isWebSessionExpired()) return;
+    clearResumeSnapshot().catch(() => {});
+    if (!bootstrappedRef.current) {
+      setData(null);
+      setShowingResumeCopy(false);
+    }
+  }), []);
 
   // A thread opens when the finger lifts off its reply summary; ask for its
   // newest replies when the finger lands, and let opening it take that request.
@@ -1651,6 +1729,7 @@ function App() {
         hydratedMessageIdsRef.current.add(message.id);
         hydratedMessageBodiesRef.current.set(message.id, message.body);
         knownMessageIdsRef.current?.add(message.id);
+        resumeCopyMessageIdsRef.current.delete(message.id);
       }
       if (page.messages.length > 0) {
         setData((current) => {
@@ -2182,6 +2261,38 @@ function App() {
     }
   }
 
+  // On a phone, draw the workspace it showed last while the bootstrap is on its
+  // way, and if that was moments ago, reopen the same channel, thread and place.
+  useEffect(() => {
+    const version = appShellVersion();
+    if (!version || isTauriRuntime() || !isMobileViewport() || !isHomeScreenApp()) return;
+    let cancelled = false;
+    loadResumeSnapshot(version).then((loaded) => {
+      if (cancelled || !loaded || bootstrappedRef.current || isWebSessionExpired()) return;
+      const { snapshot, reopenView } = loaded;
+      resumeRecentRef.current = {
+        channelIds: rememberRecent(snapshot.recent.channelIds, activeChannelIdRef.current),
+        threadIds: snapshot.recent.threadIds,
+      };
+      resumeCopyMessageIdsRef.current = new Set(snapshot.data.messages.map((message) => message.id));
+      setData((current) => current ?? snapshot.data);
+      setShowingResumeCopy(true);
+      if (!reopenView || !snapshot.view.activeChannelId) return;
+      restoreChannelPositions(snapshot.positions);
+      dispatchNavigation({
+        type: "restore",
+        activeChannelId: snapshot.view.activeChannelId,
+        activeThreadId: snapshot.view.threadOpen ? snapshot.view.activeThreadId : null,
+        activeTab: "chat",
+        selectedAgentId: null,
+        threadRequested: snapshot.view.threadOpen,
+        showMobileSidebar: snapshot.view.homeOpen,
+        activeModal: null,
+      }, "none");
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
   useEffect(() => {
     refresh().catch((err) => {
       setAppError(errorMessage(err, `Failed to load ${APP_DISPLAY_NAME} state`));
@@ -2194,7 +2305,9 @@ function App() {
   }, []);
 
   const loaded = Boolean(data);
-  const bootFailed = !loaded && Boolean(appError);
+  // A resume copy on screen still counts as not loaded: keep retrying the
+  // bootstrap until a real one replaces it.
+  const bootFailed = (!loaded || showingResumeCopy) && Boolean(appError);
   useEffect(() => {
     if (!bootFailed || isTauriRuntime()) return;
     // The first load failed (offline, or the Mac is asleep) and there is no

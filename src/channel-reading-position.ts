@@ -11,6 +11,8 @@ export type ChannelReadingPosition = {
 
 // Positions last for this page session only. After a reload the server's read
 // marker decides where a channel opens, so another device's reading counts.
+// The exception is the phone's resume copy: a Home Screen app iOS reloaded
+// within the hour gets its positions back (src/resume-cache.ts).
 const LEGACY_STORAGE_KEY = "lantor.channelReadingPositions.v1";
 const MAX_CHANNELS = 128;
 const positions = new Map<string, ChannelReadingPosition>();
@@ -29,6 +31,21 @@ export function rememberChannelPosition(channelId: string, position: ChannelRead
   positions.delete(channelId);
   positions.set(channelId, position);
   while (positions.size > MAX_CHANNELS) positions.delete(positions.keys().next().value!);
+}
+
+/** This page's positions, oldest first, for the phone's resume copy. */
+export function channelPositionsSnapshot(): [string, ChannelReadingPosition][] {
+  return [...positions];
+}
+
+/**
+ * Puts back the positions of a page iOS discarded and reloaded moments ago, so
+ * the channel reopens where it was. A position this page already holds wins.
+ */
+export function restoreChannelPositions(entries: readonly [string, ChannelReadingPosition][]) {
+  for (const [channelId, position] of entries) {
+    if (!positions.has(channelId)) rememberChannelPosition(channelId, position);
+  }
 }
 
 /** The first top-level message to open at, given the server's first unread

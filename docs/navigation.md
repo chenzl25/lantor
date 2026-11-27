@@ -48,7 +48,10 @@ Mod+] all walk the same list.
 ## Phone navigation
 
 At or below the phone breakpoint the app writes no history entries: the iPhone
-Home Screen app has no browser Back. Navigation is in-app:
+Home Screen app has no browser Back. Phones start on Home, except
+that a Home Screen app reloaded within an hour of leaving reopens the channel
+and thread it showed ([resume copy](web-app-shell.md#resume-copy-on-phones)).
+Navigation is in-app:
 
 - Home lists channels; tapping one opens it, and its Back returns Home.
 - Tapping a message opens its thread; the thread's Back returns to the channel.
