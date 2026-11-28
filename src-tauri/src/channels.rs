@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::app::{to_string, CommandResult};
 use crate::attachments::remove_attachment_files;
 use crate::events::activity::record_agent_activity;
-use crate::models::{Channel, ChannelMember, ThreadActivity};
+use crate::models::{Channel, ChannelMember, ThreadActivity, ThreadParticipant};
 use crate::ui_notifications::{enqueue_ui_event_in_tx, UiEvent};
 
 async fn enqueue_channel_member_change_in_tx(
@@ -210,6 +210,8 @@ pub(crate) async fn load_channel_thread_activities(
                 m.channel_id,
                 m.thread_root_id,
                 m.sender_role,
+                m.sender_name,
+                m.sender_agent_id,
                 m.created_at
             from messages m
             where m.thread_root_id is not null
@@ -288,16 +290,38 @@ pub(crate) async fn load_channel_thread_activities(
         left join thread_read_markers read_marker on read_marker.thread_root_id = root.id
         where root.thread_root_id is null
         group by root.id, root.channel_id
+        ),
+        thread_participants as (
+            select
+                thread_root_id,
+                json_group_array(json_object(
+                    'sender_role', sender_role,
+                    'sender_name', sender_name,
+                    'sender_agent_id',
+                    case when sender_agent_id is null then null else lower(hex(sender_agent_id)) end,
+                    'first_seq', first_seq
+                )) as participants
+            from (
+                select thread_root_id, sender_role, sender_name, sender_agent_id,
+                       min(seq) as first_seq
+                from visible_thread_replies
+                where sender_role <> 'system'
+                group by thread_root_id, sender_role, sender_name, sender_agent_id
+            )
+            group by thread_root_id
         )
         select totals.thread_root_id, totals.channel_id, totals.reply_count, totals.unread_count,
                totals.agent_unread_count, first_unread.id as first_unread_agent_message_id,
-               latest.id as latest_message_id, latest.created_at as latest_activity_at
+               latest.id as latest_message_id, latest.created_at as latest_activity_at,
+               participants.participants as participants
         from totals join messages latest on latest.id = (
             select vr.id from visible_thread_replies vr
             where vr.thread_root_id = totals.latest_root_id
             order by julianday(vr.created_at) desc, vr.created_at desc, vr.id desc limit 1
         )
         left join messages first_unread on first_unread.seq = totals.first_unread_agent_seq
+        left join thread_participants participants
+          on participants.thread_root_id = totals.thread_root_id
         order by julianday(latest.created_at) desc, latest.created_at desc, totals.thread_root_id desc
         "#,
     )
@@ -317,8 +341,32 @@ pub(crate) async fn load_channel_thread_activities(
             first_unread_agent_message_id: row.get("first_unread_agent_message_id"),
             latest_message_id: row.get("latest_message_id"),
             latest_activity_at: row.get("latest_activity_at"),
+            participants: thread_participants(row.get("participants")),
         })
         .collect())
+}
+
+/// The reply row shows three avatars after the agents still replying, so a few
+/// more participants cover the ones it skips.
+const MAX_THREAD_PARTICIPANTS: usize = 5;
+
+/// The distinct senders of a thread's replies in the order they first replied,
+/// from the query's JSON array.
+fn thread_participants(json: Option<String>) -> Vec<ThreadParticipant> {
+    #[derive(serde::Deserialize)]
+    struct Row {
+        #[serde(flatten)]
+        participant: ThreadParticipant,
+        first_seq: i64,
+    }
+    let mut rows: Vec<Row> = json
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default();
+    rows.sort_by_key(|row| row.first_seq);
+    rows.into_iter()
+        .take(MAX_THREAD_PARTICIPANTS)
+        .map(|row| row.participant)
+        .collect()
 }
 
 pub(crate) async fn load_channel_members(pool: &SqlitePool) -> CommandResult<Vec<ChannelMember>> {

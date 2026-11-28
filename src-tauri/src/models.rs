@@ -135,6 +135,17 @@ pub(crate) struct ThreadActivity {
     pub(crate) first_unread_agent_message_id: Option<Uuid>,
     pub(crate) latest_message_id: Uuid,
     pub(crate) latest_activity_at: DateTime<Utc>,
+    /// The first few distinct senders of the replies, for the avatars on the
+    /// thread's reply row.
+    pub(crate) participants: Vec<ThreadParticipant>,
+}
+
+/// One sender of a thread's replies.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct ThreadParticipant {
+    pub(crate) sender_role: String,
+    pub(crate) sender_name: String,
+    pub(crate) sender_agent_id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize)]

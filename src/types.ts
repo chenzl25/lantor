@@ -156,7 +156,12 @@ export type ThreadActivity = {
   first_unread_agent_message_id?: string | null;
   latest_message_id: string;
   latest_activity_at: string;
+  /** The first few distinct senders of the replies, in reply order. */
+  participants?: ThreadParticipant[];
 };
+
+/** One sender of a thread's replies. */
+export type ThreadParticipant = Pick<Message, "sender_role" | "sender_name" | "sender_agent_id">;
 
 export type ChannelMember = {
   channel_id: string;
@@ -217,7 +222,7 @@ export type ThreadReplySummary = {
   count: number;
   latest: Message | null;
   latestAt?: string;
-  participants: Message[];
+  participants: ThreadParticipant[];
 };
 
 export type SavedMessage = {

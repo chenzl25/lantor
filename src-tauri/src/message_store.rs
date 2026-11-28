@@ -1721,6 +1721,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn root_pages_name_the_first_reply_senders_of_each_thread() {
+        let (pool, schema) = test_pool().await.expect("isolated database");
+        let channel = insert_test_channel(&pool, "reply-senders").await.unwrap();
+        let root: uuid::Uuid = sqlx::query_scalar("insert into messages(channel_id,sender_name,sender_role,body) values($1,'owner','owner','root') returning id")
+            .bind(channel).fetch_one(&pool).await.unwrap();
+        let mut agents = Vec::new();
+        for handle in ["ada", "bo", "cy", "dee", "eli"] {
+            agents.push(insert_test_agent(&pool, handle).await.unwrap());
+        }
+        // Ada, the owner, a system notice, Ada again, then four more agents.
+        let replies: Vec<(&str, &str, Option<uuid::Uuid>)> = vec![
+            ("ada", "agent", Some(agents[0])),
+            ("owner", "owner", None),
+            ("Lantor", "system", None),
+            ("ada", "agent", Some(agents[0])),
+            ("bo", "agent", Some(agents[1])),
+            ("cy", "agent", Some(agents[2])),
+            ("dee", "agent", Some(agents[3])),
+            ("eli", "agent", Some(agents[4])),
+        ];
+        for (name, role, agent) in replies {
+            sqlx::query("insert into messages(channel_id,thread_root_id,sender_name,sender_role,sender_agent_id,body) values($1,$2,$3,$4,$5,'reply')")
+                .bind(channel).bind(root).bind(name).bind(role).bind(agent)
+                .execute(&pool).await.unwrap();
+        }
+        let page = super::load_channel_root_page(&pool, channel, i64::MAX, 30)
+            .await
+            .unwrap();
+        let participants: Vec<_> = page.thread_activities[0]
+            .participants
+            .iter()
+            .map(|it| {
+                (
+                    it.sender_name.as_str(),
+                    it.sender_role.as_str(),
+                    it.sender_agent_id,
+                )
+            })
+            .collect();
+        assert_eq!(
+            participants,
+            vec![
+                ("ada", "agent", Some(agents[0])),
+                ("owner", "owner", None),
+                ("bo", "agent", Some(agents[1])),
+                ("cy", "agent", Some(agents[2])),
+                ("dee", "agent", Some(agents[3])),
+            ]
+        );
+        drop_test_schema(pool, schema).await;
+    }
+
+    #[tokio::test]
     async fn thread_pages_return_contiguous_runs_of_the_newest_replies() {
         let (pool, schema) = test_pool().await.expect("isolated database");
         let channel = insert_test_channel(&pool, "thread-pages").await.unwrap();

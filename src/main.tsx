@@ -107,6 +107,7 @@ import { isProgressOnlyMessage, messageHasVisibleContent } from "./message-group
 import { messageReferenceLocation, type MessageReferenceKind } from "./message-references";
 import { shouldDismissOnEscape } from "./escape-dismiss";
 import { handOffSentImagePreviews } from "./sent-image-previews";
+import { buildThreadReplySummaries } from "./thread-reply-summaries";
 import {
   ACTIVE_RUN_STATUSES,
   Agent,
@@ -141,7 +142,6 @@ import {
   Decision,
   ThreadActivity,
   ThreadMessagePage,
-  ThreadReplySummary,
 } from "./types";
 import { agentRequestSourceLabel, firstLines, formatTime, visibleChannelDescription } from "./ui-utils";
 import { markdownPreviewText } from "./markdown-preview";
@@ -3382,36 +3382,10 @@ function App() {
     return repliesInLoadedRun(threadReplies, activeThreadReplyStart, focusedMessageId);
   }, [conversationMessages, activeRoot, activeThreadReplyStart, focusedMessageId]);
 
-  const threadReplySummaries = useMemo(() => {
-    const summaries = visibleMessages.reduce<Record<string, ThreadReplySummary>>((summaries, message) => {
-      if (!message.thread_root_id) return summaries;
-      const current = summaries[message.thread_root_id] ?? { count: 0, latest: null, participants: [] };
-      current.count += 1;
-      if (!current.latest || new Date(message.created_at) > new Date(current.latest.created_at)) {
-        current.latest = message;
-      }
-      if (
-        message.sender_role !== "system" &&
-        !current.participants.some((participant) =>
-          participant.sender_role === message.sender_role &&
-          participant.sender_name === message.sender_name &&
-          participant.sender_agent_id === message.sender_agent_id)
-      ) {
-        current.participants.push(message);
-      }
-      summaries[message.thread_root_id] = current;
-      return summaries;
-    }, {});
-    for (const activity of data?.thread_activities ?? []) {
-      if (activity.reply_count === undefined) continue;
-      const summary = summaries[activity.thread_root_id] ?? { count: 0, latest: null, participants: [] };
-      summary.count = Math.max(summary.count, activity.reply_count);
-      summary.latestAt = summary.latest && Date.parse(summary.latest.created_at) > Date.parse(activity.latest_activity_at)
-        ? summary.latest.created_at : activity.latest_activity_at;
-      summaries[activity.thread_root_id] = summary;
-    }
-    return summaries;
-  }, [visibleMessages, data?.thread_activities]);
+  const threadReplySummaries = useMemo(
+    () => buildThreadReplySummaries(visibleMessages, data?.thread_activities ?? []),
+    [visibleMessages, data?.thread_activities],
+  );
 
   const threadReplyCounts = useMemo(() => {
     return Object.fromEntries(
