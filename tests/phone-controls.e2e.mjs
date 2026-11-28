@@ -241,7 +241,14 @@ try {
 
     // 4. With the keyboard up the layout covers what stays visible: the headers
     //    at its top, the reply boxes right on the keyboard, the latest reply in view.
+    //    The tap focuses the reply box without the browser scrolling the page
+    //    to reveal it, and the thread starts making room for the keyboard
+    //    before the keyboard reports its size.
     await replyBox.tap();
+    await page.waitForFunction(() => { const thread = document.querySelector(".thread").getBoundingClientRect(); return Math.round(thread.top) === 0 && thread.bottom < 752; })
+      .catch(async () => assert.fail(`${name}: the thread makes room for the keyboard ${JSON.stringify(await box(page, ".thread"))}`));
+    assert.deepEqual(await page.evaluate(() => [Boolean(document.activeElement?.closest(".thread .reply-composer")), window.scrollY]), [true, 0],
+      `${name}: the reply box has focus and the page did not scroll`);
     await page.evaluate(() => window.setKeyboard(336, 336));
     await page.waitForFunction(() => Math.round(document.querySelector(".thread").getBoundingClientRect().top) === 336)
       .catch(async () => assert.fail(`${name}: the thread stays under the keyboard ${JSON.stringify(await box(page, ".thread"))}`));
@@ -263,18 +270,22 @@ try {
     assert.deepEqual(await page.evaluate(() => [".conversation .composer", ".thread .reply-composer"]
       .map(selector => getComputedStyle(document.querySelector(selector)).getPropertyValue("--keyboard-inset").trim())), ["336px", "336px"],
       `${name}: the composers know the keyboard's height`);
-    //    A panel that opens while the keyboard is up covers the visible part too
-    //    (the bottom bar hides while a reply box has focus).
+    //    The keyboard goes down with the reply box's focus, and so does the
+    //    thread, without waiting for the keyboard to report it gone.
     await replyBox.evaluate(element => element.blur());
+    await page.waitForFunction(() => { const thread = document.querySelector(".thread").getBoundingClientRect(); return Math.round(thread.top) === 0 && Math.round(thread.bottom) === 852; })
+      .catch(async () => assert.fail(`${name}: the thread follows the keyboard down ${JSON.stringify(await box(page, ".thread"))}`));
+    assert.deepEqual(await box(page, ".thread"), { top: 0, bottom: 852 }, `${name}: the thread fills the screen again`);
+    await page.evaluate(() => window.setKeyboard(0, 0));
+    //    A panel whose field brings the keyboard up covers the visible part too.
     await page.locator(".mobile-bottom-nav").getByRole("button", { name: "Search", exact: true }).tap();
     await page.locator(".search-backdrop").waitFor();
-    assert.deepEqual(await box(page, ".search-backdrop"), { top: 336, bottom: 852 }, `${name}: search opened over the keyboard fills the visible part`);
+    await page.evaluate(() => window.setKeyboard(336, 336));
+    await page.waitForFunction(() => Math.round(document.querySelector(".search-backdrop").getBoundingClientRect().top) === 336);
+    assert.deepEqual(await box(page, ".search-backdrop"), { top: 336, bottom: 852 }, `${name}: search over the keyboard fills the visible part`);
     await page.keyboard.press("Escape");
     await page.locator(".search-backdrop").waitFor({ state: "detached" });
     await page.evaluate(() => window.setKeyboard(0, 0));
-    await replyBox.evaluate(element => element.blur());
-    await page.waitForFunction(() => Math.round(document.querySelector(".thread").getBoundingClientRect().bottom) === 852);
-    assert.deepEqual(await box(page, ".thread"), { top: 0, bottom: 852 }, `${name}: the thread fills the screen again`);
     assert.deepEqual(await page.evaluate(() => [".app", ".conversation", ".thread", ".thread .reply-composer"].flatMap(selector => {
       const style = document.querySelector(selector).style;
       return ["height", "margin-top", "top", "--visual-viewport-height", "--visual-viewport-top", "--keyboard-inset"]
