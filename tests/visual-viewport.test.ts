@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  followVisualViewport, KEYBOARD_INSET, VISUAL_VIEWPORT_HEIGHT, VISUAL_VIEWPORT_TOP, visualViewportBox,
+  followVisualViewport, KEYBOARD_INSET, VIEWPORT_FOLLOWERS, VISUAL_VIEWPORT_HEIGHT, VISUAL_VIEWPORT_TOP, visualViewportBox,
+  type VisualViewportBox,
 } from "../src/visual-viewport";
 
 class FakeViewport extends EventTarget {
@@ -21,16 +22,11 @@ class FakeWindow extends EventTarget {
   scrollBy(y: number) { this.scrollY += y; this.dispatchEvent(new Event("scroll")); }
 }
 
-function fakeStyle() {
-  const values = new Map<string, string>();
-  const writes: string[] = [];
-  return {
-    values,
-    writes,
-    setProperty(name: string, value: string | null) { writes.push(name); values.set(name, value ?? ""); },
-    removeProperty(name: string) { values.delete(name); return ""; },
-  };
+function fakeLayout() {
+  const applied: Array<VisualViewportBox | null> = [];
+  return { applied, apply(box: VisualViewportBox | null) { applied.push(box); } };
 }
+const phone = () => true;
 
 test("the box is what the keyboard leaves visible, wherever Safari panned to", () => {
   assert.deepEqual(visualViewportBox({ height: 852, offsetTop: 0, scale: 1 }, 852), { height: 852, top: 0, keyboardInset: 0 });
@@ -42,44 +38,55 @@ test("the box is what the keyboard leaves visible, wherever Safari panned to", (
 
 test("the layout follows the keyboard and the pan, ignores zoom, and cleans up", () => {
   const viewport = new FakeViewport();
-  const style = fakeStyle();
-  const stop = followVisualViewport(viewport, style, () => 852, new FakeWindow());
-  assert.equal(style.values.get(VISUAL_VIEWPORT_HEIGHT), "852px");
-  assert.equal(style.values.get(VISUAL_VIEWPORT_TOP), "0px");
-  assert.equal(style.values.get(KEYBOARD_INSET), "0px");
+  const layout = fakeLayout();
+  const stop = followVisualViewport(viewport, layout, () => 852, new FakeWindow(), phone);
+  assert.deepEqual(layout.applied, [], "with no keyboard the CSS keeps 100dvh");
 
   viewport.move({ height: 516 });
-  assert.equal(style.values.get(VISUAL_VIEWPORT_HEIGHT), "516px");
-  assert.equal(style.values.get(KEYBOARD_INSET), "336px");
   viewport.move({ offsetTop: 336 }, "scroll");
-  assert.equal(style.values.get(VISUAL_VIEWPORT_TOP), "336px");
-  assert.equal(style.values.get(KEYBOARD_INSET), "336px");
+  assert.deepEqual(layout.applied, [{ height: 516, top: 0, keyboardInset: 336 }, { height: 516, top: 336, keyboardInset: 336 }]);
 
-  // An unchanged box writes nothing.
-  const writes = style.writes.length;
+  // An unchanged box, and a zoomed one, apply nothing: zoom keeps the last box.
   viewport.move({}, "scroll");
-  assert.equal(style.writes.length, writes);
-
-  // Zooming in keeps the last unzoomed box.
   viewport.move({ height: 258, offsetTop: 400, scale: 2 });
-  assert.equal(style.values.get(VISUAL_VIEWPORT_HEIGHT), "516px");
-  assert.equal(style.values.get(VISUAL_VIEWPORT_TOP), "336px");
+  assert.equal(layout.applied.length, 2);
 
   viewport.move({ height: 852, offsetTop: 0, scale: 1 });
-  assert.equal(style.values.get(VISUAL_VIEWPORT_HEIGHT), "852px");
-  assert.equal(style.values.get(KEYBOARD_INSET), "0px");
+  assert.equal(layout.applied.at(-1), null, "the keyboard going down takes the box back");
 
+  viewport.move({ height: 516 });
   stop();
-  assert.equal(style.values.size, 0);
+  assert.equal(layout.applied.at(-1), null, "stopping takes the box back");
+  const count = layout.applied.length;
   viewport.move({ height: 400 });
-  assert.equal(style.values.size, 0, "no updates after stopping");
+  assert.equal(layout.applied.length, count, "no updates after stopping");
+});
+
+test("above the phone breakpoint the layout ignores the keyboard", () => {
+  const viewport = new FakeViewport();
+  const layout = fakeLayout();
+  const stop = followVisualViewport(viewport, layout, () => 852, new FakeWindow(), () => false);
+  viewport.move({ height: 516, offsetTop: 336 });
+  stop();
+  assert.deepEqual(layout.applied, []);
+});
+
+test("the app and its pages take concrete sizes; small followers take the variables", () => {
+  const box = { height: 516, top: 336, keyboardInset: 336 };
+  assert.deepEqual(VIEWPORT_FOLLOWERS.map(({ selector, styles }) => [selector, styles(box)]), [
+    [".app", { height: "516px", "margin-top": "336px" }],
+    [".app .sidebar, .app .conversation", { height: "516px" }],
+    [".thread, .agent-drawer", { top: "336px", height: "516px" }],
+    [".composer, .reply-composer, .search-backdrop, .modal-backdrop",
+      { [VISUAL_VIEWPORT_HEIGHT]: "516px", [VISUAL_VIEWPORT_TOP]: "336px", [KEYBOARD_INSET]: "336px" }],
+  ]);
 });
 
 test("the document stays at the top unless the page is zoomed", () => {
   const viewport = new FakeViewport();
   const win = new FakeWindow();
   win.scrollY = 120;
-  const stop = followVisualViewport(viewport, fakeStyle(), () => 852, win);
+  const stop = followVisualViewport(viewport, fakeLayout(), () => 852, win, phone);
   assert.deepEqual(win.scrolls, [0], "a document scrolled before startup goes back to the top");
   win.scrollBy(80);
   assert.deepEqual(win.scrolls, [0, 0]);
@@ -93,8 +100,8 @@ test("the document stays at the top unless the page is zoomed", () => {
 });
 
 test("a browser without visualViewport keeps the dvh layout", () => {
-  const style = fakeStyle();
-  const stop = followVisualViewport(null, style, () => 852, new FakeWindow());
-  assert.equal(style.values.size, 0);
+  const layout = fakeLayout();
+  const stop = followVisualViewport(null, layout, () => 852, new FakeWindow(), phone);
   stop();
+  assert.deepEqual(layout.applied, []);
 });

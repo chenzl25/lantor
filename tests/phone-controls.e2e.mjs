@@ -250,10 +250,36 @@ try {
     assert.equal((await box(page, ".conversation .topbar")).top, 336, `${name}: the channel header stays visible`);
     assert.equal((await box(page, ".conversation .composer")).bottom, 852, `${name}: the channel composer sits on the keyboard`);
     await waitForThreadBottom(page, `${name}, keyboard up`);
+    //    The sizes go to the elements that use them: no message inherits them,
+    //    which would restyle every message whenever the keyboard moves.
+    const viewportVariables = () => page.evaluate(() => ["html", ".thread .reply-body", ".conversation .message-list"].flatMap(selector => {
+      const style = getComputedStyle(document.querySelector(selector));
+      return ["--visual-viewport-height", "--visual-viewport-top", "--keyboard-inset"]
+        .filter(property => style.getPropertyValue(property)).map(property => `${selector} ${property}`);
+    }));
+    assert.deepEqual(await viewportVariables(), [], `${name}: no message inherits the keyboard's sizes`);
+    //    Both composers know the keyboard's height, so neither keeps the home
+    //    indicator's inset above it.
+    assert.deepEqual(await page.evaluate(() => [".conversation .composer", ".thread .reply-composer"]
+      .map(selector => getComputedStyle(document.querySelector(selector)).getPropertyValue("--keyboard-inset").trim())), ["336px", "336px"],
+      `${name}: the composers know the keyboard's height`);
+    //    A panel that opens while the keyboard is up covers the visible part too
+    //    (the bottom bar hides while a reply box has focus).
+    await replyBox.evaluate(element => element.blur());
+    await page.locator(".mobile-bottom-nav").getByRole("button", { name: "Search", exact: true }).tap();
+    await page.locator(".search-backdrop").waitFor();
+    assert.deepEqual(await box(page, ".search-backdrop"), { top: 336, bottom: 852 }, `${name}: search opened over the keyboard fills the visible part`);
+    await page.keyboard.press("Escape");
+    await page.locator(".search-backdrop").waitFor({ state: "detached" });
     await page.evaluate(() => window.setKeyboard(0, 0));
     await replyBox.evaluate(element => element.blur());
     await page.waitForFunction(() => Math.round(document.querySelector(".thread").getBoundingClientRect().bottom) === 852);
     assert.deepEqual(await box(page, ".thread"), { top: 0, bottom: 852 }, `${name}: the thread fills the screen again`);
+    assert.deepEqual(await page.evaluate(() => [".app", ".conversation", ".thread", ".thread .reply-composer"].flatMap(selector => {
+      const style = document.querySelector(selector).style;
+      return ["height", "margin-top", "top", "--visual-viewport-height", "--visual-viewport-top", "--keyboard-inset"]
+        .filter(property => style.getPropertyValue(property)).map(property => `${selector} ${property}`);
+    })), [], `${name}: with the keyboard down nothing is left inline`);
     await waitForThreadBottom(page, `${name}, keyboard down`);
 
     // 5. Tapping a thread message lists its actions; tapping it again puts them away.
