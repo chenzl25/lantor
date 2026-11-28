@@ -47,3 +47,37 @@ export function completesBackSwipe(distance: number, width: number, velocity: nu
   if (velocity <= -BACK_SWIPE_FLING_PX_PER_MS) return false;
   return distance >= width * BACK_SWIPE_COMPLETE_FRACTION || velocity >= BACK_SWIPE_FLING_PX_PER_MS;
 }
+
+export type BackSwipeSurface = "panel" | "sidebar";
+/** The pages a back swipe moves: the panel over the channel, or Home under it. */
+export type BackSwipePage = "panel" | "channel" | "home";
+
+// Where each moving page sits while the swipe is `offset` px across a screen
+// `width` px wide. The page underneath slides in from a third of the way
+// back, as in a native navigation stack. These are written to each page's
+// own style: a custom property on a common ancestor would make every element
+// below it recompute its style on every frame.
+export function backSwipeTransform(surface: BackSwipeSurface, page: BackSwipePage, offset: number, width: number) {
+  const progress = Math.min(1, Math.max(0, offset / Math.max(1, width)));
+  const behind = `${+(30 * (1 - progress)).toFixed(3)}vw`;
+  if (surface === "panel") {
+    return page === "panel" ? `translateX(${offset}px)` : `translateX(calc(-100vw - ${behind}))`;
+  }
+  return page === "home" ? `translateX(-${behind})` : `translateX(calc(-100vw + ${offset}px))`;
+}
+
+// --mobile-nav-ease, cubic-bezier(0.2, 0.8, 0.2, 1), at time `t` from 0 to 1:
+// a finished or cancelled swipe eases into place on the curve page
+// transitions use.
+export function mobileNavEase(t: number) {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  const curve = (a: number, b: number, u: number) => 3 * a * u * (1 - u) ** 2 + 3 * b * u * u * (1 - u) + u ** 3;
+  let low = 0, high = 1, u = t;
+  for (let step = 0; step < 24; step += 1) {
+    u = (low + high) / 2;
+    if (curve(0.2, 0.2, u) < t) low = u;
+    else high = u;
+  }
+  return curve(0.8, 1, u);
+}

@@ -91,9 +91,9 @@ import {
 } from "./resume-cache";
 import { channelPositionsSnapshot, restoreChannelPositions } from "./channel-reading-position";
 import {
-  addBackSwipeSample, backSwipeReleaseVelocity, BACK_SWIPE_EDGE_PX, BACK_SWIPE_MAX_VERTICAL_PX,
+  addBackSwipeSample, backSwipeReleaseVelocity, backSwipeTransform, BACK_SWIPE_EDGE_PX, BACK_SWIPE_MAX_VERTICAL_PX,
   BACK_SWIPE_MIN_HORIZONTAL_PX, BACK_SWIPE_PEEK_PX, BACK_SWIPE_SETTLE_MS, completesBackSwipe, MOBILE_NAVIGATION_MS,
-  prefersReducedMotion, type BackSwipeSample,
+  mobileNavEase, prefersReducedMotion, type BackSwipePage, type BackSwipeSample, type BackSwipeSurface,
 } from "./mobile-back-swipe";
 import { isServerUnreachable, serverUnreachableMessage, subscribeServerReachability } from "./web-reachability";
 import { useWebOnline } from "./hooks/useWebOnline";
@@ -3095,14 +3095,16 @@ function App() {
     },
   };
 
-  // The swiped surface follows the finger through CSS variables on the app,
-  // written once per frame without rendering React. On release it finishes or
-  // snaps back, and only a finished swipe then navigates, so the panel slides
+  // The swiped pages follow the finger through their own inline transforms,
+  // written once per frame without rendering React. On release they finish or
+  // snap back, and only a finished swipe then navigates, so the panel slides
   // out instead of vanishing where the finger left it.
   useEffect(() => {
     // The app element mounts after the startup screen; each swipe takes the
-    // one on screen when it starts.
+    // one on screen when it starts, and the pages it moves.
     let app: HTMLElement | null = null;
+    let surface: BackSwipeSurface = "sidebar";
+    let pages: { element: HTMLElement; page: BackSwipePage }[] = [];
     let gesture: {
       startX: number;
       startY: number;
@@ -3111,58 +3113,93 @@ function App() {
       samples: BackSwipeSample[];
     } | null = null;
     let frame = 0;
-    let settleTimer = 0;
+    let offset = 0;
+    let settling = false;
 
-    function setOffset(offset: number) {
-      if (!app) return;
-      const width = Math.max(1, window.innerWidth);
-      app.style.setProperty("--mobile-swipe-x", `${offset}px`);
-      app.style.setProperty("--mobile-swipe-progress", String(Math.min(1, Math.max(0, offset / width))));
+    function swipePages(element: HTMLElement, swiped: BackSwipeSurface) {
+      const found: { element: HTMLElement; page: BackSwipePage }[] = [];
+      const channel = element.querySelector<HTMLElement>(".conversation");
+      if (swiped === "sidebar") {
+        const home = element.querySelector<HTMLElement>(".sidebar");
+        if (home) found.push({ element: home, page: "home" });
+        if (channel) found.push({ element: channel, page: "channel" });
+        return found;
+      }
+      if (!element.classList.contains("right-panel-active")) return found;
+      for (const panel of element.querySelectorAll<HTMLElement>(".thread, .agent-drawer")) found.push({ element: panel, page: "panel" });
+      if (channel && !element.classList.contains("mobile-sidebar-open")) found.push({ element: channel, page: "channel" });
+      return found;
+    }
+
+    function startSwipe(element: HTMLElement, swiped: BackSwipeSurface) {
+      app = element;
+      surface = swiped;
+      offset = 0;
+      pages = swipePages(element, swiped);
+      element.dataset.mobileSwipe = swiped;
+      // The swipe moves the pages itself, including when it settles.
+      for (const { element: moving, page } of pages) {
+        moving.style.transition = "none";
+        if (page === "panel") moving.style.boxShadow = "var(--mobile-back-swipe-shadow)";
+      }
+    }
+
+    function setOffset(next: number) {
+      offset = next;
+      const width = window.innerWidth;
+      for (const { element, page } of pages) element.style.transform = backSwipeTransform(surface, page, next, width);
     }
 
     function clearSwipe() {
       window.cancelAnimationFrame(frame);
-      window.clearTimeout(settleTimer);
       frame = 0;
-      settleTimer = 0;
+      settling = false;
       gesture = null;
       window.removeEventListener("touchmove", onTouchMove, { capture: true });
-      if (!app) return;
-      delete app.dataset.mobileSwipe;
-      for (const property of ["--mobile-swipe-x", "--mobile-swipe-progress", "--mobile-swipe-duration"]) {
-        app.style.removeProperty(property);
+      for (const { element } of pages) {
+        for (const property of ["transform", "transition", "box-shadow"]) element.style.removeProperty(property);
       }
+      pages = [];
+      if (app) delete app.dataset.mobileSwipe;
       app = null;
     }
 
     function settle(complete: boolean, duration = BACK_SWIPE_SETTLE_MS, navigate = () => backSwipeRef.current.complete()) {
       window.removeEventListener("touchmove", onTouchMove, { capture: true });
       window.cancelAnimationFrame(frame);
-      frame = 0;
       gesture = null;
+      settling = true;
       const ms = prefersReducedMotion() ? 0 : duration;
-      app?.style.setProperty("--mobile-swipe-duration", `${ms}ms`);
-      setOffset(complete ? window.innerWidth : 0);
-      settleTimer = window.setTimeout(() => {
-        // Navigate synchronously, so the closed state is on screen before the
-        // swipe's own positions are dropped.
-        if (complete) flushSync(navigate);
-        clearSwipe();
-      }, ms + 40);
+      const from = offset, to = complete ? window.innerWidth : 0;
+      const start = performance.now();
+      // Frame by frame, as under the finger. A CSS transition would make
+      // WebKit prepare a layer for the whole panel first, which freezes the
+      // first frame for as long as a long thread takes to paint.
+      const step = (now: number) => {
+        const t = ms ? Math.min(1, Math.max(0, (now - start) / ms)) : 1;
+        setOffset(from + (to - from) * mobileNavEase(t));
+        frame = window.requestAnimationFrame(t < 1 ? step : () => {
+          frame = 0;
+          // Navigate synchronously, so the closed state is on screen before
+          // the swipe's own positions are dropped.
+          if (complete) flushSync(navigate);
+          clearSwipe();
+        });
+      };
+      frame = window.requestAnimationFrame(step);
     }
 
     // A Back button slides the panel out the way a finished swipe does.
     slidePanelOutRef.current = (navigate) => {
       const element = appRef.current;
-      if (!element || !isMobileViewport() || prefersReducedMotion() || gesture || settleTimer) return false;
-      app = element;
-      element.dataset.mobileSwipe = "panel";
+      if (!element || !isMobileViewport() || prefersReducedMotion() || gesture || settling) return false;
+      startSwipe(element, "panel");
       settle(true, MOBILE_NAVIGATION_MS, navigate);
       return true;
     };
 
     function onTouchStart(event: TouchEvent) {
-      if (settleTimer) return;
+      if (settling) return;
       if (gesture) {
         // A second finger cancels the swipe.
         settle(false);
@@ -3175,12 +3212,10 @@ function App() {
       const touch = event.touches[0];
       const element = appRef.current;
       if (touch.clientX > BACK_SWIPE_EDGE_PX || !element) return;
-      app = element;
       gesture = { startX: touch.clientX, startY: touch.clientY, lastX: touch.clientX, offset: BACK_SWIPE_PEEK_PX, samples: [] };
       addBackSwipeSample(gesture.samples, { x: touch.clientX, t: event.timeStamp });
       window.addEventListener("touchmove", onTouchMove, { passive: false, capture: true });
-      element.dataset.mobileSwipe = backSwipeRef.current.surface;
-      element.style.setProperty("--mobile-swipe-duration", "0ms");
+      startSwipe(element, backSwipeRef.current.surface);
       setOffset(BACK_SWIPE_PEEK_PX);
     }
 

@@ -12025,14 +12025,6 @@ body.resizing-column * {
     transform: translateX(0);
   }
 
-  /* An edge swipe (src/mobile-back-swipe.ts) sets data-mobile-swipe and the
-     --mobile-swipe-* variables: the offset, its share of the width, and the
-     transition time, 0 while the finger moves the surface. */
-  .app[data-mobile-swipe="sidebar"] .sidebar {
-    transform: translateX(calc(-30vw * (1 - var(--mobile-swipe-progress, 0))));
-    transition: transform var(--mobile-swipe-duration, 0ms) var(--mobile-nav-ease);
-  }
-
   .sidebar-resize-handle,
   .thread-resize-handle {
     display: none;
@@ -12228,18 +12220,6 @@ body.resizing-column * {
      way back too. */
   .app.right-panel-active:not(.thread-hidden):not(.mobile-sidebar-open) .conversation {
     transform: translateX(-130vw);
-  }
-
-  .app[data-mobile-swipe="sidebar"] .conversation {
-    transform: translateX(calc(-100vw + var(--mobile-swipe-x, 0px)));
-    transition: transform var(--mobile-swipe-duration, 0ms) var(--mobile-nav-ease);
-  }
-
-  /* The channel under a swiped-back panel slides in from a third of the way
-     back, like a native navigation stack. */
-  .app[data-mobile-swipe="panel"].right-panel-active:not(.mobile-sidebar-open) .conversation {
-    transform: translateX(calc(-100vw - 30vw * (1 - var(--mobile-swipe-progress, 0))));
-    transition: transform var(--mobile-swipe-duration, 0ms) var(--mobile-nav-ease);
   }
 
   .topbar {
@@ -12689,13 +12669,6 @@ body.resizing-column * {
   .thread {
     grid-template-rows: auto minmax(0, 1fr);
     overflow: hidden;
-  }
-
-  .app[data-mobile-swipe="panel"].right-panel-active .thread,
-  .app[data-mobile-swipe="panel"].right-panel-active .agent-drawer {
-    transform: translateX(var(--mobile-swipe-x, 0px));
-    transition: transform var(--mobile-swipe-duration, 0ms) var(--mobile-nav-ease);
-    box-shadow: var(--mobile-back-swipe-shadow);
   }
 
   .mobile-bottom-nav {
