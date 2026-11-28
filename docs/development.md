@@ -146,6 +146,11 @@ installed. Each suite has an npm script, for example:
   it; a Safari tab and a desktop keep no copy; a week-old copy or another
   build's is not shown; an expired session clears it (see
   [`web-app-shell.md`](web-app-shell.md#resume-copy-on-phones)).
+- `npm run test:idle-animations` checks in Chromium and WebKit that a page
+  left alone animates only opacity and transform, which the compositor runs
+  without the main thread, and in Chromium that an idle second needs no style
+  recalculation. A thread summary with unread replies still pulses: two rings
+  cross-fade around it.
 - `npm run test:phone-controls` checks phone details in Chromium and WebKit:
   bottom bar badges leave their icons visible, the bottom bar and Home have
   no backdrop blur (both are opaque, and a blur behind them costs every frame
