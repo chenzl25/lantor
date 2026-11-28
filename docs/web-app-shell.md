@@ -38,17 +38,30 @@ Snapshot links in a Home Screen app still open the attachment sheet
 
 On iPhone the on-screen keyboard shrinks neither the layout viewport nor
 `100dvh`; Safari pans the visual viewport so the focused field shows, which
-pushed the phone layout's header off screen. `src/visual-viewport.ts` copies
-the visual viewport into CSS variables on the root element:
-`--visual-viewport-height`, `--visual-viewport-top` (Safari's pan) and
-`--keyboard-inset` (the height the keyboard takes). At the phone breakpoint
-the app, its panes, the thread and agent panels, full-screen panels and dialog
-backdrops take that height and top, so the header stays at the top of what is
-visible and the composer sits on the keyboard. A pinch zoom keeps the last
-unzoomed values, and the document is kept scrolled to the top, because the
-phone layout only scrolls inside its panes. The desktop app does not install
-it. `npm run test:phone-controls` stands in for the keyboard by replacing
-`window.visualViewport`, since Playwright engines show no on-screen keyboard.
+pushed the phone layout's header off screen. While the keyboard is up (the
+visual viewport is shorter than the layout or panned), `src/visual-viewport.ts`
+gives the phone layout the visual viewport's height and top (Safari's pan), so
+the header stays at the top of what is visible and the composer sits on the
+keyboard:
+
+- The app, Home, the channel, and the thread and agent panels take concrete
+  inline `height`, `margin-top` or `top`.
+- The composers and dialog backdrops take the CSS variables
+  `--visual-viewport-height`, `--visual-viewport-top` and `--keyboard-inset`
+  (the height the keyboard takes), which their CSS and that of the full-screen
+  panels inside them read.
+
+The values never go onto a common ancestor such as the root element: every
+element below a custom property recomputes its style when it changes, which
+took 26ms per keyboard move with a 50-reply thread open in WebKit, against
+under 1ms for the writes above. An element that mounts while the keyboard is
+up gets them too. With the keyboard down nothing is written and the CSS keeps
+`100dvh`; above the phone breakpoint the keyboard is ignored. A pinch zoom
+keeps the last unzoomed values, and the document is kept scrolled to the top,
+because the phone layout only scrolls inside its panes. The desktop app does
+not install it. `npm run test:phone-controls` stands in for the keyboard by
+replacing `window.visualViewport`, since Playwright engines show no on-screen
+keyboard.
 
 ## Resume copy on phones
 
