@@ -4,8 +4,9 @@
 // grows, the layout covers what the keyboard leaves visible, a tapped
 // thread message offers Quote, Copy link and Save, a swipe from the left edge
 // drags the thread back and finishes or snaps back like a native one,
-// pages slide in and out like a navigation stack, and an opened channel's
-// messages rise into place once they sit at the latest message.
+// pages slide in and out like a navigation stack, an opened channel's
+// messages rise into place once they sit at the latest message, and neither
+// the thread nor the channel pans sideways.
 // Run npm run build first. No live workspace data is read or mutated.
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -28,6 +29,9 @@ const replies = Array.from({ length: 14 }, (_, index) => message(2 + index, { th
   ...(index % 2 ? { sender_agent_id: agent.id, sender_name: "Hancock", sender_role: "agent" } : {}),
   body: `Reply ${index + 1}: the toolbar keeps one line at 320 px and every button is 44 pt.` }));
 const target = replies[11];
+// A reply links a pull request under a label wider than the screen.
+const linkReply = replies[3];
+linkReply.body = "Background: [org/repo#101 (keeps the toolbar on one line at 320 px with every button at 44 pt)](https://github.com/org/repo/pull/101)";
 // A second channel long enough to scroll, which loads only when opened.
 const notesId = id(1001);
 const notes = Array.from({ length: 20 }, (_, index) => message(100 + index, { channel_id: notesId,
@@ -386,6 +390,57 @@ try {
     await page.locator(".sidebar .channel-block").getByText("ui-review", { exact: true }).tap();
     assert.deepEqual((await opened()).animations, [], `${name}: no rise with reduced motion`);
     await page.emulateMedia({ reducedMotion: null });
+
+    // 9. A long GitHub link label wraps inside its message, so nothing in the
+    //    thread runs past the screen. Whatever still would is clipped: neither
+    //    the thread nor the channel pans sideways under a horizontal scroll.
+    await rootRow.locator(".thread-reply-summary").tap();
+    await settledAt(".thread", 0);
+    const linkRow = thread.locator(`[data-message-id="${linkReply.id}"]`);
+    await linkRow.evaluate(row => { const scroll = row.closest(".thread-scroll"); scroll.scrollTop += row.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 80; });
+    const fit = await linkRow.locator("a.github-reference").evaluate(link => {
+      const scroll = link.closest(".thread-scroll");
+      return { overflow: Math.round(link.getBoundingClientRect().right - scroll.getBoundingClientRect().right),
+        lines: link.getClientRects().length, scrollWidth: scroll.scrollWidth, clientWidth: scroll.clientWidth };
+    });
+    assert.ok(fit.overflow <= 0 && fit.lines > 1, `${name}: the long link wraps inside the thread ${JSON.stringify(fit)}`);
+    assert.ok(fit.scrollWidth <= fit.clientWidth, `${name}: nothing in the thread is wider than it ${JSON.stringify(fit)}`);
+    // A diagonal scroll up over a block wider and taller than the screen:
+    //    once it has moved the list up, see how far it moved it sideways.
+    const pannedBy = async selector => {
+      const scroller = page.locator(selector);
+      // The list may follow its latest message as the block grows it; wait
+      // until it holds still for a few frames.
+      const top = await scroller.evaluate(element => new Promise(done => {
+        const wide = document.createElement("div");
+        wide.className = "wide-probe"; wide.style.cssText = "width: 900px; height: 2000px";
+        element.firstElementChild.append(wide);
+        let last = -1, still = 0;
+        const check = () => {
+          still = element.scrollTop === last ? still + 1 : 0; last = element.scrollTop;
+          if (still >= 3) done(last); else requestAnimationFrame(check);
+        };
+        check();
+      }));
+      const box = await scroller.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.wheel(300, -300);
+      await scroller.evaluate((element, top) => new Promise(done => {
+        const check = () => element.scrollTop <= top - 100 ? done() : requestAnimationFrame(check);
+        check();
+      }), top);
+      return scroller.evaluate(element => {
+        const left = element.scrollLeft;
+        element.querySelector(".wide-probe").remove();
+        return left;
+      });
+    };
+    // Mobile WebKit takes no wheel input; the rule is the same in both engines.
+    if (name === "chromium") assert.equal(await pannedBy(".thread .thread-scroll"), 0, `${name}: the thread does not pan sideways`);
+    await thread.getByRole("button", { name: "Back to channel", exact: true }).tap();
+    await page.locator(".thread").waitFor({ state: "detached" });
+    await settledAt(".conversation", 0);
+    if (name === "chromium") assert.equal(await pannedBy(".conversation .message-list"), 0, `${name}: the channel does not pan sideways`);
     assert.deepEqual(errors, [], `${name}: no page errors`);
     await browser.close(); browser = null;
   }

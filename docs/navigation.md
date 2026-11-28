@@ -76,6 +76,13 @@ off…" shows only once a channel has been hidden for 400ms, so a loaded
 channel, placed within a frame or two, opens without it. With reduced motion
 every move is instant.
 
+Neither the channel nor a thread pans sideways on a phone: their scrollers
+hide horizontal overflow, as no phone app lets a whole conversation move
+under the finger. Wide code blocks and tables scroll in their own box. A
+GitHub link keeps its state icons on one line only when its text is the
+reference itself (`#123`, `rw#123`, `owner/repo#123`, `RW #123`); longer link
+text wraps like the sentence around it instead of running past the screen.
+
 A swipe from the left edge (the first 24px) goes back: it drags the open
 thread or agent panel off to the right over the channel, which slides in from
 a third of the way back, or, with neither open, drags the channel aside to
@@ -90,4 +97,5 @@ instead of vanishing. Dialogs, a second finger, and a mostly vertical drag
 cancel it. The rules are in `src/mobile-back-swipe.ts`.
 
 `npm run test:navigation` checks these rules in Chromium and WebKit;
-`npm run test:phone-controls` checks the edge swipe and the rise.
+`npm run test:phone-controls` checks the edge swipe, the rise and that
+nothing pans sideways.

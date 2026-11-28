@@ -4555,8 +4555,9 @@ mark {
   font-weight: var(--type-weight-semibold);
 }
 
-/* `#123` / `rw#123` references with PR/issue state, CI and title. */
-.markdown-body .github-reference-ref {
+/* `#123` / `rw#123` references with PR/issue state, CI and title. A longer
+   link text wraps (src/components/GithubReferenceLink.tsx). */
+.markdown-body .github-reference-ref:not(.wraps) {
   white-space: nowrap;
 }
 
@@ -12338,6 +12339,14 @@ body.resizing-column * {
 
   .message-list {
     padding: 6px 0 10px;
+  }
+
+  /* No phone app lets a whole conversation pan sideways. Wide code blocks and
+     tables scroll in their own box; anything else wider than the screen is
+     clipped rather than letting the list move under the finger. */
+  .message-list,
+  .thread-scroll {
+    overflow-x: hidden;
   }
 
   /* An opened channel's messages rise into place from the reply box once

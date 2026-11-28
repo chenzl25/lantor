@@ -91,6 +91,16 @@ export function useGithubReferenceItem(link: GithubIssueLink | null, references:
   return queued ?? lookedUp;
 }
 
+// `#123`, `rw#123`, `owner/repo#123` or `RW #123`: the reference itself,
+// short enough to keep its icons on its line. Any other link text wraps like
+// the sentence around it, so a long one never runs past the message's edge.
+const BARE_REFERENCE = /^(?:[\w.-]+(?:\/[\w.-]+)? ?)?#\d+$/;
+
+function isBareReference(label: ReactNode) {
+  const parts = Array.isArray(label) ? label : [label];
+  return parts.every((part) => typeof part === "string") && BARE_REFERENCE.test(parts.join("").trim());
+}
+
 /**
  * A link to a GitHub PR or issue with a state icon, a CI mark (open PRs), an
  * optional truncated title and the full title in a tooltip. Items in the synced
@@ -128,7 +138,7 @@ export function GithubReferenceLink({
       target="_blank"
       rel="noreferrer"
     >
-      <span className="github-reference-ref">
+      <span className={compactLabel || isBareReference(label) ? "github-reference-ref" : "github-reference-ref wraps"}>
         {item && status && !hideStatusIcon && <GithubStatusIcon kind={item.kind} status={status} />}
         {label}
         {item && checks && <ChecksIcon status={item.checks_status} />}
