@@ -26,6 +26,8 @@ import { StreamingReferenceCard } from "./StreamingReferenceCard";
 import { MessageReferenceCard } from "./MessageReferenceCard";
 import { CodeBlock } from "./CodeBlock";
 import { GithubReferenceLink } from "./GithubReferenceLink";
+import { SlackLink } from "./SlackLink";
+import { parseSlackUrl } from "../slack-links";
 import {
   getGithubReferenceIndex,
   githubReferenceKey,
@@ -356,6 +358,22 @@ export function MarkdownRenderer({
           >
             {children}
           </GithubReferenceLink>
+        );
+      }
+      const slackLink = parseSlackUrl(href);
+      if (slackLink && href) {
+        return (
+          <SlackLink
+            {...props}
+            href={href}
+            link={slackLink}
+            bareUrl={node ? hastText(node as HastNode) === href : false}
+            onPointerDown={isolateLinkEvent}
+            onContextMenu={isolateLinkEvent}
+            onClick={(event) => handleLinkClick(event, href, false, onLocalAgentLink, null)}
+          >
+            {children}
+          </SlackLink>
         );
       }
       const isLocalLink = Boolean(href?.startsWith(LOCAL_ENTITY_PATH_PREFIX));

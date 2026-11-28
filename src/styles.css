@@ -4575,6 +4575,27 @@ mark {
   font-weight: var(--type-weight-regular);
 }
 
+/* Links to Slack: the Slack mark, the text and the day the message was
+   posted (src/components/SlackLink.tsx). */
+.slack-reference-start {
+  white-space: nowrap;
+}
+
+.slack-reference-icon {
+  display: inline-block;
+  margin-right: 3px;
+  vertical-align: -1px;
+}
+
+/* An inline-block, so the link underline does not run into the gap. */
+.markdown-body .slack-reference-date {
+  display: inline-block;
+  margin-left: 0.35em;
+  white-space: nowrap;
+  color: var(--ink-on-surface-secondary);
+  font-weight: var(--type-weight-regular);
+}
+
 .github-reference-icon,
 .github-reference-checks {
   display: inline-block;

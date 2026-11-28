@@ -96,6 +96,12 @@ export function formatRelativeTime(value: string) {
   return timeFormatter(date.getFullYear() === now.getFullYear() ? "shortDate" : "shortDateWithYear").format(date);
 }
 
+export function formatShortDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return timeFormatter(date.getFullYear() === new Date().getFullYear() ? "shortDate" : "shortDateWithYear").format(date);
+}
+
 export function formatClockTime(value: string) {
   return timeFormatter("clock").format(new Date(value));
 }
