@@ -2473,8 +2473,32 @@ button,
 .thread-reply-summary.unread-replies {
   border-color: var(--thread-new-border);
   background: var(--thread-new-bg);
+  box-shadow: none;
+}
+
+/* The pulse cross-fades two rings around the border box: the resting ring and
+   a wider, fainter one. Only their opacity animates, which the compositor
+   runs on its own. Animating box-shadow itself restyled and repainted the
+   summary on the main thread on every frame for as long as it was on screen. */
+.thread-reply-summary.unread-replies::before,
+.thread-reply-summary.unread-replies::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: 2.8s ease-in-out infinite;
+}
+
+.thread-reply-summary.unread-replies::before {
   box-shadow: var(--thread-new-shadow);
-  animation: thread-reply-unread-pulse 2.8s ease-in-out infinite;
+  animation-name: thread-reply-unread-rest;
+}
+
+.thread-reply-summary.unread-replies::after {
+  box-shadow: var(--thread-new-pulse-shadow);
+  opacity: 0;
+  animation-name: thread-reply-unread-pulse;
 }
 
 .thread-reply-summary.unread-replies strong,
@@ -2484,7 +2508,8 @@ button,
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .thread-reply-summary.unread-replies {
+  .thread-reply-summary.unread-replies::before,
+  .thread-reply-summary.unread-replies::after {
     animation: none;
   }
 }
@@ -4510,14 +4535,15 @@ mark {
   }
 }
 
-@keyframes thread-reply-unread-pulse {
-  0%,
-  100% {
-    box-shadow: var(--thread-new-shadow);
-  }
-
+@keyframes thread-reply-unread-rest {
   50% {
-    box-shadow: var(--thread-new-pulse-shadow);
+    opacity: 0;
+  }
+}
+
+@keyframes thread-reply-unread-pulse {
+  50% {
+    opacity: 1;
   }
 }
 
