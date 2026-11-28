@@ -59,9 +59,32 @@ up gets them too. With the keyboard down nothing is written and the CSS keeps
 `100dvh`; above the phone breakpoint the keyboard is ignored. A pinch zoom
 keeps the last unzoomed values, and the document is kept scrolled to the top,
 because the phone layout only scrolls inside its panes. The desktop app does
-not install it. `npm run test:phone-controls` stands in for the keyboard by
-replacing `window.visualViewport`, since Playwright engines show no on-screen
-keyboard.
+not install it.
+
+The layout also moves with the keyboard rather than after it. Measured in the
+iOS Simulator, Safari reports the shorter visual viewport only once the
+keyboard is up (about 160 to 330ms after the tap) and the full one about
+500ms after the field lost focus. Before that it scrolled the whole page up by
+the keyboard's height to reveal the composer, even one already above the
+keyboard, and the app scrolled it back about 100ms later; followed alone, the
+thread jumped up once the keyboard stopped, and the reply box floated over an
+empty space while the keyboard slid away. Now:
+
+- A tap on a composer field that is not focused yet focuses it with
+  `preventScroll`, so Safari does not scroll the page. Drags and long presses
+  (to paste) keep the browser's own handling, and the caret goes after any
+  draft.
+- From that tap the layout eases (300ms, ease-out) towards the keyboard height
+  measured last time, kept in `localStorage` (`lantor:keyboard-height`). Until
+  one has been measured it guesses 40% of the screen. Safari's report replaces
+  the guess, eased to if the motion is still under way.
+- From the moment the composer loses focus (and no other field takes it) the
+  layout eases back to the full height over 250ms.
+- If no keyboard arrives within 900ms (a hardware keyboard), the layout goes
+  back.
+
+`npm run test:phone-controls` stands in for the keyboard by replacing
+`window.visualViewport`, since Playwright engines show no on-screen keyboard.
 
 ## Resume copy on phones
 
