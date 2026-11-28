@@ -292,8 +292,23 @@ try {
     await page.waitForFunction(() => Math.round(document.querySelector(".thread").getBoundingClientRect().left) === 90);
     const underneath = await left(page, ".conversation");
     assert.ok(underneath < -60 && underneath > -0.3 * 393, `${name}: the channel slides in under the thread, at ${underneath}`);
-    //    A short drag released after the finger stopped snaps back.
+    //    Only the moving pages change style as the finger moves: nothing
+    //    inside them takes the offset from an ancestor, which would restyle
+    //    every message on every frame.
+    const inherited = await page.evaluate(() => [".thread .reply-body", ".conversation .message-list", ".sidebar"].flatMap(selector => {
+      const style = getComputedStyle(document.querySelector(selector));
+      const names = new Set([...style].filter(property => property.startsWith("--mobile-swipe")).concat("--mobile-swipe-x", "--mobile-swipe-progress"));
+      return [...names].filter(property => style.getPropertyValue(property)).map(property => `${selector} ${property}`);
+    }));
+    assert.deepEqual(inherited, [], `${name}: the swipe offset is not inherited`);
+    //    A short drag released after the finger stopped snaps back, moved
+    //    frame by frame: a CSS transition makes WebKit prepare a layer for the
+    //    whole thread first, freezing a frame on a long thread.
     await page.waitForTimeout(150); await touches(page, inThread, [["touchend", 95]]);
+    await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+    assert.deepEqual(await page.evaluate(() => [".thread", ".conversation"].flatMap(selector =>
+      document.querySelector(selector).getAnimations().map(animation => `${selector} ${animation.transitionProperty ?? animation.animationName}`))), [],
+      `${name}: the thread and channel settle without CSS transitions`);
     await swipeSettled(page);
     assert.equal(await left(page, ".thread"), 0, `${name}: a short slow drag snaps back`);
     //    However far the finger got, a flick back towards the edge cancels.

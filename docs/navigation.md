@@ -86,15 +86,20 @@ text wraps like the sentence around it instead of running past the screen.
 A swipe from the left edge (the first 24px) goes back: it drags the open
 thread or agent panel off to the right over the channel, which slides in from
 a third of the way back, or, with neither open, drags the channel aside to
-Home. The surface follows the finger through CSS variables on the app element
-(`--mobile-swipe-x`, `--mobile-swipe-progress`, `--mobile-swipe-duration`,
-with `data-mobile-swipe` naming the surface), written once per frame without
-rendering React. On release the swipe completes past 28% of the width or with
-a flick of 0.45 px/ms over its last 100 ms, and a flick back towards the edge
-cancels it; otherwise it snaps back. A completed swipe first slides the surface
-the rest of the way and only then navigates, so the panel leaves the screen
-instead of vanishing. Dialogs, a second finger, and a mostly vertical drag
-cancel it. The rules are in `src/mobile-back-swipe.ts`.
+Home. The pages follow the finger through their own inline `transform`,
+written once per frame without rendering React; `data-mobile-swipe` on the app
+element names the surface while a swipe runs. The offset is never a custom
+property on a common ancestor: every element below one would recompute its
+style on each frame, which in WebKit took 69ms a frame with a 164-reply thread
+open. On release the swipe completes past 28% of the width or with a flick of
+0.45 px/ms over its last 100 ms, and a flick back towards the edge cancels it;
+otherwise it snaps back. The pages settle frame by frame too, on the
+`--mobile-nav-ease` curve, rather than through a CSS transition: starting one
+makes WebKit prepare a layer for the whole panel first, which froze the first
+frame for about 200ms on that thread. A completed swipe first slides the
+surface the rest of the way and only then navigates, so the panel leaves the
+screen instead of vanishing. Dialogs, a second finger, and a mostly vertical
+drag cancel it. The rules are in `src/mobile-back-swipe.ts`.
 
 `npm run test:navigation` checks these rules in Chromium and WebKit;
 `npm run test:phone-controls` checks the edge swipe, the rise and that
