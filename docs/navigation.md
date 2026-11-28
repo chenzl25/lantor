@@ -67,7 +67,14 @@ agent panel slides in over the channel, which waits a third of the way back
 in turn. Home and the channel stay mounted, so their CSS transitions also
 cover the way back. A thread or agent panel unmounts when it closes, so its
 Back button first slides it out the way a finished swipe does, and closes it
-afterwards. With reduced motion every move is instant.
+afterwards. A channel's messages stay hidden until they sit at their reading
+position, then rise 24px into place from the reply box over 260ms. The
+scroller itself moves, clipped by its shell, so its scroll geometry, and with
+it the read position, stays put while it rises. Reopening the channel that is
+already open shows its messages at once. On any width, "Back to where you left
+off…" shows only once a channel has been hidden for 400ms, so a loaded
+channel, placed within a frame or two, opens without it. With reduced motion
+every move is instant.
 
 A swipe from the left edge (the first 24px) goes back: it drags the open
 thread or agent panel off to the right over the channel, which slides in from
@@ -83,4 +90,4 @@ instead of vanishing. Dialogs, a second finger, and a mostly vertical drag
 cancel it. The rules are in `src/mobile-back-swipe.ts`.
 
 `npm run test:navigation` checks these rules in Chromium and WebKit;
-`npm run test:phone-controls` checks the edge swipe.
+`npm run test:phone-controls` checks the edge swipe and the rise.

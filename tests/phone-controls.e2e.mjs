@@ -3,8 +3,9 @@
 // the page, a followed thread stays on its latest reply while the reply box
 // grows, the layout covers what the keyboard leaves visible, a tapped
 // thread message offers Quote, Copy link and Save, a swipe from the left edge
-// drags the thread back and finishes or snaps back like a native one, and
-// pages slide in and out like a navigation stack.
+// drags the thread back and finishes or snaps back like a native one,
+// pages slide in and out like a navigation stack, and an opened channel's
+// messages rise into place once they sit at the latest message.
 // Run npm run build first. No live workspace data is read or mutated.
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -27,15 +28,20 @@ const replies = Array.from({ length: 14 }, (_, index) => message(2 + index, { th
   ...(index % 2 ? { sender_agent_id: agent.id, sender_name: "Hancock", sender_role: "agent" } : {}),
   body: `Reply ${index + 1}: the toolbar keeps one line at 320 px and every button is 44 pt.` }));
 const target = replies[11];
-const channels = [{ id: channelId, name: "ui-review", kind: "channel", dm_agent_id: null, description: "", unread_count: 0,
-  github_unread_count: 0, github_review_synced_at: null }];
+// A second channel long enough to scroll, which loads only when opened.
+const notesId = id(1001);
+const notes = Array.from({ length: 20 }, (_, index) => message(100 + index, { channel_id: notesId,
+  ...(index % 2 ? { sender_agent_id: agent.id, sender_name: "Hancock", sender_role: "agent" } : {}), body: `Note ${index + 1}` }));
+const channel = (id, name) => ({ id, name, kind: "channel", dm_agent_id: null, description: "", unread_count: 0,
+  github_unread_count: 0, github_review_synced_at: null });
+const channels = [channel(channelId, "ui-review"), channel(notesId, "ui-notes")];
 const notification = (threadId, repository) => ({ thread_id: String(threadId), repository, subject_type: "PullRequest",
   title: `Pull request ${threadId}`, number: threadId, url: `https://github.com/${repository}/pull/${threadId}`, reason: "review_requested",
   unread: true, updated_at: now, thread_root_id: null, channel_id: null });
 const githubInbox = { enabled: true, account_login: "octo", synced_at: now, error: null,
   items: [notification(101, "org/repo"), notification(102, "org/docs"), notification(103, "org/repo")] };
 const freshState = () => ({ db_url: "synthetic://phone-controls", web_base_url: null, owner_profile: { display_name: "Dylan", avatar: "D", description: "" },
-  channels, messages: [root, ...replies], channel_message_history: [{ channel_id: channelId, before_seq: null, has_more: false }],
+  channels, messages: [root, ...replies, ...notes], channel_message_history: [{ channel_id: channelId, before_seq: null, has_more: false }],
   agents: [agent], channel_members: [{ channel_id: channelId, agent_id: agent.id }],
   // A task in review puts a count on Needs you and a status menu in the Tasks tab.
   tasks: [{ id: id(900), number: 1, message_id: root.id, channel_id: channelId, title: "Review the toolbar", status: "in_review", version: 1,
@@ -47,6 +53,8 @@ const freshState = () => ({ db_url: "synthetic://phone-controls", web_base_url: 
   supervisor: { pid: null, status: "stopped", updated_at: null },
   launch_agent: { label: "", plist_path: "", installed: false, loaded: false }, ui_event_cursor: 0 });
 let state = freshState(), requests = [];
+// The second channel's first page waits until the test releases it.
+let notesLoaded = Promise.resolve(), releaseNotes = () => {};
 const threadMessages = rootId => state.messages.filter(m => m.id === rootId || m.thread_root_id === rootId);
 const api = createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
@@ -68,7 +76,9 @@ const api = createServer(async (req, res) => {
     case "/api/bootstrap": result = state; break;
     case "/api/load_channel_previews": case "/api/load_activity_messages": case "/api/search_messages":
     case "/api/search_channel_wikis": case "/api/load_github_references": result = []; break;
-    case "/api/load_channel_messages": result = { messages: state.messages.filter(m => m.channel_id === args.channelId), next_before_seq: null, has_more: false }; break;
+    case "/api/load_channel_messages":
+      if (args.channelId === notesId) await notesLoaded;
+      result = { messages: state.messages.filter(m => m.channel_id === args.channelId), next_before_seq: null, has_more: false }; break;
     case "/api/load_thread_messages": result = threadMessages(args.threadRootId); break;
     case "/api/load_thread_page": result = { messages: threadMessages(args.threadRootId), next_before_seq: null, has_more: false }; break;
     case "/api/load_ui_state": result = Object.fromEntries(args.scopes.map(scope => [scope, state[scope] ?? []])); break;
@@ -136,6 +146,7 @@ let browser;
 try {
   for (const [name, engine] of Object.entries({ chromium, webkit })) {
     state = freshState(); requests = [];
+    notesLoaded = new Promise(done => { releaseNotes = done; });
     browser = await engine.launch();
     const context = await browser.newContext({ viewport: { width: 393, height: 852 }, isMobile: true, hasTouch: true, serviceWorkers: "block" });
     await context.addInitScript(fakeKeyboard);
@@ -342,12 +353,45 @@ try {
     await thread.getByRole("button", { name: "Back to channel", exact: true }).tap();
     await page.locator(".thread").waitFor({ state: "detached", timeout: 200 });
     await page.emulateMedia({ reducedMotion: null });
+
+    // 8. A channel opening for the first time says it is on its way only
+    //    after a pause, since a loaded one is placed within a frame or two.
+    //    Its messages then rise into place from the reply box, already at the
+    //    latest message: the scroller moves, so its scroll position does not.
+    const opened = () => page.waitForFunction(() => {
+      const list = document.querySelector(".conversation .message-list");
+      if (!list || list.hasAttribute("data-restoring")) return null;
+      return { animations: list.getAnimations().map(animation => animation.animationName),
+        fromLatest: Math.round(list.scrollHeight - list.scrollTop - list.clientHeight) };
+    }).then(handle => handle.jsonValue());
+    await page.locator(".conversation").getByRole("button", { name: "Back", exact: true }).tap();
+    await settledAt(".sidebar", 0);
+    await page.locator(".sidebar .channel-block").getByText("ui-notes", { exact: true }).tap();
+    const notice = page.locator(".message-list-restoring");
+    await notice.waitFor();
+    assert.equal(await notice.evaluate(element => getComputedStyle(element).opacity), "0", `${name}: no notice at once`);
+    await page.waitForFunction(() => getComputedStyle(document.querySelector(".message-list-restoring")).opacity === "1");
+    releaseNotes();
+    const rising = await opened();
+    assert.deepEqual(rising.animations, ["message-list-rise"], `${name}: the messages rise into place`);
+    assert.ok(rising.fromLatest <= 2, `${name}: the list rises already at the latest message, ${rising.fromLatest}px away`);
+    await page.waitForFunction(() => document.querySelector(".conversation .message-list").getAnimations().length === 0);
+    const list = page.locator(".conversation .message-list");
+    assert.equal(await list.evaluate(element => getComputedStyle(element).transform), "none", `${name}: the list comes to rest in place`);
+    assert.ok(await list.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight <= 2), `${name}: the list rests at the latest message`);
+    assert.ok(await list.evaluate(element => element.scrollHeight > element.clientHeight + 100), `${name}: the opened channel scrolls`);
+    //    With reduced motion the messages appear in place.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.locator(".conversation").getByRole("button", { name: "Back", exact: true }).tap();
+    await page.locator(".sidebar .channel-block").getByText("ui-review", { exact: true }).tap();
+    assert.deepEqual((await opened()).animations, [], `${name}: no rise with reduced motion`);
+    await page.emulateMedia({ reducedMotion: null });
     assert.deepEqual(errors, [], `${name}: no page errors`);
     await browser.close(); browser = null;
   }
 
   // Desktop keeps its hover actions and context menu; a click only highlights the message.
-  state = freshState();
+  state = freshState(); notesLoaded = Promise.resolve();
   browser = await chromium.launch();
   const page = await (await browser.newContext({ viewport: { width: 1280, height: 820 }, serviceWorkers: "block" })).newPage();
   page.setDefaultTimeout(8000);
@@ -360,6 +404,7 @@ try {
   await page.locator(`.thread [data-message-id="${target.id}"].tap-focused`).waitFor();
   assert.equal(await page.locator(".message-tap-actions").count(), 0, "desktop shows no tap actions");
   assert.notEqual(await page.locator(".sidebar").evaluate(element => getComputedStyle(element).backdropFilter), "none", "the desktop sidebar keeps its frosted look");
+  assert.equal(await page.locator(".conversation .message-list").evaluate(element => getComputedStyle(element).animationName), "none", "desktop channels open without the phone's rise");
   console.log("phone controls: ok");
 } finally {
   await browser?.close();

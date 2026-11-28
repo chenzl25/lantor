@@ -7885,6 +7885,10 @@ body.resizing-column * {
   text-align: center;
   color: var(--muted);
   pointer-events: none;
+  /* A channel already loaded is placed within a frame or two; only a wait
+     long enough to notice shows the notice. */
+  opacity: 0;
+  animation: message-list-syncing-in 160ms ease-out 400ms forwards;
 }
 /* Thread find (Cmd+F): a bar floating over the top of the thread. */
 .thread-find-bar {
@@ -11857,6 +11861,13 @@ body.resizing-column * {
   }
 }
 
+@keyframes message-list-rise {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+}
+
 
 @media (min-width: 761px) and (max-width: 1100px) {
   .app,
@@ -12327,6 +12338,13 @@ body.resizing-column * {
 
   .message-list {
     padding: 6px 0 10px;
+  }
+
+  /* An opened channel's messages rise into place from the reply box once
+     they sit at their reading position. The scroller itself moves, clipped by
+     its shell, so its scroll geometry (and so the read position) stays put. */
+  .message-list:not([data-restoring]) {
+    animation: message-list-rise 260ms var(--mobile-nav-ease);
   }
 
   .message-card,
@@ -13430,7 +13448,8 @@ body.resizing-column * {
   }
 
   .thread,
-  .agent-drawer {
+  .agent-drawer,
+  .message-list:not([data-restoring]) {
     animation: none;
   }
 }
