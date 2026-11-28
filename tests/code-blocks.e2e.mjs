@@ -182,6 +182,32 @@ try {
   const expandedHeight = await long.locator("pre code").evaluate((node) => node.getBoundingClientRect().height);
   assert.ok(Math.abs(expandedHeight - longLine * 45) < 1, `expanded to 45 lines (${expandedHeight})`);
   assert.equal(normal.requests.filter(highlighterResource).length, 1);
+
+  // A block the page has not tokenized yet shows as plain text in the frame
+  // that adds it and is highlighted right after, so tokenizing never lengthens
+  // the render that opens a thread. A block tokenized before, met again, is
+  // highlighted in its first frame.
+  const firstFrames = async (marker, body) => {
+    await normal.page.evaluate((marker) => {
+      window.__firstSeen = null;
+      const observer = new MutationObserver(() => {
+        const pre = [...document.querySelectorAll(".markdown-body pre")].find(node => node.textContent.includes(marker));
+        if (!pre || window.__firstSeen !== null) return;
+        window.__firstSeen = pre.classList.contains("is-highlighted");
+        observer.disconnect();
+      });
+      observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+    }, marker);
+    await normal.update(body);
+    await normal.page.waitForFunction(() => window.__firstSeen !== null);
+    const highlightedAtOnce = await normal.page.evaluate(() => window.__firstSeen);
+    await normal.page.locator("pre.is-highlighted", { hasText: marker }).waitFor();
+    return highlightedAtOnce;
+  };
+  const freshCode = "fn fresh_marker() -> u32 {\n    41 + 1\n}";
+  assert.equal(await firstFrames("fresh_marker", `New code:\n\n\`\`\`rust\n${freshCode}\n\`\`\``), false,
+    "an untokenized block is plain in its first frame");
+  assert.equal(await firstFrames("pub fn matches", codeBody), true, "a block tokenized before is highlighted at once");
   assert.deepEqual(normal.errors, []);
   if (process.env.CODE_BLOCKS_SCREENSHOT) {
     await long.getByRole("button", { name: "Show less" }).click();

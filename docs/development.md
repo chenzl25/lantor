@@ -78,7 +78,11 @@ string adds a header and line numbers: `rust path=src/lib.rs#L42` (also
 `:42-50`, `start=42`, `title="…"`, or a GitHub permalink). `diff rust` (or a
 `path=` with a known extension) renders unified diffs with old/new line numbers
 from `@@` hunk headers and highlights the changed code. Completed blocks over 30
-lines collapse to 20; streaming blocks stay plain and expanded.
+lines collapse to 20; streaming blocks stay plain and expanded. A block is
+tokenized after the frame that first shows it, newest first, about 8ms at a
+time, so opening a thread full of code is not held up by highlighting blocks
+above the screen; tokens are cached, so a block met again is highlighted at
+once.
 
 Message text links GitHub references: `#123` resolves to the repository bound to
 the message's channel, `short-name#123` to the binding with that short name
@@ -107,7 +111,8 @@ installed. Each suite has an npm script, for example:
 
 - `npm run test:web-math` checks the math bundle graph and rendering.
 - `npm run test:code-blocks` checks the highlighter bundle graph and code block
-  rendering (header, line numbers, diff rows, collapse, failed chunk).
+  rendering (header, line numbers, diff rows, collapse, failed chunk, and a
+  new block shown plain first while a cached one is highlighted at once).
 - `npm run test:message-text` checks GitHub references, local times and
   Markdown-free previews.
 - `npm run test:github-inbox` checks the GitHub notifications panel: filters
