@@ -32,12 +32,15 @@ function loadHighlighting(language: HighlightLanguage) {
 function cachedTokens(code: string, language: HighlightLanguage) {
   const key = `${language}\u0000${code}`;
   const cached = tokenCache.get(key);
-  if (cached) {
-    tokenCache.delete(key);
-    tokenCache.set(key, cached);
-    return cached;
-  }
-  if (!highlighterModule || failedTokenKeys.has(key)) return null;
+  if (!cached) return null;
+  tokenCache.delete(key);
+  tokenCache.set(key, cached);
+  return cached;
+}
+
+function tokenize(code: string, language: HighlightLanguage) {
+  const key = `${language}\u0000${code}`;
+  if (!highlighterModule || tokenCache.has(key) || failedTokenKeys.has(key)) return;
   let tokens: ThemedToken[][] | null;
   try {
     tokens = highlighterModule.tokenizeLoaded(code, language);
@@ -45,21 +48,47 @@ function cachedTokens(code: string, language: HighlightLanguage) {
     if (failedTokenKeys.size >= TOKEN_CACHE_LIMIT) failedTokenKeys.clear();
     failedTokenKeys.add(key);
     console.warn("Code block highlighting failed", error);
-    return null;
+    return;
   }
-  if (!tokens) return null;
+  if (!tokens) return;
   tokenCache.set(key, tokens);
   if (tokenCache.size > TOKEN_CACHE_LIMIT) tokenCache.delete(tokenCache.keys().next().value!);
-  return tokens;
 }
 
-/** Highlighted rows, or null while the grammar loads (the block stays plain). */
+// Tokenizing runs after the frame that shows the blocks, a few milliseconds at
+// a time. Opening a thread renders every reply at once, and tokenizing their
+// code blocks inside that render was about a third of its script time, mostly
+// for blocks above the screen. The newest blocks go first: a thread or channel
+// opens at its latest message.
+const TOKENIZE_SLICE_MS = 8;
+const pendingTokenizing: Array<() => void> = [];
+let tokenizingScheduled = false;
+
+function scheduleTokenizing(task: () => void) {
+  pendingTokenizing.push(task);
+  if (tokenizingScheduled) return;
+  tokenizingScheduled = true;
+  requestAnimationFrame(() => setTimeout(drainTokenizing, 0));
+}
+
+function drainTokenizing() {
+  const deadline = performance.now() + TOKENIZE_SLICE_MS;
+  while (pendingTokenizing.length && performance.now() < deadline) pendingTokenizing.pop()!();
+  if (pendingTokenizing.length) requestAnimationFrame(() => setTimeout(drainTokenizing, 0));
+  else tokenizingScheduled = false;
+}
+
+/**
+ * Highlighted rows, or null until they are tokenized (the block stays plain):
+ * while the grammar loads, and until the first frame showing the block has
+ * been drawn. Tokens cached earlier apply at once.
+ */
 function useSyntaxTokens(code: string, language: HighlightLanguage | null, enabled: boolean) {
   const active = enabled && language !== null && code.length <= MAX_HIGHLIGHT_CHARS;
   const [loads, setLoads] = useState(0);
   const tokens = useMemo(
     () => (active && language ? cachedTokens(code, language) : null),
-    // `loads` re-reads the cache after a grammar finishes loading.
+    // `loads` re-reads the cache once the block has been tokenized.
     [active, code, language, loads],
   );
   const missing = active && tokens === null;
@@ -67,7 +96,14 @@ function useSyntaxTokens(code: string, language: HighlightLanguage | null, enabl
     if (!missing || !language) return;
     let cancelled = false;
     loadHighlighting(language).then(
-      () => { if (!cancelled) setLoads((count) => count + 1); },
+      () => {
+        if (cancelled) return;
+        scheduleTokenizing(() => {
+          if (cancelled) return;
+          tokenize(code, language);
+          setLoads((count) => count + 1);
+        });
+      },
       (error) => {
         // A failed chunk keeps every block readable as plain text until reload.
         if (!warnedUnavailable) console.warn("Code block highlighting unavailable", error);
@@ -75,7 +111,7 @@ function useSyntaxTokens(code: string, language: HighlightLanguage | null, enabl
       },
     );
     return () => { cancelled = true; };
-  }, [missing, language]);
+  }, [missing, language, code]);
   return tokens;
 }
 
