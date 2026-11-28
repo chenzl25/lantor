@@ -21,6 +21,7 @@
         "center": true,
         "resizable": true,
         "visible": false,
+        "backgroundThrottling": "disabled",
         "dragDropEnabled": false
       },
       {

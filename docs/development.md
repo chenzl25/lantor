@@ -35,6 +35,15 @@ on port 8787 serves `dist/`. After pulling frontend updates, run `npm run build`
 and refresh those browser pages to load the updates; restarting the desktop
 development app alone does not rebuild the browser bundle.
 
+The desktop app opens a splash window and keeps the main window hidden until
+its page has loaded the workspace and calls `complete_startup_splash`. WebKit
+starts suspending a hidden page's process a few seconds after the page
+finishes loading and suspends it fully about 20 seconds later (macOS 14 and
+later), so the main window turns `backgroundThrottling` off in
+`src-tauri/tauri.conf.json`. Without that, a page that had not finished
+starting by then, such as Vite's first, uncached load right after a reboot,
+stayed suspended and the splash never closed.
+
 ## Frontend hot reload
 
 For hot reload in browser-only development, run two terminals:
