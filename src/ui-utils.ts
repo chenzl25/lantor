@@ -1,4 +1,4 @@
-import { Agent, Message, OwnerProfile } from "./types";
+import { Agent, Message, OwnerProfile, ThreadParticipant } from "./types";
 
 export function ownerAsAvatarAgent(profile: OwnerProfile) {
   return {
@@ -11,18 +11,18 @@ export function ownerAsAvatarAgent(profile: OwnerProfile) {
   };
 }
 
-export function agentForMessageSender(message: Message, agents: ReadonlyMap<string, Agent>) {
+export function agentForMessageSender(message: ThreadParticipant, agents: ReadonlyMap<string, Agent>) {
   if (message.sender_role === "owner" || message.sender_role === "system") return null;
   if (!message.sender_agent_id) return null;
   return agents.get(message.sender_agent_id) ?? null;
 }
 
-export function deletedAgentForMessageSender(message: Message) {
+export function deletedAgentForMessageSender(message: ThreadParticipant & { id?: string }) {
   if (message.sender_role === "owner" || message.sender_role === "system") return null;
   if (message.sender_agent_id) return null;
   const handle = message.sender_name.replace(/^@/, "").trim() || "deleted-agent";
   return {
-    id: `deleted-agent:${message.id}`,
+    id: `deleted-agent:${message.id ?? handle}`,
     handle,
     display_name: message.sender_name || "Deleted agent",
     role: "Deleted agent",
