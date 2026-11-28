@@ -137,6 +137,25 @@ test("the first reference to a known PR shows its title", () => {
   setGithubReferences({ repositories: [], items: [] });
 });
 
+test("a link labelled with a channel, agent or task keeps its own target", () => {
+  const html = render(
+    "See ([#k3-gtm](https://chat.example.com/archives/C0EXAMPLE01/p1784310402311459?thread_ts=1784305922.514159&cid=C0EXAMPLE01)), "
+    + "[notes from @Speed](https://example.com/notes), [task #3 log](https://example.com/log) and ![#chart](https://example.com/chart.png). "
+    + "Plain #k3-gtm, @Speed and task #3 still link.",
+  );
+  const anchors = [...html.matchAll(/<a href="([^"]*)"[^>]*>(.*?)<\/a>/g)].map(([, href, text]) => [href, text]);
+  assert.deepEqual(anchors, [
+    ["https://chat.example.com/archives/C0EXAMPLE01/p1784310402311459?thread_ts=1784305922.514159&amp;cid=C0EXAMPLE01", "#k3-gtm"],
+    ["https://example.com/notes", "notes from @Speed"],
+    ["https://example.com/log", "task #3 log"],
+    ["/lantor/channel/k3-gtm", "#k3-gtm"],
+    ["/lantor/agent/Speed", "@Speed"],
+    ["/lantor/task/3", "task #3"],
+  ]);
+  assert.match(html, /<img src="https:\/\/example.com\/chart.png" alt="#chart"/);
+  assert.doesNotMatch(html, /\]\(/, "no link syntax is left on screen");
+});
+
 test("UTC timestamps render in local time with the UTC value in the tooltip", () => {
   const html = render("Next reminder: 2026-10-13T19:00:00+00:00, fired 19:00Z, ran 10-14 07:46Z, code `07:46Z`.");
   assert.match(html, /<time dateTime="2026-10-13T19:00:00.000Z" title="2026-10-13 19:00 UTC" class="lantor-time">10-14 03:00<\/time>/);

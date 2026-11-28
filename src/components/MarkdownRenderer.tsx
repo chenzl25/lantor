@@ -56,6 +56,10 @@ export type MessageMarkdownProps = {
 };
 
 const INLINE_CODE_SPLIT = /(`[^`\n]*(?:`|$))/g;
+// A Markdown link or image already names its target, so a `#channel`,
+// `@agent` or `task #1` in its label stays text: linking it would nest one
+// link in another and break both, leaving the raw URL on screen.
+const MARKDOWN_LINK_SPLIT = /(!?\[[^\]\n]*\]\([^)\n]*\))/g;
 const FENCE_SPLIT = /((?:^|\n)```[\s\S]*?(?:\n```|$))/g;
 const LOCAL_ENTITY_PATH_PREFIX = "/lantor/";
 const tableScrollPositions = new Map<string, number>();
@@ -96,7 +100,11 @@ function linkifyMessageBody(body: string) {
       if (segment.startsWith("```") || segment.startsWith("\n```")) return segment;
       return segment
         .split(INLINE_CODE_SPLIT)
-        .map((inlineSegment) => inlineSegment.startsWith("`") ? inlineSegment : linkifyPlainText(inlineSegment))
+        .map((inlineSegment) => inlineSegment.startsWith("`") ? inlineSegment : inlineSegment
+          .split(MARKDOWN_LINK_SPLIT)
+          // Odd indices are the links the split captured.
+          .map((part, index) => index % 2 ? part : linkifyPlainText(part))
+          .join(""))
         .join("");
     })
     .join("");
